@@ -39,11 +39,13 @@ final class MediaPlugin: NSObject, FlutterPlugin {
         do {
           let request = try decode(VideoRenderRequestPayload.self, call.arguments)
           let token = try await jobs.startExclusiveExport(operationId: request.operationId)
+          var producedOutput: URL?
           do {
             let assets = try store.resolveOriginals(
               assetIds: request.arrangement.sourceAssetIds
             )
             let output = try store.outputURL(for: request)
+            producedOutput = output
             _ = try await VideoRenderer().render(
               request: request,
               assets: assets,
@@ -55,10 +57,18 @@ final class MediaPlugin: NSObject, FlutterPlugin {
               url: output,
               expectedWidth: dimensions.width,
               expectedHeight: dimensions.height,
-              expectedOnsetSample: nil
+              expectedOnsetSample: nil,
+              cancellation: token
             )
+            guard !token.isCancelled else {
+              try? FileManager.default.removeItem(at: output)
+              throw VideoRenderError.cancelled
+            }
             let relativePath = try store.relativePath(for: output)
-            await jobs.finish(operationId: request.operationId)
+            guard await jobs.finishForPublication(operationId: request.operationId) else {
+              try? FileManager.default.removeItem(at: output)
+              throw VideoRenderError.cancelled
+            }
             succeed(result, value: [
               "operationId": request.operationId,
               "projectId": request.projectId,
@@ -69,6 +79,9 @@ final class MediaPlugin: NSObject, FlutterPlugin {
               "height": validation.height,
             ])
           } catch {
+            if let producedOutput {
+              try? FileManager.default.removeItem(at: producedOutput)
+            }
             await jobs.finish(operationId: request.operationId)
             throw error
           }
@@ -85,7 +98,7 @@ final class MediaPlugin: NSObject, FlutterPlugin {
           fail(result, error: VideoRenderError.unsupportedContract)
           return
         }
-        await jobs.cancel(operationId: operationId)
+        await jobs.cancelAndWait(operationId: operationId)
         succeed(result, value: nil)
       }
     default:

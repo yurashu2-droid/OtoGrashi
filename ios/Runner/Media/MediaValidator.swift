@@ -8,10 +8,18 @@ struct MediaValidationReport: Codable, Equatable {
   let height: Int
   let audioTrackCount: Int
   let audioDurationUs: Int64
+  let frameTimestampsValid: Bool
+  let colorPrimaries: String?
+  let transferFunction: String?
+  let yCbCrMatrix: String?
   let firstAudibleSample: Int
   let videoCueFrame: Int?
   let videoCueTimeUs: Int64?
   let audioVideoDeltaUs: Int64?
+}
+
+enum MediaValidationError: Error {
+  case metricsOutsideTolerance(MediaValidationReport)
 }
 
 struct MediaValidator {
@@ -20,8 +28,10 @@ struct MediaValidator {
     expectedWidth: Int,
     expectedHeight: Int,
     expectedOnsetSample: Int?,
-    expectedVideoCueFrame: Int? = nil
+    expectedVideoCueFrame: Int? = nil,
+    cancellation: CancellationToken? = nil
   ) async throws -> MediaValidationReport {
+    try checkCancellation(cancellation)
     let asset = AVURLAsset(url: url)
     let duration = try await asset.load(.duration)
     let durationUs = CMTimeConvertScale(
@@ -36,6 +46,19 @@ struct MediaValidator {
     }
     let naturalSize = try await videoTracks[0].load(.naturalSize)
     let transform = try await videoTracks[0].load(.preferredTransform)
+    let formatDescriptions = try await videoTracks[0].load(.formatDescriptions)
+    let colorPrimaries = colorProperty(
+      kCMFormatDescriptionExtension_ColorPrimaries,
+      from: formatDescriptions
+    )
+    let transferFunction = colorProperty(
+      kCMFormatDescriptionExtension_TransferFunction,
+      from: formatDescriptions
+    )
+    let yCbCrMatrix = colorProperty(
+      kCMFormatDescriptionExtension_YCbCrMatrix,
+      from: formatDescriptions
+    )
     let audioTimeRange = try await audioTracks[0].load(.timeRange)
     let audioDurationUs = CMTimeConvertScale(
       audioTimeRange.duration,
@@ -56,12 +79,16 @@ struct MediaValidator {
     reader.add(output)
     guard reader.startReading() else { throw VideoRenderError.sourceReadFailed }
     var frames = 0
+    var frameTimestampsValid = true
     var cueScores: [(frame: Int, timeUs: Int64, score: Int)] = []
     while let sample = output.copyNextSampleBuffer() {
-      guard CMTimeCompare(
+      try checkCancellation(cancellation)
+      if CMTimeCompare(
         CMSampleBufferGetPresentationTimeStamp(sample),
         CMTime(value: CMTimeValue(frames), timescale: 30)
-      ) == 0 else { throw VideoRenderError.sourceReadFailed }
+      ) != 0 {
+        frameTimestampsValid = false
+      }
       if expectedVideoCueFrame != nil, frames < 30,
         let pixelBuffer = CMSampleBufferGetImageBuffer(sample)
       {
@@ -79,6 +106,7 @@ struct MediaValidator {
     }
     guard reader.status == .completed else { throw VideoRenderError.sourceReadFailed }
 
+    try checkCancellation(cancellation)
     let range = try NativePCMReader().trackRange(url: url)
     let decoded = try NativePCMReader().readTimeline(
       url: url,
@@ -92,27 +120,51 @@ struct MediaValidator {
     let cue = cueScores.max { left, right in left.score < right.score }
     let onsetTimeUs = Int64(firstAudible) * 1_000_000 / 48_000
     let syncDelta = cue.map { abs($0.timeUs - onsetTimeUs) }
-    guard durationUs == 15_000_000,
-      frames == VideoRenderer.frameCount,
-      width == expectedWidth,
-      height == expectedHeight,
-      audioDurationUs == 15_000_000,
-      expectedOnsetSample.map({ abs(firstAudible - $0) <= 1_600 }) ?? true,
-      expectedVideoCueFrame.map({ cue?.frame == $0 }) ?? true,
-      syncDelta.map({ $0 <= 33_334 }) ?? true
-    else { throw VideoRenderError.sourceReadFailed }
-    return MediaValidationReport(
+    let report = MediaValidationReport(
       durationUs: durationUs,
       decodedFrameCount: frames,
       width: width,
       height: height,
       audioTrackCount: audioTracks.count,
       audioDurationUs: audioDurationUs,
+      frameTimestampsValid: frameTimestampsValid,
+      colorPrimaries: colorPrimaries,
+      transferFunction: transferFunction,
+      yCbCrMatrix: yCbCrMatrix,
       firstAudibleSample: firstAudible,
       videoCueFrame: cue?.frame,
       videoCueTimeUs: cue?.timeUs,
       audioVideoDeltaUs: syncDelta
     )
+    guard durationUs == 15_000_000,
+      frames == VideoRenderer.frameCount,
+      width == expectedWidth,
+      height == expectedHeight,
+      audioDurationUs == 15_000_000,
+      frameTimestampsValid,
+      colorPrimaries == "ITU_R_709_2",
+      transferFunction == "ITU_R_709_2",
+      yCbCrMatrix == "ITU_R_709_2",
+      expectedOnsetSample.map({ abs(firstAudible - $0) <= 1_600 }) ?? true,
+      expectedVideoCueFrame.map({ cue?.frame == $0 }) ?? true,
+      syncDelta.map({ $0 <= 33_334 }) ?? true
+    else { throw MediaValidationError.metricsOutsideTolerance(report) }
+    return report
+  }
+
+  private func checkCancellation(_ cancellation: CancellationToken?) throws {
+    if Task.isCancelled || cancellation?.isCancelled == true {
+      throw VideoRenderError.cancelled
+    }
+  }
+
+  private func colorProperty(
+    _ key: CFString,
+    from formatDescriptions: [CMFormatDescription]
+  ) -> String? {
+    guard let description = formatDescriptions.first else { return nil }
+    let extensions = CMFormatDescriptionGetExtensions(description) as NSDictionary
+    return extensions.object(forKey: key) as? String
   }
 
   private func brightPixelScore(_ buffer: CVPixelBuffer) -> Int {

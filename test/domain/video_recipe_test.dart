@@ -40,6 +40,51 @@ void main() {
       expect(recipe.events.last.destinationEndSample, 720000);
     }
   });
+
+  test(
+    'four to six sources switch at the middle boundary and appear by the end',
+    () {
+      for (var sourceCount = 4; sourceCount <= 6; sourceCount++) {
+        final arrangement = _arrangementWithSourceCount(sourceCount);
+        for (final layout in VideoLayout.values) {
+          final recipe = VideoRecipe.fromArrangement(
+            arrangement: arrangement,
+            layout: layout,
+          );
+          final firstHalf = recipe.events
+              .where((event) => event.destinationStartSample < 360000)
+              .expand((event) => event.assetIds)
+              .toSet();
+          final secondHalf = recipe.events
+              .where((event) => event.destinationEndSample > 360000)
+              .expand((event) => event.assetIds)
+              .toSet();
+
+          expect(
+            recipe.events.any(
+              (event) => event.destinationStartSample == 360000,
+            ),
+            isTrue,
+          );
+          expect(
+            firstHalf,
+            isNotEmpty,
+            reason: '$layout/$sourceCount first half',
+          );
+          expect(
+            secondHalf,
+            isNotEmpty,
+            reason: '$layout/$sourceCount second half',
+          );
+          expect(
+            <String>{...firstHalf, ...secondHalf},
+            arrangement.sourceAssetIds.toSet(),
+            reason: '$layout/$sourceCount all sources by end',
+          );
+        }
+      }
+    },
+  );
 }
 
 VideoRecipe _recipe(VideoLayout layout) =>
@@ -53,6 +98,19 @@ Arrangement _arrangement() => Arrangement(
   seed: 42,
   style: ArrangementStyle.sparse,
   sourceAssetIds: const <String>['one', 'two', 'three', 'four', 'five', 'six'],
+  unusableAssetIds: const <String>[],
+  events: const <SoundEvent>[],
+  videoEvents: const <VideoEvent>[],
+);
+
+Arrangement _arrangementWithSourceCount(int count) => Arrangement(
+  templateId: 'fixture',
+  templateVersion: 1,
+  analysisVersion: 1,
+  rendererVersion: 1,
+  seed: 42,
+  style: ArrangementStyle.sparse,
+  sourceAssetIds: List<String>.generate(count, (index) => 'asset-$index'),
   unusableAssetIds: const <String>[],
   events: const <SoundEvent>[],
   videoEvents: const <VideoEvent>[],

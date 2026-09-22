@@ -68,6 +68,70 @@ void main() {
     },
   );
 
+  test(
+    'manual cancellation rejects a completion while native drain is pending',
+    () async {
+      final gateway = _FakeMediaGateway()..cancelGate = Completer<void>();
+      final controller = RenderController(
+        gateway: gateway,
+        operationIds: _ids(<String>['render']),
+      )..open(_projectAtRevision(3));
+      final operationId = controller.generate(RenderQuality.preview);
+
+      final cancellation = controller.cancel();
+      gateway.complete(operationId, revision: 3);
+      await pumpEventQueue();
+
+      expect(controller.state.phase, RenderPhase.cancelled);
+      expect(controller.state.readyMedia, isNull);
+      gateway.cancelGate!.complete();
+      await cancellation;
+    },
+  );
+
+  test(
+    'opening a new project drains the old job before its first render',
+    () async {
+      final gateway = _FakeMediaGateway()..cancelGate = Completer<void>();
+      final controller = RenderController(
+        gateway: gateway,
+        operationIds: _ids(<String>['old', 'new']),
+      )..open(_projectAtRevision(1));
+      controller.generate(RenderQuality.preview);
+
+      controller.open(_projectAtRevision(2));
+      controller.generate(RenderQuality.preview);
+      await pumpEventQueue();
+
+      expect(gateway.requests.map((request) => request.operationId), <String>[
+        'old',
+      ]);
+      gateway.cancelGate!.complete();
+      await pumpEventQueue();
+      expect(gateway.requests.map((request) => request.operationId), <String>[
+        'old',
+        'new',
+      ]);
+    },
+  );
+
+  test('cancelling after completion leaves ready media published', () async {
+    final gateway = _FakeMediaGateway();
+    final controller = RenderController(
+      gateway: gateway,
+      operationIds: _ids(<String>['render']),
+    )..open(_projectAtRevision(3));
+    final operationId = controller.generate(RenderQuality.preview);
+    gateway.complete(operationId, revision: 3);
+    await pumpEventQueue();
+
+    await controller.cancel();
+
+    expect(controller.state.phase, RenderPhase.ready);
+    expect(controller.state.readyMedia?.operationId, operationId);
+    expect(gateway.cancelledOperationIds, isEmpty);
+  });
+
   test('preview and full send identical recipes and arrangements', () async {
     final gateway = _FakeMediaGateway();
     final controller = RenderController(

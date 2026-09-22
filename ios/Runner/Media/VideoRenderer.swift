@@ -201,6 +201,11 @@ struct VideoRenderer {
           AVVideoExpectedSourceFrameRateKey: Self.framesPerSecond,
           AVVideoMaxKeyFrameIntervalKey: Self.framesPerSecond,
         ],
+        AVVideoColorPropertiesKey: [
+          AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+          AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+          AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+        ],
       ]
     )
     videoInput.expectsMediaDataInRealTime = false
@@ -279,8 +284,10 @@ struct VideoRenderer {
         height: dimensions.height
       )
     } catch {
+      cancellation.cancel()
       writer.cancelWriting()
       audioTask.cancel()
+      _ = try? await audioTask.value
       try? FileManager.default.removeItem(at: outputURL)
       throw error
     }
@@ -299,12 +306,42 @@ struct VideoRenderer {
       }
       let generator = AVAssetImageGenerator(asset: asset)
       generator.appliesPreferredTrackTransform = true
+      generator.dynamicRangePolicy = .forceSDR
       let halfFrame = CMTime(value: 1, timescale: 60)
       generator.requestedTimeToleranceBefore = halfFrame
       generator.requestedTimeToleranceAfter = halfFrame
-      result[id] = SourceProvider(generator: generator, duration: duration)
+      guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+        throw VideoRenderError.sourceReadFailed
+      }
+      let timestamps = try sourceTimestamps(asset: asset, track: track)
+      result[id] = SourceProvider(
+        generator: generator,
+        duration: duration,
+        timestamps: timestamps
+      )
     }
     return result
+  }
+
+  private func sourceTimestamps(asset: AVAsset, track: AVAssetTrack) throws -> [CMTime] {
+    let reader = try AVAssetReader(asset: asset)
+    let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+    output.alwaysCopiesSampleData = false
+    guard reader.canAdd(output) else { throw VideoRenderError.sourceReadFailed }
+    reader.add(output)
+    guard reader.startReading() else { throw VideoRenderError.sourceReadFailed }
+    var timestamps: [CMTime] = []
+    while let sample = output.copyNextSampleBuffer() {
+      let timestamp = CMSampleBufferGetPresentationTimeStamp(sample)
+      guard timestamp.isNumeric, timestamps.count < 2_000 else {
+        throw VideoRenderError.sourceReadFailed
+      }
+      timestamps.append(timestamp)
+    }
+    guard reader.status == .completed, !timestamps.isEmpty else {
+      throw VideoRenderError.sourceReadFailed
+    }
+    return timestamps.sorted { CMTimeCompare($0, $1) < 0 }
   }
 
   private func drawFrame(
@@ -322,7 +359,7 @@ struct VideoRenderer {
     var canvas = CIImage(color: CIColor.black).cropped(
       to: CGRect(x: 0, y: 0, width: width, height: height)
     )
-    let targets = targetRects(
+    let targets = Self.targetRects(
       count: scene.assetIds.count,
       layout: request.video.layout,
       width: CGFloat(width),
@@ -361,7 +398,7 @@ struct VideoRenderer {
       canvas,
       to: buffer,
       bounds: CGRect(x: 0, y: 0, width: width, height: height),
-      colorSpace: CGColorSpaceCreateDeviceRGB()
+      colorSpace: CGColorSpace(name: CGColorSpace.itur_709)
     )
     try drawCaptions(
       request.video.captions.filter {
@@ -374,7 +411,7 @@ struct VideoRenderer {
     )
   }
 
-  private func targetRects(
+  static func targetRects(
     count: Int,
     layout: VideoLayoutPayload,
     width: CGFloat,
@@ -383,7 +420,14 @@ struct VideoRenderer {
     switch layout {
     case .stacked:
       let row = height / CGFloat(count)
-      return (0..<count).map { CGRect(x: 0, y: CGFloat($0) * row, width: width, height: row) }
+      return (0..<count).map {
+        CGRect(
+          x: 0,
+          y: height - CGFloat($0 + 1) * row,
+          width: width,
+          height: row
+        )
+      }
     case .sequentialFocus:
       return Array(repeating: CGRect(x: 0, y: 0, width: width, height: height), count: count)
     case .photoDump:
@@ -391,9 +435,10 @@ struct VideoRenderer {
       let cardWidth = width * 0.74
       let cardHeight = height * 0.48
       return (0..<count).map { index in
-        CGRect(
+        let top = height * (0.08 + CGFloat(index) * 0.17)
+        return CGRect(
           x: inset + CGFloat(index) * width * 0.08,
-          y: height * (0.08 + CGFloat(index) * 0.17),
+          y: height - top - cardHeight,
           width: cardWidth,
           height: cardHeight
         )
@@ -522,23 +567,37 @@ struct VideoRenderer {
 private final class SourceProvider {
   let generator: AVAssetImageGenerator
   let duration: CMTime
+  let timestamps: [CMTime]
 
   private var cachedFrame: Int?
   private var cachedImage: CGImage?
 
-  init(generator: AVAssetImageGenerator, duration: CMTime) {
+  init(generator: AVAssetImageGenerator, duration: CMTime, timestamps: [CMTime]) {
     self.generator = generator
     self.duration = duration
+    self.timestamps = timestamps
   }
 
   func image(at time: CMTime) async throws -> CGImage {
-    let frame = Int((CMTimeGetSeconds(time) * 30).rounded())
-    if cachedFrame == frame, let cachedImage { return cachedImage }
-    let generated = try await generator.image(
-      at: CMTime(value: CMTimeValue(frame), timescale: 30)
-    )
-    cachedFrame = frame
+    let index = heldFrameIndex(at: time)
+    if cachedFrame == index, let cachedImage { return cachedImage }
+    let generated = try await generator.image(at: timestamps[index])
+    cachedFrame = index
     cachedImage = generated.image
     return generated.image
+  }
+
+  private func heldFrameIndex(at time: CMTime) -> Int {
+    var lower = 0
+    var upper = timestamps.count
+    while lower < upper {
+      let middle = (lower + upper) / 2
+      if CMTimeCompare(timestamps[middle], time) <= 0 {
+        lower = middle + 1
+      } else {
+        upper = middle
+      }
+    }
+    return max(0, lower - 1)
   }
 }

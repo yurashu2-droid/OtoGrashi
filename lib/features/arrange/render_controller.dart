@@ -29,6 +29,8 @@ final class RenderController {
   final MediaGateway gateway;
   final Iterator<String>? operationIds;
   RenderState? _stateValue;
+  Future<void> _cancellationBarrier = Future<void>.value();
+  var _pendingCancellationCount = 0;
   var _fallbackId = 0;
 
   RenderState get state =>
@@ -38,7 +40,7 @@ final class RenderController {
     final previous = _stateValue;
     final previousId = previous?.operationId;
     if (previousId != null && previous!.phase == RenderPhase.rendering) {
-      unawaited(gateway.cancel(previousId));
+      _enqueueCancellation(previousId);
     }
     _stateValue = RenderState(project: project, phase: RenderPhase.idle);
   }
@@ -47,10 +49,9 @@ final class RenderController {
     final current = state;
     final project = current.project;
     final previousId = current.operationId;
-    final cancelFirst =
-        previousId != null && current.phase == RenderPhase.rendering
-        ? previousId
-        : null;
+    if (previousId != null && current.phase == RenderPhase.rendering) {
+      _enqueueCancellation(previousId);
+    }
     final operationId = _nextOperationId();
     final request = RenderRequest(
       operationId: operationId,
@@ -65,7 +66,7 @@ final class RenderController {
       phase: RenderPhase.rendering,
       operationId: operationId,
     );
-    unawaited(_complete(request, cancelFirst: cancelFirst));
+    unawaited(_complete(request));
     return operationId;
   }
 
@@ -73,25 +74,20 @@ final class RenderController {
     final current = state;
     final operationId = current.operationId;
     if (operationId == null || current.phase != RenderPhase.rendering) return;
-    await gateway.cancel(operationId);
-    if (state.operationId == operationId) {
-      _stateValue = RenderState(
-        project: state.project,
-        phase: RenderPhase.cancelled,
-        operationId: operationId,
-      );
-    }
+    _stateValue = RenderState(
+      project: current.project,
+      phase: RenderPhase.cancelled,
+      operationId: operationId,
+    );
+    await _enqueueCancellation(operationId);
   }
 
-  Future<void> _complete(
-    RenderRequest request, {
-    required String? cancelFirst,
-  }) async {
+  Future<void> _complete(RenderRequest request) async {
     try {
-      if (cancelFirst != null) {
-        await gateway.cancel(cancelFirst);
-        if (!_isCurrent(request)) return;
+      if (_pendingCancellationCount > 0) {
+        await _cancellationBarrier;
       }
+      if (!_isCurrent(request)) return;
       final media = await gateway.render(request);
       if (!_isCurrent(request) ||
           media.operationId != request.operationId ||
@@ -117,9 +113,19 @@ final class RenderController {
   }
 
   bool _isCurrent(RenderRequest request) =>
+      state.phase == RenderPhase.rendering &&
       state.operationId == request.operationId &&
       state.project.id == request.projectId &&
       state.project.revision == request.revision;
+
+  Future<void> _enqueueCancellation(String operationId) {
+    _pendingCancellationCount += 1;
+    final next = _cancellationBarrier
+        .then((_) => gateway.cancel(operationId))
+        .whenComplete(() => _pendingCancellationCount -= 1);
+    _cancellationBarrier = next;
+    return next;
+  }
 
   String _nextOperationId() {
     final ids = operationIds;

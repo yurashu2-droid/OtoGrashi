@@ -48,6 +48,18 @@
       "authoredMarkerSample48k": 19115,
       "analysisFrameSamples": 480,
       "purpose": "nonzero audio PTS, AAC priming, and 44.1-to-48 kHz mapping"
+    },
+    {
+      "id": "rotated-vfr-tap",
+      "path": "../../test/fixtures/native/rotated-vfr-tap.mp4",
+      "sha256": "1c2cd891c03e584d07d97ecbdc76f5f9043645025fa0ade7f737e642c7fa03d7",
+      "purpose": "rotated, sparse VFR source-frame lookup and transform"
+    },
+    {
+      "id": "hdr10-tap",
+      "path": "../../test/fixtures/native/hdr10-tap.mp4",
+      "sha256": "0f0090d3270e6437af72a2cdfad0950ec4d8af4062acb03e6d5c41ae4a5b6db2",
+      "purpose": "PQ/BT.2020 input normalized to SDR BT.709 output"
     }
   ]
 }

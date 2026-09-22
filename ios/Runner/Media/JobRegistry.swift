@@ -25,9 +25,14 @@ final class CancellationToken: @unchecked Sendable {
 actor JobRegistry {
   private var operations: [String: CancellationToken] = [:]
   private var exportOperationId: String?
+  private var finishWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+  private var cancelledBeforeStart: Set<String> = []
 
   func start(operationId: String) throws -> CancellationToken {
     guard !operationId.isEmpty else { throw AudioRenderError.unsupportedContract }
+    if cancelledBeforeStart.remove(operationId) != nil {
+      throw AudioRenderError.cancelled
+    }
     guard operations[operationId] == nil else {
       throw AudioRenderError.duplicateOperationId
     }
@@ -37,6 +42,9 @@ actor JobRegistry {
   }
 
   func startExclusiveExport(operationId: String) throws -> CancellationToken {
+    if cancelledBeforeStart.remove(operationId) != nil {
+      throw AudioRenderError.cancelled
+    }
     guard exportOperationId == nil else { throw AudioRenderError.duplicateOperationId }
     let token = try start(operationId: operationId)
     exportOperationId = operationId
@@ -47,8 +55,30 @@ actor JobRegistry {
     operations[operationId]?.cancel()
   }
 
+  func cancelAndWait(operationId: String) async {
+    guard let token = operations[operationId] else {
+      cancelledBeforeStart.insert(operationId)
+      return
+    }
+    token.cancel()
+    await withCheckedContinuation { continuation in
+      finishWaiters[operationId, default: []].append(continuation)
+    }
+  }
+
   func finish(operationId: String) {
     operations.removeValue(forKey: operationId)
     if exportOperationId == operationId { exportOperationId = nil }
+    let waiters = finishWaiters.removeValue(forKey: operationId) ?? []
+    waiters.forEach { $0.resume() }
+  }
+
+  func finishForPublication(operationId: String) -> Bool {
+    guard let token = operations[operationId], !token.isCancelled else {
+      finish(operationId: operationId)
+      return false
+    }
+    finish(operationId: operationId)
+    return true
   }
 }

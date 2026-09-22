@@ -199,6 +199,97 @@ def render_delayed_aac_regression() -> Path:
     return output
 
 
+def render_video_regressions(source: Path) -> tuple[Path, Path]:
+    """Create VFR/rotation and HDR inputs for native normalization tests."""
+    NATIVE_TEST_SOURCE.mkdir(parents=True, exist_ok=True)
+    vfr = NATIVE_TEST_SOURCE / ".rotated-vfr-base.mp4"
+    rotated = NATIVE_TEST_SOURCE / "rotated-vfr-tap.mp4"
+    hdr = NATIVE_TEST_SOURCE / "hdr10-tap.mp4"
+    subprocess.run(
+        [
+            str(FFMPEG),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-vf",
+            "select='not(eq(mod(n,5),1))'",
+            "-fps_mode",
+            "vfr",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryslow",
+            "-crf",
+            "35",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "copy",
+            str(vfr),
+        ],
+        check=True,
+    )
+    try:
+        subprocess.run(
+            [
+                str(FFMPEG),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-display_rotation",
+                "90",
+                "-i",
+                str(vfr),
+                "-c",
+                "copy",
+                str(rotated),
+            ],
+            check=True,
+        )
+    finally:
+        vfr.unlink(missing_ok=True)
+    subprocess.run(
+        [
+            str(FFMPEG),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-c:v",
+            "libx265",
+            "-preset",
+            "fast",
+            "-crf",
+            "34",
+            "-pix_fmt",
+            "yuv420p10le",
+            "-x265-params",
+            "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc",
+            "-color_primaries",
+            "bt2020",
+            "-color_trc",
+            "smpte2084",
+            "-colorspace",
+            "bt2020nc",
+            "-c:a",
+            "copy",
+            "-tag:v",
+            "hvc1",
+            "-movflags",
+            "+faststart",
+            str(hdr),
+        ],
+        check=True,
+    )
+    return rotated, hdr
+
+
 def main() -> None:
     if not FFMPEG.is_file():
         raise SystemExit(f"FFmpeg not found: {FFMPEG}")
@@ -225,6 +316,7 @@ def main() -> None:
             }
         )
     regression = render_delayed_aac_regression()
+    rotated_vfr, hdr10 = render_video_regressions(SOURCE / "synthetic-tap.mp4")
     manifest = {
         "schemaVersion": 1,
         "label": "Synthetic practice fixtures — not real household recordings",
@@ -244,7 +336,19 @@ def main() -> None:
                 "authoredMarkerSample48k": DELAYED_AAC_MARKER_SAMPLE_48K,
                 "analysisFrameSamples": 480,
                 "purpose": "nonzero audio PTS, AAC priming, and 44.1-to-48 kHz mapping",
-            }
+            },
+            {
+                "id": "rotated-vfr-tap",
+                "path": "../../test/fixtures/native/rotated-vfr-tap.mp4",
+                "sha256": hashlib.sha256(rotated_vfr.read_bytes()).hexdigest(),
+                "purpose": "rotated, sparse VFR source-frame lookup and transform",
+            },
+            {
+                "id": "hdr10-tap",
+                "path": "../../test/fixtures/native/hdr10-tap.mp4",
+                "sha256": hashlib.sha256(hdr10.read_bytes()).hexdigest(),
+                "purpose": "PQ/BT.2020 input normalized to SDR BT.709 output",
+            },
         ],
     }
     (ROOT / "manifest.json").write_text(
