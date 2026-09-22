@@ -249,18 +249,37 @@ struct VideoRenderer {
     videoRenderDiagnostic("VIDEO_STAGE writer_started status=\(writer.status.rawValue)")
     writer.startSession(atSourceTime: .zero)
 
-    let audioTask = Task {
-      try await appendAudio(
-        audioURL,
-        to: audioInput,
-        writer: writer,
-        cancellation: cancellation
-      )
+    let audioTask = Task { () -> Result<Void, Error> in
+      do {
+        try await appendAudio(
+          audioURL,
+          to: audioInput,
+          videoInput: videoInput,
+          writer: writer,
+          cancellation: cancellation
+        )
+        audioInput.markAsFinished()
+        videoRenderDiagnostic(
+          "VIDEO_STAGE input_finished role=audio \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
+        )
+        return .success(())
+      } catch {
+        cancellation.cancel()
+        return .failure(error)
+      }
     }
     do {
       for frame in 0..<Self.frameCount {
         try checkCancellation(cancellation)
-        try await waitUntilReady(videoInput, writer: writer, cancellation: cancellation)
+        try await waitUntilReady(
+          videoInput,
+          role: "video",
+          index: frame,
+          videoInput: videoInput,
+          audioInput: audioInput,
+          writer: writer,
+          cancellation: cancellation
+        )
         guard let pool = adaptor.pixelBufferPool else {
           throw VideoRenderError.writerFailed
         }
@@ -279,16 +298,30 @@ struct VideoRenderer {
         guard adaptor.append(
           buffer,
           withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: 30)
-        ) else { throw VideoRenderError.writerFailed }
+        ) else {
+          videoRenderDiagnostic(
+            "VIDEO_STAGE append_failed role=video index=\(frame) \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
+          )
+          throw VideoRenderError.writerFailed
+        }
         if frame == 0 { videoRenderDiagnostic("VIDEO_STAGE first_video_append") }
       }
       videoInput.markAsFinished()
-      try await audioTask.value
-      audioInput.markAsFinished()
+      videoRenderDiagnostic(
+        "VIDEO_STAGE input_finished role=video \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
+      )
+      let audioResult = await audioTask.value
+      try audioResult.get()
       writer.endSession(atSourceTime: CMTime(value: 15, timescale: 1))
+      videoRenderDiagnostic(
+        "VIDEO_STAGE finish_writing begin \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
+      )
       await withCheckedContinuation { continuation in
         writer.finishWriting { continuation.resume() }
       }
+      videoRenderDiagnostic(
+        "VIDEO_STAGE finish_writing end \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
+      )
       guard writer.status == .completed else { throw VideoRenderError.writerFailed }
       try checkCancellation(cancellation)
       return VideoRenderReport(
@@ -299,10 +332,16 @@ struct VideoRenderer {
       )
     } catch {
       cancellation.cancel()
-      writer.cancelWriting()
       audioTask.cancel()
-      _ = try? await audioTask.value
+      let audioResult = await audioTask.value
+      writer.cancelWriting()
       try? FileManager.default.removeItem(at: outputURL)
+      if case let .failure(audioError) = audioResult,
+        error as? VideoRenderError == .cancelled,
+        audioError as? VideoRenderError != .cancelled
+      {
+        throw audioError
+      }
       throw error
     }
   }
@@ -617,6 +656,7 @@ struct VideoRenderer {
   private func appendAudio(
     _ url: URL,
     to input: AVAssetWriterInput,
+    videoInput: AVAssetWriterInput,
     writer: AVAssetWriter,
     cancellation: CancellationToken
   ) async throws {
@@ -629,27 +669,73 @@ struct VideoRenderer {
     guard reader.canAdd(output) else { throw VideoRenderError.sourceReadFailed }
     reader.add(output)
     guard reader.startReading() else { throw VideoRenderError.sourceReadFailed }
+    var sampleIndex = 0
     while let sample = output.copyNextSampleBuffer() {
       try checkCancellation(cancellation)
-      try await waitUntilReady(input, writer: writer, cancellation: cancellation)
-      guard input.append(sample) else { throw VideoRenderError.writerFailed }
+      try await waitUntilReady(
+        input,
+        role: "audio",
+        index: sampleIndex,
+        videoInput: videoInput,
+        audioInput: input,
+        writer: writer,
+        cancellation: cancellation
+      )
+      guard input.append(sample) else {
+        videoRenderDiagnostic(
+          "VIDEO_STAGE append_failed role=audio index=\(sampleIndex) \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: input))"
+        )
+        throw VideoRenderError.writerFailed
+      }
+      if sampleIndex == 0 {
+        videoRenderDiagnostic(
+          "VIDEO_STAGE first_audio_append \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: input))"
+        )
+      }
+      sampleIndex += 1
     }
+    videoRenderDiagnostic(
+      "VIDEO_STAGE audio_eof samples=\(sampleIndex) readerStatus=\(reader.status.rawValue) readerError=\(String(reflecting: reader.error)) \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: input))"
+    )
     guard reader.status == .completed else { throw VideoRenderError.sourceReadFailed }
   }
 
   private func waitUntilReady(
     _ input: AVAssetWriterInput,
+    role: String,
+    index: Int,
+    videoInput: AVAssetWriterInput,
+    audioInput: AVAssetWriterInput,
     writer: AVAssetWriter,
     cancellation: CancellationToken
   ) async throws {
-    var waits = 0
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(30))
     while !input.isReadyForMoreMediaData {
       try checkCancellation(cancellation)
-      guard writer.status == .writing else { throw VideoRenderError.writerFailed }
-      waits += 1
-      guard waits <= 30_000 else { throw VideoRenderError.writerFailed }
+      guard writer.status == .writing else {
+        videoRenderDiagnostic(
+          "VIDEO_STAGE readiness_failed role=\(role) index=\(index) reason=writer_status \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
+        )
+        throw VideoRenderError.writerFailed
+      }
+      guard clock.now < deadline else {
+        videoRenderDiagnostic(
+          "VIDEO_STAGE readiness_failed role=\(role) index=\(index) reason=deadline \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
+        )
+        throw VideoRenderError.writerFailed
+      }
       try await Task.sleep(nanoseconds: 1_000_000)
     }
+  }
+
+  private func writerDiagnosticState(
+    _ writer: AVAssetWriter,
+    videoInput: AVAssetWriterInput,
+    audioInput: AVAssetWriterInput
+  ) -> String {
+    let reflectedError = String(reflecting: writer.error.map { $0 as NSError })
+    return "writerStatus=\(writer.status.rawValue) writerError=\(reflectedError) videoReady=\(videoInput.isReadyForMoreMediaData) audioReady=\(audioInput.isReadyForMoreMediaData)"
   }
 
   private func checkCancellation(_ token: CancellationToken) throws {
