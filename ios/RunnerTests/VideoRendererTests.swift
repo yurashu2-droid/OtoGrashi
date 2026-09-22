@@ -3,6 +3,28 @@ import XCTest
 @testable import Runner
 
 final class VideoRendererTests: XCTestCase {
+  private enum ProducerFailure: Error, Equatable { case audio }
+
+  func testProducerErrorPrecedencePreservesFailuresButNotCancellationArtifacts() {
+    let primary = VideoRenderError.cancelled
+
+    XCTAssertEqual(
+      VideoRenderer.preferredProducerError(primary: primary, audio: ProducerFailure.audio)
+        as? ProducerFailure,
+      .audio
+    )
+    XCTAssertEqual(
+      VideoRenderer.preferredProducerError(primary: primary, audio: VideoRenderError.cancelled)
+        as? VideoRenderError,
+      .cancelled
+    )
+    XCTAssertEqual(
+      VideoRenderer.preferredProducerError(primary: primary, audio: CancellationError())
+        as? VideoRenderError,
+      .cancelled
+    )
+  }
+
   func testSourceTimestampIgnoresZeroSampleMarkerButRejectsInvalidMediaPTS() throws {
     var marker: CMSampleBuffer?
     XCTAssertEqual(

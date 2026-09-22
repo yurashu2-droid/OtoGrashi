@@ -336,14 +336,22 @@ struct VideoRenderer {
       let audioResult = await audioTask.value
       writer.cancelWriting()
       try? FileManager.default.removeItem(at: outputURL)
-      if case let .failure(audioError) = audioResult,
-        error as? VideoRenderError == .cancelled,
-        audioError as? VideoRenderError != .cancelled
-      {
-        throw audioError
+      if case let .failure(audioError) = audioResult {
+        throw Self.preferredProducerError(primary: error, audio: audioError)
       }
       throw error
     }
+  }
+
+  static func preferredProducerError(primary: Error, audio: Error) -> Error {
+    guard primary as? VideoRenderError == .cancelled,
+      !isCancellationError(audio)
+    else { return primary }
+    return audio
+  }
+
+  private static func isCancellationError(_ error: Error) -> Bool {
+    error is CancellationError || error as? VideoRenderError == .cancelled
   }
 
   private func makeProviders(
