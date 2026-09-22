@@ -314,6 +314,7 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
   ) {
     queue.async { [weak self] in
       guard let self else { return }
+      var audioActivated = false
       do {
         guard maxDurationUs == 3_000_000 || maxDurationUs == 6_000_000 else {
           throw CaptureServiceError.invalidMedia
@@ -322,6 +323,7 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
         let token = self.captureGeneration.begin(operationId: operationId)
         self.activeCaptureToken = token
         try self.audioSession.activateForRecording()
+        audioActivated = true
         let url = try self.store.newStagingURL(extension: "mov")
         self.outputURL = url
         self.finalized = nil
@@ -332,7 +334,7 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
         self.captureGeneration.invalidate()
         self.activeCaptureToken = nil
         self.lifecycle.reset()
-        self.audioSession.deactivateRecording()
+        if audioActivated { self.audioSession.deactivateRecording() }
         completion(.failure(error))
       }
     }
@@ -674,6 +676,7 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
     let microphoneInput = try AVCaptureDeviceInput(device: microphone)
     session.beginConfiguration()
     defer { session.commitConfiguration() }
+    session.automaticallyConfiguresApplicationAudioSession = false
     session.sessionPreset = .high
     guard session.canAddInput(cameraInput), session.canAddInput(microphoneInput),
       session.canAddOutput(output)
