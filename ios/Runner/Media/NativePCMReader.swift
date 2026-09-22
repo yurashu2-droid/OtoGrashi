@@ -2,6 +2,16 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
+struct PCMReadResult: Equatable {
+  let samples: [Float]
+  let requestedRange: Range<Int>
+  let coveredRanges: [Range<Int>]
+
+  var coveredSampleCount: Int {
+    coveredRanges.reduce(0) { $0 + $1.count }
+  }
+}
+
 struct NativePCMReader {
   static let sampleRate = 48_000
 
@@ -31,41 +41,30 @@ struct NativePCMReader {
     startSample: Int,
     durationSamples: Int,
     cancellation: CancellationToken? = nil
-  ) throws -> [Float] {
-    let range = try trackRange(url: url)
-    let offset = startSample - range.startSample
-    guard offset >= 0 else { throw AudioRenderError.sourceOutOfBounds }
-    return try readTrackOffset(
-      url: url,
-      offsetSamples: offset,
-      durationSamples: min(durationSamples, max(0, range.durationSamples - offset)),
-      cancellation: cancellation
-    )
-  }
-
-  func readTrackOffset(
-    url: URL,
-    offsetSamples: Int,
-    durationSamples: Int,
-    cancellation: CancellationToken? = nil
-  ) throws -> [Float] {
-    guard offsetSamples >= 0, durationSamples > 0 else {
+  ) throws -> PCMReadResult {
+    guard cancellation?.isCancelled != true else { throw AudioRenderError.cancelled }
+    let (endSample, overflow) = startSample.addingReportingOverflow(durationSamples)
+    guard startSample >= 0, durationSamples > 0, !overflow else {
       throw AudioRenderError.sourceOutOfBounds
     }
+    let requestedRange = startSample..<endSample
+    let nativeRange = try trackRange(url: url)
+    let decodeStart = max(requestedRange.lowerBound, nativeRange.startSample)
+    let decodeEnd = min(requestedRange.upperBound, nativeRange.endSample)
+    guard decodeEnd > decodeStart else { throw AudioRenderError.sourceOutOfBounds }
+
     let asset = AVURLAsset(url: url)
     guard let track = asset.tracks(withMediaType: .audio).first else {
       throw AudioRenderError.readFailed
     }
-    let trackRange = track.timeRange
-    let requestedStart = CMTimeAdd(
-      trackRange.start,
-      CMTime(value: CMTimeValue(offsetSamples), timescale: CMTimeScale(Self.sampleRate))
-    )
     let reader = try AVAssetReader(asset: asset)
     reader.timeRange = CMTimeRange(
-      start: requestedStart,
+      start: CMTime(
+        value: CMTimeValue(decodeStart),
+        timescale: CMTimeScale(Self.sampleRate)
+      ),
       duration: CMTime(
-        value: CMTimeValue(durationSamples),
+        value: CMTimeValue(decodeEnd - decodeStart),
         timescale: CMTimeScale(Self.sampleRate)
       )
     )
@@ -84,8 +83,8 @@ struct NativePCMReader {
     reader.add(output)
     guard reader.startReading() else { throw AudioRenderError.readFailed }
 
-    var samples: [Float] = []
-    samples.reserveCapacity(durationSamples)
+    var samples = Array(repeating: Float(0), count: durationSamples)
+    var coveredRanges: [Range<Int>] = []
     while let sampleBuffer = output.copyNextSampleBuffer() {
       if cancellation?.isCancelled == true {
         reader.cancelReading()
@@ -105,12 +104,66 @@ struct NativePCMReader {
         )
       }
       guard status == kCMBlockBufferNoErr else { throw AudioRenderError.readFailed }
-      let remaining = durationSamples - samples.count
-      samples.append(contentsOf: values.prefix(max(0, remaining)))
-      if samples.count >= durationSamples { break }
+      let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+      let bufferStart = try Self.sampleIndex(presentationTime)
+      let duration = CMSampleBufferGetDuration(sampleBuffer)
+      let mappedValueCount: Int
+      if duration.isNumeric, duration.value >= 0 {
+        let bufferEnd = try Self.sampleIndex(CMTimeAdd(presentationTime, duration))
+        mappedValueCount = min(values.count, max(0, bufferEnd - bufferStart))
+      } else {
+        mappedValueCount = values.count
+      }
+      if let covered = place(
+        values: Array(values.prefix(mappedValueCount)),
+        bufferStartSample: bufferStart,
+        requestedRange: requestedRange,
+        into: &samples
+      ) {
+        Self.merge(covered, into: &coveredRanges)
+      }
     }
     if reader.status == .failed { throw AudioRenderError.readFailed }
-    return samples
+    guard !coveredRanges.isEmpty else { throw AudioRenderError.sourceOutOfBounds }
+    return PCMReadResult(
+      samples: samples,
+      requestedRange: requestedRange,
+      coveredRanges: coveredRanges
+    )
+  }
+
+  func place(
+    values: [Float],
+    bufferStartSample: Int,
+    requestedRange: Range<Int>,
+    into timeline: inout [Float]
+  ) -> Range<Int>? {
+    let (bufferEnd, overflow) = bufferStartSample.addingReportingOverflow(values.count)
+    guard !overflow else { return nil }
+    let coveredStart = max(bufferStartSample, requestedRange.lowerBound)
+    let coveredEnd = min(bufferEnd, requestedRange.upperBound)
+    guard coveredEnd > coveredStart else { return nil }
+    let sourceOffset = coveredStart - bufferStartSample
+    let destinationOffset = coveredStart - requestedRange.lowerBound
+    let count = coveredEnd - coveredStart
+    guard destinationOffset >= 0,
+      destinationOffset + count <= timeline.count,
+      sourceOffset >= 0,
+      sourceOffset + count <= values.count
+    else { return nil }
+    timeline.replaceSubrange(
+      destinationOffset..<(destinationOffset + count),
+      with: values[sourceOffset..<(sourceOffset + count)]
+    )
+    return coveredStart..<coveredEnd
+  }
+
+  private static func merge(_ range: Range<Int>, into ranges: inout [Range<Int>]) {
+    if let last = ranges.last, range.lowerBound <= last.upperBound {
+      ranges[ranges.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+    } else {
+      ranges.append(range)
+    }
   }
 
   private static func sampleIndex(_ time: CMTime) throws -> Int {
@@ -118,7 +171,7 @@ struct NativePCMReader {
     let converted = CMTimeConvertScale(
       time,
       timescale: CMTimeScale(sampleRate),
-      method: .roundTowardZero
+      method: .roundHalfAwayFromZero
     )
     guard converted.isNumeric, let value = Int(exactly: converted.value) else {
       throw AudioRenderError.readFailed

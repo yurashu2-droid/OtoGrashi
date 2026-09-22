@@ -7,12 +7,14 @@ enum AudioAnalysisError: Error, Equatable {
   case conversionFailed
   case selectionOutOfBounds
   case noAudioOverlap
+  case trackOriginMismatch
   case timestampOutOfRange
   case unsupportedContract
 
   var recoverable: Bool {
     switch self {
-    case .selectionOutOfBounds, .noAudioOverlap, .timestampOutOfRange:
+    case .selectionOutOfBounds, .noAudioOverlap, .trackOriginMismatch,
+      .timestampOutOfRange:
       return true
     default:
       return false
@@ -190,42 +192,42 @@ struct AudioAnalyzer {
     let selectionEndSample = try selectionEndUs.map {
       try Self.samples(fromMicroseconds: $0)
     }
-    let trackStartSample = try Self.samples(fromMicroseconds: audioTrackStartUs)
+    let declaredTrackStartSample = try Self.samples(fromMicroseconds: audioTrackStartUs)
     let decodedTrackRange: NativePCMReader.TrackRange
     do {
       decodedTrackRange = try NativePCMReader().trackRange(url: url)
     } catch {
       throw AudioAnalysisError.conversionFailed
     }
-    guard let audioLength = Int64(exactly: decodedTrackRange.durationSamples) else {
-      throw AudioAnalysisError.timestampOutOfRange
+    guard abs(declaredTrackStartSample - Int64(decodedTrackRange.startSample)) <= 1 else {
+      throw AudioAnalysisError.trackOriginMismatch
     }
-    let (audioEndSample, audioEndOverflow) = trackStartSample.addingReportingOverflow(
-      audioLength
+    let intersectionStart = max(
+      selectionStartSample,
+      Int64(decodedTrackRange.startSample)
     )
-    guard !audioEndOverflow else { throw AudioAnalysisError.timestampOutOfRange }
-    let intersectionStart = max(selectionStartSample, trackStartSample)
-    let intersectionEnd = min(selectionEndSample ?? audioEndSample, audioEndSample)
+    let intersectionEnd = min(
+      selectionEndSample ?? Int64(decodedTrackRange.endSample),
+      Int64(decodedTrackRange.endSample)
+    )
     guard intersectionEnd > intersectionStart else {
       throw AudioAnalysisError.noAudioOverlap
     }
-    guard let start = Int(exactly: intersectionStart - trackStartSample),
-      let duration = Int(exactly: intersectionEnd - intersectionStart),
+    guard let duration = Int(exactly: intersectionEnd - intersectionStart),
       let sourceStart = Int(exactly: intersectionStart)
     else { throw AudioAnalysisError.timestampOutOfRange }
-    let selectedSamples: [Float]
+    let selected: PCMReadResult
     do {
-      selectedSamples = try NativePCMReader().readTrackOffset(
+      selected = try NativePCMReader().readTimeline(
         url: url,
-        offsetSamples: start,
+        startSample: sourceStart,
         durationSamples: duration
       )
     } catch {
       throw AudioAnalysisError.conversionFailed
     }
-    guard !selectedSamples.isEmpty else { throw AudioAnalysisError.emptyAudio }
     return try analyze(
-      samples: selectedSamples,
+      samples: selected.samples,
       assetId: assetId,
       sourceStartSample: sourceStart
     )

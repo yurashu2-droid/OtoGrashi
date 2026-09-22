@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / "source"
+NATIVE_TEST_SOURCE = ROOT.parents[1] / "test" / "fixtures" / "native"
 RATE = 48_000
 FFMPEG = Path(
     os.environ.get(
@@ -59,13 +60,13 @@ def texture() -> np.ndarray:
     return (smooth * 0.025).astype(np.float32)
 
 
-def write_wav(path: Path, samples: np.ndarray) -> None:
+def write_wav(path: Path, samples: np.ndarray, sample_rate: int = RATE) -> None:
     pcm = np.clip(samples, -1, 1)
     pcm = np.round(pcm * 32_767).astype("<i2")
     with wave.open(str(path), "wb") as output:
         output.setnchannels(1)
         output.setsampwidth(2)
-        output.setframerate(RATE)
+        output.setframerate(sample_rate)
         output.writeframes(pcm.tobytes())
 
 
@@ -147,6 +148,55 @@ def render_mp4(name: str, samples: np.ndarray, color: str, kind: str) -> Path:
     return output
 
 
+def render_delayed_aac_regression() -> Path:
+    """Create a 44.1 kHz AAC track whose first packet has a nonzero PTS."""
+    sample_rate = 44_100
+    samples = np.zeros(sample_rate, dtype=np.float32)
+    samples[sample_rate // 4] = 0.92
+    NATIVE_TEST_SOURCE.mkdir(parents=True, exist_ok=True)
+    wav = NATIVE_TEST_SOURCE / ".delayed-44100-aac.wav"
+    output = NATIVE_TEST_SOURCE / "delayed-44100-aac.mp4"
+    write_wav(wav, samples, sample_rate=sample_rate)
+    command = [
+        str(FFMPEG),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=0x252830:s=160x90:r=30:d=1.15",
+        "-itsoffset",
+        "0.1482199546",
+        "-i",
+        str(wav),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryslow",
+        "-crf",
+        "40",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-ar",
+        str(sample_rate),
+        "-b:a",
+        "96k",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(output),
+    ]
+    try:
+        subprocess.run(command, check=True)
+    finally:
+        wav.unlink(missing_ok=True)
+    return output
+
+
 def main() -> None:
     if not FFMPEG.is_file():
         raise SystemExit(f"FFmpeg not found: {FFMPEG}")
@@ -172,6 +222,7 @@ def main() -> None:
                 "suggestedAcousticRole": role,
             }
         )
+    regression = render_delayed_aac_regression()
     manifest = {
         "schemaVersion": 1,
         "label": "Synthetic practice fixtures — not real household recordings",
@@ -181,6 +232,17 @@ def main() -> None:
             "geometric animation by assets/demo/generate_fixtures.py. No third-party media."
         ),
         "fixtures": fixtures,
+        "nativeRegressionFixtures": [
+            {
+                "id": "delayed-44100-aac",
+                "path": "../../test/fixtures/native/delayed-44100-aac.mp4",
+                "sha256": hashlib.sha256(regression.read_bytes()).hexdigest(),
+                "encodedSampleRate": 44_100,
+                "expectedTrackStartSample48k": 5_952,
+                "expectedOnsetSample48k": 18_912,
+                "purpose": "nonzero audio PTS, AAC priming, and 44.1-to-48 kHz mapping",
+            }
+        ],
     }
     (ROOT / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"

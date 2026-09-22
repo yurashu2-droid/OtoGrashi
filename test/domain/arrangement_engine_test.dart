@@ -89,6 +89,32 @@ void main() {
     );
   });
 
+  test('persisted arrangement rejects more than six assets or 64 events', () {
+    final valid = arrange(
+      clips: threeFixtures,
+      style: ArrangementStyle.lively,
+      seed: 7,
+    ).toJson();
+    expect(
+      () => Arrangement.fromJson({
+        ...valid,
+        'sourceAssetIds': List<String>.generate(7, (index) => 'asset-$index'),
+      }),
+      throwsA(isA<MediaContractException>()),
+    );
+
+    final audio = (valid['events'] as List<Object?>).first;
+    final video = (valid['videoEvents'] as List<Object?>).first;
+    expect(
+      () => Arrangement.fromJson({
+        ...valid,
+        'events': List<Object?>.filled(65, audio),
+        'videoEvents': List<Object?>.filled(65, video),
+      }),
+      throwsA(isA<MediaContractException>()),
+    );
+  });
+
   test(
     'six sources are all scheduled while the first three lead the intro',
     () {

@@ -82,8 +82,7 @@ final class AudioAnalyzerTests: XCTestCase {
       url: url,
       assetId: "selected",
       selectionStartUs: 30_000,
-      selectionDurationUs: 20_000,
-      audioTrackStartUs: 10_000
+      selectionDurationUs: 20_000
     )
     XCTAssertEqual(selected.sourceStartSample, 1_440)
     XCTAssertLessThanOrEqual(abs(selected.durationSamples - 960), 1)
@@ -99,31 +98,20 @@ final class AudioAnalyzerTests: XCTestCase {
     }
   }
 
-  func testSelectionIntersectsDelayedAudioAndPreservesAbsoluteSourceTime() throws {
+  func testAnalysisRejectsCallerTrackOriginThatDisagreesWithNativeMedia() throws {
     let url = try makeMonoFile(frameCount: 4_800, sampleRate: 48_000)
     defer { try? FileManager.default.removeItem(at: url) }
 
-    let result = try analyzer.analyze(
-      url: url,
-      assetId: "delayed",
-      selectionStartUs: 0,
-      selectionDurationUs: 50_000,
-      audioTrackStartUs: 30_000
-    )
-
-    XCTAssertEqual(result.sourceStartSample, 1_440)
-    XCTAssertEqual(result.durationSamples, 960)
     XCTAssertThrowsError(
       try analyzer.analyze(
         url: url,
-        assetId: "no-overlap",
+        assetId: "mismatched-origin",
         selectionStartUs: 0,
-        selectionDurationUs: 20_000,
+        selectionDurationUs: 50_000,
         audioTrackStartUs: 30_000
       )
     ) { error in
-      XCTAssertEqual(error as? AudioAnalysisError, .noAudioOverlap)
-      XCTAssertEqual((error as? AudioAnalysisError)?.recoverable, true)
+      XCTAssertEqual(error as? AudioAnalysisError, .trackOriginMismatch)
     }
   }
 
@@ -248,6 +236,36 @@ final class AudioAnalyzerTests: XCTestCase {
     XCTAssertEqual(result.durationSamples, 4_800)
     XCTAssertGreaterThan(result.peak, 0.1)
     XCTAssertTrue(result.onsetSamples.allSatisfy { (12_000..<16_800).contains($0) })
+  }
+
+  func testDelayed44100AACMapsImpulseFromActualPTSIntoAbsoluteTimeline() throws {
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let url = repository.appendingPathComponent(
+      "test/fixtures/native/delayed-44100-aac.mp4"
+    )
+    let range = try NativePCMReader().trackRange(url: url)
+
+    XCTAssertEqual(range.startSample, 5_952)
+    let pcm = try NativePCMReader().readTimeline(
+      url: url,
+      startSample: 5_952,
+      durationSamples: 24_000
+    )
+    XCTAssertEqual(pcm.requestedRange, 5_952..<29_952)
+    XCTAssertEqual(pcm.coveredRanges, [5_952..<29_952])
+    let result = try analyzer.analyze(
+      url: url,
+      assetId: "delayed-44100-aac",
+      selectionStartUs: 0,
+      selectionDurationUs: 600_000,
+      audioTrackStartUs: 124_000
+    )
+
+    XCTAssertEqual(result.sourceStartSample, 5_952)
+    XCTAssertEqual(result.onsetSamples, [18_912])
   }
 
   private func makeMonoFile(frameCount: Int, sampleRate: Double) throws -> URL {

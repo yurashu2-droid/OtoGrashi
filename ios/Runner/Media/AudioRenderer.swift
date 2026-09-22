@@ -87,6 +87,22 @@ struct ArrangementPayload: Decodable, Equatable {
   let events: [SoundEventPayload]
   let videoEvents: [VideoEventPayload]
 
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion
+    case sampleRate
+    case totalSamples
+    case templateId
+    case templateVersion
+    case analysisVersion
+    case rendererVersion
+    case seed
+    case style
+    case sourceAssetIds
+    case unusableAssetIds
+    case events
+    case videoEvents
+  }
+
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
@@ -98,10 +114,18 @@ struct ArrangementPayload: Decodable, Equatable {
     rendererVersion = try container.decode(Int.self, forKey: .rendererVersion)
     seed = try container.decode(Int.self, forKey: .seed)
     style = try container.decode(String.self, forKey: .style)
-    sourceAssetIds = try container.decode([String].self, forKey: .sourceAssetIds)
-    unusableAssetIds = try container.decode([String].self, forKey: .unusableAssetIds)
-    events = try container.decode([SoundEventPayload].self, forKey: .events)
-    videoEvents = try container.decode([VideoEventPayload].self, forKey: .videoEvents)
+    sourceAssetIds = try Self.decodeBounded(
+      String.self, from: container, forKey: .sourceAssetIds, maximum: 6
+    )
+    unusableAssetIds = try Self.decodeBounded(
+      String.self, from: container, forKey: .unusableAssetIds, maximum: 6
+    )
+    events = try Self.decodeBounded(
+      SoundEventPayload.self, from: container, forKey: .events, maximum: 64
+    )
+    videoEvents = try Self.decodeBounded(
+      VideoEventPayload.self, from: container, forKey: .videoEvents, maximum: 64
+    )
 
     guard schemaVersion == Self.supportedSchemaVersion,
       sampleRate == Self.sampleRate,
@@ -145,6 +169,24 @@ struct ArrangementPayload: Decodable, Equatable {
         video.crop.isValid
       else { throw AudioRenderError.eventOutOfBounds }
     }
+  }
+
+  private static func decodeBounded<Value: Decodable>(
+    _ type: Value.Type,
+    from container: KeyedDecodingContainer<CodingKeys>,
+    forKey key: CodingKeys,
+    maximum: Int
+  ) throws -> [Value] {
+    var values = try container.nestedUnkeyedContainer(forKey: key)
+    if let count = values.count, count > maximum {
+      throw AudioRenderError.unsupportedContract
+    }
+    var decoded: [Value] = []
+    while !values.isAtEnd {
+      guard decoded.count < maximum else { throw AudioRenderError.unsupportedContract }
+      decoded.append(try values.decode(Value.self))
+    }
+    return decoded
   }
 }
 
@@ -206,23 +248,31 @@ struct AudioRenderer {
         )
       )
       let renderedDuration = event.durationSamples + preRoll + postRoll
+      if loopMode == .once,
+        (event.sourceStartSample < trackRange.startSample || sourceEnd > trackRange.endSample)
+      {
+        throw AudioRenderError.sourceOutOfBounds
+      }
       let decoded = try reader.readTimeline(
         url: url,
         startSample: event.sourceStartSample - preRoll,
         durationSamples: renderedDuration,
         cancellation: cancellation
       )
-      guard !decoded.isEmpty else { throw AudioRenderError.sourceOutOfBounds }
       let eventSamples: [Float]
-      if decoded.count < renderedDuration {
-        guard loopMode != .once else { throw AudioRenderError.sourceOutOfBounds }
+      if sourceEnd > trackRange.endSample {
+        guard loopMode != .once,
+          let coveredEnd = decoded.coveredRanges.last?.upperBound
+        else { throw AudioRenderError.sourceOutOfBounds }
+        let availableCount = coveredEnd - decoded.requestedRange.lowerBound
+        guard availableCount > 0 else { throw AudioRenderError.sourceOutOfBounds }
         eventSamples = loop(
-          decoded,
+          Array(decoded.samples.prefix(availableCount)),
           count: renderedDuration,
           crossfadeSamples: Self.loopCrossfadeSamples
         )
       } else {
-        eventSamples = Array(decoded.prefix(renderedDuration))
+        eventSamples = decoded.samples
       }
       mixEvent(
         eventSamples,

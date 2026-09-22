@@ -37,5 +37,16 @@
       "visual": "texture",
       "suggestedAcousticRole": "texture"
     }
+  ],
+  "nativeRegressionFixtures": [
+    {
+      "id": "delayed-44100-aac",
+      "path": "../../test/fixtures/native/delayed-44100-aac.mp4",
+      "sha256": "d6567c0961c2ff5a230523fb70ebe1c28ebcb626bd331d34de0edd2db679313c",
+      "encodedSampleRate": 44100,
+      "expectedTrackStartSample48k": 5952,
+      "expectedOnsetSample48k": 18912,
+      "purpose": "nonzero audio PTS, AAC priming, and 44.1-to-48 kHz mapping"
+    }
   ]
 }

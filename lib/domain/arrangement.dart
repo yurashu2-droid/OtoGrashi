@@ -188,6 +188,12 @@ final class Arrangement {
        unusableAssetIds = List.unmodifiable(unusableAssetIds),
        events = List.unmodifiable(events),
        videoEvents = List.unmodifiable(videoEvents) {
+    if (sourceAssetIds.length > 6 ||
+        unusableAssetIds.length > 6 ||
+        events.length > 64 ||
+        videoEvents.length > 64) {
+      throw const MediaContractException('Arrangement exceeds schema limits.');
+    }
     if (sampleRate != 48000 || totalSamples != 720000) {
       throw const MediaContractException('Unsupported arrangement clock.');
     }
@@ -247,6 +253,22 @@ final class Arrangement {
         'Unsupported arrangement schema: ${json['schemaVersion']}.',
       );
     }
+    final sourceValues = json['sourceAssetIds'];
+    final unusableValues = json['unusableAssetIds'];
+    final eventValues = json['events'];
+    final videoEventValues = json['videoEvents'];
+    if (sourceValues is! List<Object?> ||
+        unusableValues is! List<Object?> ||
+        eventValues is! List<Object?> ||
+        videoEventValues is! List<Object?>) {
+      throw const MediaContractException('Malformed arrangement JSON.');
+    }
+    if (sourceValues.length > 6 ||
+        unusableValues.length > 6 ||
+        eventValues.length > 64 ||
+        videoEventValues.length > 64) {
+      throw const MediaContractException('Arrangement exceeds schema limits.');
+    }
     try {
       return Arrangement(
         templateId: json['templateId'] as String,
@@ -255,17 +277,15 @@ final class Arrangement {
         rendererVersion: json['rendererVersion'] as int,
         seed: json['seed'] as int,
         style: ArrangementStyle.values.byName(json['style'] as String),
-        sourceAssetIds: (json['sourceAssetIds'] as List<Object?>)
-            .cast<String>(),
-        unusableAssetIds: (json['unusableAssetIds'] as List<Object?>)
-            .cast<String>(),
-        events: (json['events'] as List<Object?>)
+        sourceAssetIds: sourceValues.cast<String>(),
+        unusableAssetIds: unusableValues.cast<String>(),
+        events: eventValues
             .map(
               (value) =>
                   SoundEvent.fromJson((value as Map<Object?, Object?>).cast()),
             )
             .toList(),
-        videoEvents: (json['videoEvents'] as List<Object?>)
+        videoEvents: videoEventValues
             .map(
               (value) =>
                   VideoEvent.fromJson((value as Map<Object?, Object?>).cast()),

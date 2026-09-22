@@ -3,6 +3,39 @@ import XCTest
 @testable import Runner
 
 final class AudioRendererTests: XCTestCase {
+  func testPCMPlacementUsesAbsoluteBufferPTSAndPreservesTimelineGaps() throws {
+    var timeline = Array(repeating: Float(0), count: 10)
+
+    let covered = NativePCMReader().place(
+      values: [0.25, 0.5, 0.75],
+      bufferStartSample: 105,
+      requestedRange: 100..<110,
+      into: &timeline
+    )
+
+    XCTAssertEqual(covered, 105..<108)
+    XCTAssertEqual(timeline, [0, 0, 0, 0, 0, 0.25, 0.5, 0.75, 0, 0])
+  }
+
+  func testPCMReaderHonorsCancellationBeforeOpeningTheAsset() throws {
+    let token = CancellationToken(operationId: "reader-cancelled")
+    token.cancel()
+    let missing = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathExtension("mp4")
+
+    XCTAssertThrowsError(
+      try NativePCMReader().readTimeline(
+        url: missing,
+        startSample: 0,
+        durationSamples: 480,
+        cancellation: token
+      )
+    ) { error in
+      XCTAssertEqual(error as? AudioRenderError, .cancelled)
+    }
+  }
+
   func testRenderUsesOriginalAudioAtRequestedDestinationAndWritesExactClock() async throws {
     var source = Array(repeating: Float(0), count: 4_800)
     source[120] = 0.75
@@ -190,6 +223,30 @@ final class AudioRendererTests: XCTestCase {
 
     XCTAssertThrowsError(try decode(json)) { error in
       XCTAssertEqual(error as? AudioRenderError, .eventOutOfBounds)
+    }
+  }
+
+  func testPayloadRejectsOversizedCollectionsBeforeEventDecoding() throws {
+    var json = validJSON(
+      sourceDuration: 4_800,
+      destinationStart: 0,
+      eventDuration: 4_800,
+      fadeIn: 0,
+      fadeOut: 0,
+      loopMode: "once"
+    )
+    json["sourceAssetIds"] = (0..<7).map { "asset-\($0)" }
+    XCTAssertThrowsError(try decode(json)) { error in
+      XCTAssertEqual(error as? AudioRenderError, .unsupportedContract)
+    }
+
+    json["sourceAssetIds"] = ["fixture"]
+    let event = (json["events"] as! [[String: Any]])[0]
+    let video = (json["videoEvents"] as! [[String: Any]])[0]
+    json["events"] = Array(repeating: event, count: 65)
+    json["videoEvents"] = Array(repeating: video, count: 65)
+    XCTAssertThrowsError(try decode(json)) { error in
+      XCTAssertEqual(error as? AudioRenderError, .unsupportedContract)
     }
   }
 
