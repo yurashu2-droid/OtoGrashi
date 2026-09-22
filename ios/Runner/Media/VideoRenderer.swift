@@ -248,6 +248,7 @@ struct VideoRenderer {
     guard writer.startWriting() else { throw VideoRenderError.writerFailed }
     videoRenderDiagnostic("VIDEO_STAGE writer_started status=\(writer.status.rawValue)")
     writer.startSession(atSourceTime: .zero)
+    let writerProgress = VideoWriterProgress()
 
     let audioTask = Task { () -> Result<Void, Error> in
       do {
@@ -256,7 +257,8 @@ struct VideoRenderer {
           to: audioInput,
           videoInput: videoInput,
           writer: writer,
-          cancellation: cancellation
+          cancellation: cancellation,
+          progress: writerProgress
         )
         audioInput.markAsFinished()
         videoRenderDiagnostic(
@@ -278,7 +280,8 @@ struct VideoRenderer {
           videoInput: videoInput,
           audioInput: audioInput,
           writer: writer,
-          cancellation: cancellation
+          cancellation: cancellation,
+          progress: writerProgress
         )
         guard let pool = adaptor.pixelBufferPool else {
           throw VideoRenderError.writerFailed
@@ -303,6 +306,12 @@ struct VideoRenderer {
             "VIDEO_STAGE append_failed role=video index=\(frame) \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
           )
           throw VideoRenderError.writerFailed
+        }
+        writerProgress.markProgress()
+        if frame == 0 || frame % 30 == 0 || frame == Self.frameCount - 1 {
+          videoRenderDiagnostic(
+            "VIDEO_STAGE video_frame frame=\(frame) pts=\(CMTime(value: CMTimeValue(frame), timescale: 30))"
+          )
         }
         if frame == 0 { videoRenderDiagnostic("VIDEO_STAGE first_video_append") }
       }
@@ -678,7 +687,8 @@ struct VideoRenderer {
     to input: AVAssetWriterInput,
     videoInput: AVAssetWriterInput,
     writer: AVAssetWriter,
-    cancellation: CancellationToken
+    cancellation: CancellationToken,
+    progress: VideoWriterProgress
   ) async throws {
     let asset = AVURLAsset(url: url)
     guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
@@ -699,13 +709,20 @@ struct VideoRenderer {
         videoInput: videoInput,
         audioInput: input,
         writer: writer,
-        cancellation: cancellation
+        cancellation: cancellation,
+        progress: progress
       )
       guard input.append(sample) else {
         videoRenderDiagnostic(
           "VIDEO_STAGE append_failed role=audio index=\(sampleIndex) \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: input))"
         )
         throw VideoRenderError.writerFailed
+      }
+      progress.markProgress()
+      if sampleIndex == 0 || sampleIndex % 100 == 0 {
+        videoRenderDiagnostic(
+          "VIDEO_STAGE audio_sample index=\(sampleIndex) pts=\(CMSampleBufferGetPresentationTimeStamp(sample))"
+        )
       }
       if sampleIndex == 0 {
         videoRenderDiagnostic(
@@ -727,10 +744,9 @@ struct VideoRenderer {
     videoInput: AVAssetWriterInput,
     audioInput: AVAssetWriterInput,
     writer: AVAssetWriter,
-    cancellation: CancellationToken
+    cancellation: CancellationToken,
+    progress: VideoWriterProgress
   ) async throws {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(30))
     while !input.isReadyForMoreMediaData {
       try checkCancellation(cancellation)
       guard writer.status == .writing else {
@@ -739,9 +755,9 @@ struct VideoRenderer {
         )
         throw VideoRenderError.writerFailed
       }
-      guard clock.now < deadline else {
+      guard !progress.hasStalled else {
         videoRenderDiagnostic(
-          "VIDEO_STAGE readiness_failed role=\(role) index=\(index) reason=deadline \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
+          "VIDEO_STAGE readiness_failed role=\(role) index=\(index) reason=no_progress \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
         )
         throw VideoRenderError.writerFailed
       }
@@ -760,6 +776,31 @@ struct VideoRenderer {
 
   private func checkCancellation(_ token: CancellationToken) throws {
     if token.isCancelled || Task.isCancelled { throw VideoRenderError.cancelled }
+  }
+}
+
+final class VideoWriterProgress: @unchecked Sendable {
+  static let watchdogNanoseconds: UInt64 = 30_000_000_000
+
+  private let lock = NSLock()
+  private let now: () -> UInt64
+  private var lastProgress: UInt64
+
+  init(now: @escaping () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+    self.now = now
+    lastProgress = now()
+  }
+
+  var hasStalled: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return now() &- lastProgress >= Self.watchdogNanoseconds
+  }
+
+  func markProgress() {
+    lock.lock()
+    lastProgress = now()
+    lock.unlock()
   }
 }
 

@@ -25,6 +25,22 @@ final class VideoRendererTests: XCTestCase {
     )
   }
 
+  func testWriterProgressWatchdogTracksEitherProducerAndDetectsAFullStall() {
+    var now: UInt64 = 0
+    let progress = VideoWriterProgress(now: { now })
+
+    XCTAssertFalse(progress.hasStalled)
+    now = VideoWriterProgress.watchdogNanoseconds
+    XCTAssertTrue(progress.hasStalled)
+
+    progress.markProgress()
+    XCTAssertFalse(progress.hasStalled)
+    now += VideoWriterProgress.watchdogNanoseconds - 1
+    XCTAssertFalse(progress.hasStalled)
+    now += 1
+    XCTAssertTrue(progress.hasStalled)
+  }
+
   func testSourceTimestampIgnoresZeroSampleMarkerButRejectsInvalidMediaPTS() throws {
     var marker: CMSampleBuffer?
     XCTAssertEqual(
@@ -202,12 +218,12 @@ final class VideoRendererTests: XCTestCase {
       destinationStartSample: 0,
       durationSamples: 720_000,
       assetIds: ["tap", "sustain", "texture"],
-      primaryAssetId: "tap"
+      primaryAssetId: "sustain"
     )
 
     XCTAssertEqual(
       VideoRenderer.visibleAssetIds(scene: scene, layout: .sequentialFocus),
-      ["tap"]
+      ["sustain"]
     )
     XCTAssertEqual(
       VideoRenderer.visibleAssetIds(
