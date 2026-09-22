@@ -1,0 +1,89 @@
+name: iOS check
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  ios-check:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      XCODE_PATH: /Applications/Xcode_26.6.app
+      FLUTTER_VERSION: 3.47.5
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Verify pinned runner and Xcode
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ci-logs
+          {
+            echo "commit=$GITHUB_SHA"
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "image_os=${ImageOS:-unavailable}"
+            echo "image_version=${ImageVersion:-unavailable}"
+            sw_vers
+            uname -a
+          } 2>&1 | tee ci-logs/runner.txt
+          test -d "$XCODE_PATH"
+          sudo xcode-select --switch "$XCODE_PATH/Contents/Developer"
+          xcodebuild -version 2>&1 | tee ci-logs/xcode.txt
+          grep -Fx 'Xcode 26.6' ci-logs/xcode.txt
+          grep -Fx 'Build version 17F113' ci-logs/xcode.txt
+
+      - name: Install pinned Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Log Flutter and Dart toolchain
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter --version 2>&1 | tee ci-logs/flutter.txt
+          dart --version 2>&1 | tee ci-logs/dart.txt
+          flutter doctor -v 2>&1 | tee ci-logs/flutter-doctor.txt
+          test "$(flutter --version --machine | ruby -rjson -e 'puts JSON.parse(STDIN.read)["frameworkVersion"]')" = "$FLUTTER_VERSION"
+
+      - name: Resolve dependencies
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter pub get 2>&1 | tee ci-logs/pub-get.txt
+
+      - name: Analyze
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter analyze --fatal-infos 2>&1 | tee ci-logs/analyze.txt
+
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test 2>&1 | tee ci-logs/test.txt
+
+      - name: Build unsigned iOS Simulator app
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter build ios --simulator --debug 2>&1 | tee ci-logs/ios-simulator-build.txt
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-check-failure-${{ github.run_id }}
+          path: ci-logs
+          if-no-files-found: error
+          retention-days: 14
