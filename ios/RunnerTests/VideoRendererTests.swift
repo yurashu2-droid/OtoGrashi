@@ -3,6 +3,48 @@ import XCTest
 @testable import Runner
 
 final class VideoRendererTests: XCTestCase {
+  func testSourceTimestampIgnoresZeroSampleMarkerButRejectsInvalidMediaPTS() throws {
+    var marker: CMSampleBuffer?
+    XCTAssertEqual(
+      CMSampleBufferCreateReady(
+        allocator: kCFAllocatorDefault,
+        dataBuffer: nil,
+        formatDescription: nil,
+        sampleCount: 0,
+        sampleTimingEntryCount: 0,
+        sampleTimingArray: nil,
+        sampleSizeEntryCount: 0,
+        sampleSizeArray: nil,
+        sampleBufferOut: &marker
+      ),
+      noErr
+    )
+    XCTAssertNil(try VideoRenderer.sourceTimestamp(from: try XCTUnwrap(marker)))
+
+    XCTAssertThrowsError(
+      try VideoRenderer.sourceTimestamp(
+        sampleCount: 1,
+        presentationTimestamp: .invalid
+      )
+    )
+  }
+
+  func testSourceTimestampScanAcceptsAllThreeVideoFixtures() async throws {
+    let fixtures = [
+      fixtureURL("synthetic-tap.mp4"),
+      nativeFixtureURL("rotated-vfr-tap.mp4"),
+      nativeFixtureURL("hdr10-tap.mp4"),
+    ]
+    let renderer = VideoRenderer()
+    for url in fixtures {
+      let asset = AVURLAsset(url: url)
+      let track = try XCTUnwrap(try await asset.loadTracks(withMediaType: .video).first)
+      let timestamps = try renderer.sourceTimestamps(asset: asset, track: track)
+      XCTAssertFalse(timestamps.isEmpty)
+      XCTAssertTrue(timestamps.allSatisfy(\.isNumeric))
+    }
+  }
+
   func testManagedStoreRejectsMissingAndDuplicateOriginalMatches() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)

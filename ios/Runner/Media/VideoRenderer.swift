@@ -192,7 +192,11 @@ struct VideoRenderer {
     try checkCancellation(cancellation)
 
     let dimensions = request.quality.dimensions
-    let providers = try await makeProviders(assets: assets, requiredIds: requiredIds)
+    let providers = try await makeProviders(
+      assets: assets,
+      requiredIds: requiredIds,
+      cancellation: cancellation
+    )
     videoRenderDiagnostic("VIDEO_STAGE providers_ready count=\(providers.count)")
     if FileManager.default.fileExists(atPath: outputURL.path) {
       try FileManager.default.removeItem(at: outputURL)
@@ -303,7 +307,11 @@ struct VideoRenderer {
     }
   }
 
-  private func makeProviders(assets: [String: URL], requiredIds: Set<String>) async throws
+  private func makeProviders(
+    assets: [String: URL],
+    requiredIds: Set<String>,
+    cancellation: CancellationToken
+  ) async throws
     -> [String: SourceProvider]
   {
     var result: [String: SourceProvider] = [:]
@@ -323,7 +331,11 @@ struct VideoRenderer {
       guard let track = try await asset.loadTracks(withMediaType: .video).first else {
         throw VideoRenderError.sourceReadFailed
       }
-      let timestamps = try sourceTimestamps(asset: asset, track: track)
+      let timestamps = try sourceTimestamps(
+        asset: asset,
+        track: track,
+        cancellation: cancellation
+      )
       result[id] = SourceProvider(
         generator: generator,
         duration: duration,
@@ -333,7 +345,11 @@ struct VideoRenderer {
     return result
   }
 
-  private func sourceTimestamps(asset: AVAsset, track: AVAssetTrack) throws -> [CMTime] {
+  func sourceTimestamps(
+    asset: AVAsset,
+    track: AVAssetTrack,
+    cancellation: CancellationToken? = nil
+  ) throws -> [CMTime] {
     let reader = try AVAssetReader(asset: asset)
     let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
     output.alwaysCopiesSampleData = false
@@ -347,15 +363,25 @@ struct VideoRenderer {
       throw VideoRenderError.sourceReadFailed
     }
     var timestamps: [CMTime] = []
+    var scannedSamples = 0
     while let sample = output.copyNextSampleBuffer() {
-      let timestamp = CMSampleBufferGetPresentationTimeStamp(sample)
-      guard timestamp.isNumeric, timestamps.count < 2_000 else {
+      if let cancellation { try checkCancellation(cancellation) }
+      scannedSamples += 1
+      guard scannedSamples <= 2_100 else {
         videoRenderDiagnostic(
-          "VIDEO_STAGE source_pts_reader invalid_pts_or_cap count=\(timestamps.count)"
+          "VIDEO_STAGE source_pts_reader scan_cap scanned=\(scannedSamples) frames=\(timestamps.count)"
         )
         throw VideoRenderError.sourceReadFailed
       }
-      timestamps.append(timestamp)
+      if let timestamp = try Self.sourceTimestamp(from: sample) {
+        guard timestamps.count < 2_000 else {
+          videoRenderDiagnostic(
+            "VIDEO_STAGE source_pts_reader frame_cap count=\(timestamps.count)"
+          )
+          throw VideoRenderError.sourceReadFailed
+        }
+        timestamps.append(timestamp)
+      }
     }
     videoRenderDiagnostic(
       "VIDEO_STAGE source_pts_reader status=\(reader.status.rawValue) count=\(timestamps.count) error=\(String(reflecting: reader.error))"
@@ -373,6 +399,42 @@ struct VideoRenderer {
       throw VideoRenderError.sourceReadFailed
     }
     return timestamps.sorted { CMTimeCompare($0, $1) < 0 }
+  }
+
+  static func sourceTimestamp(from sample: CMSampleBuffer) throws -> CMTime? {
+    let sampleCount = CMSampleBufferGetNumSamples(sample)
+    if sampleCount == 0 {
+      let attachments = CMCopyDictionaryOfAttachments(
+        allocator: kCFAllocatorDefault,
+        target: sample,
+        attachmentMode: kCMAttachmentMode_ShouldPropagate
+      ) as? [AnyHashable: Any]
+      let keys = attachments?.keys.map { String(describing: $0) }.sorted() ?? []
+      videoRenderDiagnostic(
+        "VIDEO_STAGE source_pts_reader skipped_marker samples=0 keys=\(keys)"
+      )
+      return nil
+    }
+    do {
+      return try sourceTimestamp(
+        sampleCount: sampleCount,
+        presentationTimestamp: CMSampleBufferGetPresentationTimeStamp(sample)
+      )
+    } catch {
+      videoRenderDiagnostic(
+        "VIDEO_STAGE source_pts_reader invalid_media_pts samples=\(sampleCount)"
+      )
+      throw error
+    }
+  }
+
+  static func sourceTimestamp(
+    sampleCount: Int,
+    presentationTimestamp: CMTime
+  ) throws -> CMTime? {
+    guard sampleCount > 0 else { return nil }
+    guard presentationTimestamp.isNumeric else { throw VideoRenderError.sourceReadFailed }
+    return presentationTimestamp
   }
 
   private func drawFrame(
