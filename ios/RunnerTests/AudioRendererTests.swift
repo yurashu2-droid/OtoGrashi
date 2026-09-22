@@ -288,6 +288,38 @@ final class AudioRendererTests: XCTestCase {
     try persistCIEvidence(report)
   }
 
+  func testLoopAndHoldCannotStartBeforeTheNativeTrackOrigin() async throws {
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let sourceURL = repository.appendingPathComponent(
+      "test/fixtures/native/delayed-44100-aac.mp4"
+    )
+    for mode in ["loop", "hold"] {
+      let outputURL = temporaryURL(extension: "caf")
+      defer { remove([outputURL]) }
+      do {
+        _ = try await AudioRenderer(accompanimentGain: 0).render(
+          arrangement: try payload(
+            sourceDuration: 4_800,
+            destinationStart: 0,
+            eventDuration: 4_800,
+            fadeIn: 0,
+            fadeOut: 0,
+            loopMode: mode
+          ),
+          assets: ["fixture": sourceURL],
+          outputURL: outputURL,
+          cancellation: CancellationToken(operationId: "early-\(mode)")
+        )
+        XCTFail("Expected source origin rejection for \(mode)")
+      } catch {
+        XCTAssertEqual(error as? AudioRenderError, .sourceOutOfBounds)
+      }
+    }
+  }
+
   func testCancelledRegistryTokenStopsRenderBeforeWritingOutput() async throws {
     let registry = JobRegistry()
     let token = try await registry.start(operationId: "cancelled")

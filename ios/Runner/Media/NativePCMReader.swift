@@ -26,11 +26,14 @@ struct NativePCMReader {
     guard let track = asset.tracks(withMediaType: .audio).first else {
       throw AudioRenderError.readFailed
     }
-    let timeRange = track.timeRange
+    return try Self.sampleRange(track.timeRange)
+  }
+
+  static func sampleRange(_ timeRange: CMTimeRange) throws -> TrackRange {
     let start = try Self.sampleIndex(timeRange.start)
-    let duration = try Self.sampleIndex(timeRange.duration)
-    let (end, overflow) = start.addingReportingOverflow(duration)
-    guard start >= 0, duration > 0, !overflow else {
+    let end = try Self.sampleIndex(CMTimeRangeGetEnd(timeRange))
+    let (duration, underflow) = end.subtractingReportingOverflow(start)
+    guard start >= 0, end > start, duration > 0, !underflow else {
       throw AudioRenderError.readFailed
     }
     return TrackRange(startSample: start, durationSamples: duration, endSample: end)

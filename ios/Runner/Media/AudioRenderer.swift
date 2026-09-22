@@ -248,9 +248,10 @@ struct AudioRenderer {
         )
       )
       let renderedDuration = event.durationSamples + preRoll + postRoll
-      if loopMode == .once,
-        (event.sourceStartSample < trackRange.startSample || sourceEnd > trackRange.endSample)
-      {
+      guard event.sourceStartSample >= trackRange.startSample else {
+        throw AudioRenderError.sourceOutOfBounds
+      }
+      if loopMode == .once, sourceEnd > trackRange.endSample {
         throw AudioRenderError.sourceOutOfBounds
       }
       let decoded = try reader.readTimeline(

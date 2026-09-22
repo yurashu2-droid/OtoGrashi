@@ -5,6 +5,18 @@ import XCTest
 final class AudioAnalyzerTests: XCTestCase {
   private let analyzer = AudioAnalyzer()
 
+  func testTrackRangeRoundsItsAbsoluteEndInsteadOfAddingRoundedParts() throws {
+    let subSample = CMTime(value: 1, timescale: 120_000)
+
+    let range = try NativePCMReader.sampleRange(
+      CMTimeRange(start: subSample, duration: subSample)
+    )
+
+    XCTAssertEqual(range.startSample, 0)
+    XCTAssertEqual(range.endSample, 1)
+    XCTAssertEqual(range.durationSamples, 1)
+  }
+
   func testSilentSignalHasZeroTenMillisecondMetrics() throws {
     let metrics = try analyzer.measure(samples: Array(repeating: 0, count: 960))
 
