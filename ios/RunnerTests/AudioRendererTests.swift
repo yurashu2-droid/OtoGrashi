@@ -472,19 +472,29 @@ final class AudioRendererTests: XCTestCase {
     var samples: [Float] = []
     samples.reserveCapacity(fileLength)
     var chunkFrameCounts: [Int] = []
-    while true {
+    while file.framePosition < file.length {
+      let remaining = file.length - file.framePosition
+      guard remaining > 0 else {
+        throw NSError(domain: "AudioRendererTests", code: 1)
+      }
+      let requestedFrames = AVAudioFrameCount(min(Int64(32_768), remaining))
       let buffer = try XCTUnwrap(
         AVAudioPCMBuffer(
           pcmFormat: file.processingFormat,
-          frameCapacity: 32_768
+          frameCapacity: requestedFrames
         )
       )
-      try file.read(into: buffer)
+      try file.read(into: buffer, frameCount: requestedFrames)
       let frameCount = Int(buffer.frameLength)
-      guard frameCount > 0 else { break }
+      guard frameCount > 0 else {
+        throw NSError(domain: "AudioRendererTests", code: 2)
+      }
       let channel = try XCTUnwrap(buffer.floatChannelData?[0])
       samples.append(contentsOf: UnsafeBufferPointer(start: channel, count: frameCount))
       chunkFrameCounts.append(frameCount)
+    }
+    guard samples.count == fileLength else {
+      throw NSError(domain: "AudioRendererTests", code: 3)
     }
     return (samples, fileLength, chunkFrameCounts)
   }

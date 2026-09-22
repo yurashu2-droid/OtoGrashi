@@ -419,14 +419,17 @@ struct AudioRenderer {
       var nonFiniteCount = 0
       var sampleCount = 0
       var readChunkFrameCounts: [Int] = []
-      while true {
+      while file.framePosition < file.length {
+        let remaining = file.length - file.framePosition
+        guard remaining > 0 else { throw AudioRenderError.writeFailed }
+        let requestedFrames = AVAudioFrameCount(min(Int64(32_768), remaining))
         guard let buffer = AVAudioPCMBuffer(
           pcmFormat: format,
-          frameCapacity: 32_768
+          frameCapacity: requestedFrames
         ) else { throw AudioRenderError.writeFailed }
-        try file.read(into: buffer)
+        try file.read(into: buffer, frameCount: requestedFrames)
         let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { break }
+        guard frameCount > 0 else { throw AudioRenderError.writeFailed }
         guard let channels = buffer.floatChannelData else {
           throw AudioRenderError.writeFailed
         }
