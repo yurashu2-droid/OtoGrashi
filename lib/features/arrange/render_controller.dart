@@ -29,8 +29,9 @@ final class RenderController {
   final MediaGateway gateway;
   final Iterator<String>? operationIds;
   RenderState? _stateValue;
-  Future<void> _cancellationBarrier = Future<void>.value();
-  var _pendingCancellationCount = 0;
+  Future<void> _cancellationQueueTail = Future<void>.value();
+  String? _undrainedOperationId;
+  Future<void>? _drainAttempt;
   var _fallbackId = 0;
 
   RenderState get state =>
@@ -39,8 +40,11 @@ final class RenderController {
   void open(Project project) {
     final previous = _stateValue;
     final previousId = previous?.operationId;
-    if (previousId != null && previous!.phase == RenderPhase.rendering) {
-      _enqueueCancellation(previousId);
+    final drain = _requiredDrain(
+      previous?.phase == RenderPhase.rendering ? previousId : null,
+    );
+    if (drain != null) {
+      unawaited(drain.catchError((Object _, StackTrace _) {}));
     }
     _stateValue = RenderState(project: project, phase: RenderPhase.idle);
   }
@@ -49,9 +53,9 @@ final class RenderController {
     final current = state;
     final project = current.project;
     final previousId = current.operationId;
-    if (previousId != null && current.phase == RenderPhase.rendering) {
-      _enqueueCancellation(previousId);
-    }
+    final drain = _requiredDrain(
+      current.phase == RenderPhase.rendering ? previousId : null,
+    );
     final operationId = _nextOperationId();
     final request = RenderRequest(
       operationId: operationId,
@@ -66,7 +70,7 @@ final class RenderController {
       phase: RenderPhase.rendering,
       operationId: operationId,
     );
-    unawaited(_complete(request));
+    unawaited(_complete(request, requiredDrain: drain));
     return operationId;
   }
 
@@ -79,13 +83,16 @@ final class RenderController {
       phase: RenderPhase.cancelled,
       operationId: operationId,
     );
-    await _enqueueCancellation(operationId);
+    await _requiredDrain(operationId);
   }
 
-  Future<void> _complete(RenderRequest request) async {
+  Future<void> _complete(
+    RenderRequest request, {
+    required Future<void>? requiredDrain,
+  }) async {
     try {
-      if (_pendingCancellationCount > 0) {
-        await _cancellationBarrier;
+      if (requiredDrain != null) {
+        await requiredDrain;
       }
       if (!_isCurrent(request)) return;
       final media = await gateway.render(request);
@@ -118,13 +125,44 @@ final class RenderController {
       state.project.id == request.projectId &&
       state.project.revision == request.revision;
 
+  Future<void>? _requiredDrain(String? candidateOperationId) {
+    final operationId = _undrainedOperationId ?? candidateOperationId;
+    if (operationId == null) return null;
+    final currentAttempt = _drainAttempt;
+    if (currentAttempt != null) return currentAttempt;
+
+    _undrainedOperationId = operationId;
+    final cancellation = _enqueueCancellation(operationId);
+    late final Future<void> attempt;
+    attempt = cancellation.then<void>(
+      (_) {
+        if (identical(_drainAttempt, attempt)) {
+          _drainAttempt = null;
+          if (_undrainedOperationId == operationId) {
+            _undrainedOperationId = null;
+          }
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (identical(_drainAttempt, attempt)) {
+          _drainAttempt = null;
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      },
+    );
+    _drainAttempt = attempt;
+    return attempt;
+  }
+
   Future<void> _enqueueCancellation(String operationId) {
-    _pendingCancellationCount += 1;
-    final next = _cancellationBarrier
-        .then((_) => gateway.cancel(operationId))
-        .whenComplete(() => _pendingCancellationCount -= 1);
-    _cancellationBarrier = next;
-    return next;
+    final cancellation = _cancellationQueueTail.then(
+      (_) => gateway.cancel(operationId),
+    );
+    _cancellationQueueTail = cancellation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return cancellation;
   }
 
   String _nextOperationId() {

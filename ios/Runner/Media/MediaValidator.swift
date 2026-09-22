@@ -162,8 +162,10 @@ struct MediaValidator {
     _ key: CFString,
     from formatDescriptions: [CMFormatDescription]
   ) -> String? {
-    guard let description = formatDescriptions.first else { return nil }
-    let extensions = CMFormatDescriptionGetExtensions(description) as NSDictionary
+    guard let description = formatDescriptions.first,
+      let rawExtensions = CMFormatDescriptionGetExtensions(description)
+    else { return nil }
+    let extensions = rawExtensions as NSDictionary
     return extensions.object(forKey: key) as? String
   }
 

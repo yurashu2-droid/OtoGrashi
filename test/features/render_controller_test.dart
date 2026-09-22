@@ -132,6 +132,77 @@ void main() {
     expect(gateway.cancelledOperationIds, isEmpty);
   });
 
+  test(
+    'open handles a failed drain and the next generate retries it',
+    () async {
+      final gateway = _FakeMediaGateway()..cancelFailuresRemaining = 1;
+      final errors = <Object>[];
+      final bodyComplete = Completer<void>();
+
+      runZonedGuarded(
+        () async {
+          try {
+            final controller = RenderController(
+              gateway: gateway,
+              operationIds: _ids(<String>['old', 'new']),
+            )..open(_projectAtRevision(1));
+            controller.generate(RenderQuality.preview);
+            await pumpEventQueue();
+
+            controller.open(_projectAtRevision(2));
+            await pumpEventQueue();
+            controller.generate(RenderQuality.preview);
+            await pumpEventQueue();
+
+            expect(gateway.cancelledOperationIds, <String>['old', 'old']);
+            expect(
+              gateway.requests.map((request) => request.operationId),
+              <String>['old', 'new'],
+            );
+          } finally {
+            bodyComplete.complete();
+          }
+        },
+        (error, stackTrace) {
+          errors.add(error);
+        },
+      );
+
+      await bodyComplete.future;
+      expect(errors, isEmpty);
+    },
+  );
+
+  test(
+    'replacement reports a failed drain and a later generate retries it',
+    () async {
+      final gateway = _FakeMediaGateway()..cancelFailuresRemaining = 1;
+      final controller = RenderController(
+        gateway: gateway,
+        operationIds: _ids(<String>['old', 'blocked', 'recovered']),
+      )..open(_projectAtRevision(3));
+      controller.generate(RenderQuality.preview);
+
+      controller.generate(RenderQuality.preview);
+      await pumpEventQueue();
+
+      expect(controller.state.phase, RenderPhase.failed);
+      expect(gateway.cancelledOperationIds, <String>['old']);
+      expect(gateway.requests.map((request) => request.operationId), <String>[
+        'old',
+      ]);
+
+      controller.generate(RenderQuality.preview);
+      await pumpEventQueue();
+
+      expect(gateway.cancelledOperationIds, <String>['old', 'old']);
+      expect(gateway.requests.map((request) => request.operationId), <String>[
+        'old',
+        'recovered',
+      ]);
+    },
+  );
+
   test('preview and full send identical recipes and arrangements', () async {
     final gateway = _FakeMediaGateway();
     final controller = RenderController(
@@ -191,6 +262,7 @@ final class _FakeMediaGateway implements MediaGateway {
   final Map<String, Completer<RenderedMedia>> _renders =
       <String, Completer<RenderedMedia>>{};
   Completer<void>? cancelGate;
+  var cancelFailuresRemaining = 0;
 
   @override
   Future<AnalyzedClip> analyze(MediaAnalysisRequest request) =>
@@ -199,6 +271,10 @@ final class _FakeMediaGateway implements MediaGateway {
   @override
   Future<void> cancel(String operationId) async {
     cancelledOperationIds.add(operationId);
+    if (cancelFailuresRemaining > 0) {
+      cancelFailuresRemaining -= 1;
+      throw StateError('cancel failed');
+    }
     await cancelGate?.future;
   }
 
