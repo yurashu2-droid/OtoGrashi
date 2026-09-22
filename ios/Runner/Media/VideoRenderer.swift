@@ -260,6 +260,7 @@ struct VideoRenderer {
     let watchdogTask = Task {
       while !Task.isCancelled {
         try? await Task.sleep(nanoseconds: 250_000_000)
+        guard !Task.isCancelled else { break }
         if cancellation.isCancelled || writer.status == .failed || writer.status == .cancelled {
           providers.values.forEach { $0.cancelImageGeneration() }
           writer.cancelWriting()
@@ -345,6 +346,7 @@ struct VideoRenderer {
       let audioResult = await audioTask.value
       try audioResult.get()
       watchdogTask.cancel()
+      _ = await watchdogTask.value
       writer.endSession(atSourceTime: CMTime(value: 15, timescale: 1))
       videoRenderDiagnostic(
         "VIDEO_STAGE finish_writing begin \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
@@ -366,15 +368,17 @@ struct VideoRenderer {
     } catch {
       cancellation.cancel()
       watchdogTask.cancel()
+      _ = await watchdogTask.value
       providers.values.forEach { $0.cancelImageGeneration() }
       audioTask.cancel()
       let audioResult = await audioTask.value
       writer.cancelWriting()
       try? FileManager.default.removeItem(at: outputURL)
+      let primaryError: Error = watchdog.didStall ? VideoRenderError.writerFailed : error
       if case let .failure(audioError) = audioResult {
-        throw Self.preferredProducerError(primary: error, audio: audioError)
+        throw Self.preferredProducerError(primary: primaryError, audio: audioError)
       }
-      throw error
+      throw primaryError
     }
   }
 
@@ -845,8 +849,20 @@ final class VideoWriterWatchdog: @unchecked Sendable {
     self.init(progress: VideoWriterProgress(), onStall: onStall)
   }
 
+  var didStall: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return didFire
+  }
+
   @discardableResult
   func check() -> Bool {
+    lock.lock()
+    if didFire {
+      lock.unlock()
+      return true
+    }
+    lock.unlock()
     guard progress.hasStalled else { return false }
     lock.lock()
     if didFire {
