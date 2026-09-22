@@ -3,6 +3,12 @@ import CoreImage
 import CoreText
 import Foundation
 
+private func videoRenderDiagnostic(_ message: @autoclosure () -> String) {
+  #if DEBUG
+    print(message())
+  #endif
+}
+
 enum VideoRenderError: Error, Equatable {
   case unsupportedContract
   case missingAsset
@@ -182,10 +188,12 @@ struct VideoRenderer {
       outputURL: audioURL,
       cancellation: cancellation
     )
+    videoRenderDiagnostic("VIDEO_STAGE audio_complete")
     try checkCancellation(cancellation)
 
     let dimensions = request.quality.dimensions
     let providers = try await makeProviders(assets: assets, requiredIds: requiredIds)
+    videoRenderDiagnostic("VIDEO_STAGE providers_ready count=\(providers.count)")
     if FileManager.default.fileExists(atPath: outputURL.path) {
       try FileManager.default.removeItem(at: outputURL)
     }
@@ -234,6 +242,7 @@ struct VideoRenderer {
     writer.add(videoInput)
     writer.add(audioInput)
     guard writer.startWriting() else { throw VideoRenderError.writerFailed }
+    videoRenderDiagnostic("VIDEO_STAGE writer_started status=\(writer.status.rawValue)")
     writer.startSession(atSourceTime: .zero)
 
     let audioTask = Task {
@@ -267,6 +276,7 @@ struct VideoRenderer {
           buffer,
           withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: 30)
         ) else { throw VideoRenderError.writerFailed }
+        if frame == 0 { videoRenderDiagnostic("VIDEO_STAGE first_video_append") }
       }
       videoInput.markAsFinished()
       try await audioTask.value
@@ -337,6 +347,15 @@ struct VideoRenderer {
         throw VideoRenderError.sourceReadFailed
       }
       timestamps.append(timestamp)
+    }
+    videoRenderDiagnostic(
+      "VIDEO_STAGE source_pts_reader status=\(reader.status.rawValue) count=\(timestamps.count) error=\(String(reflecting: reader.error))"
+    )
+    if let error = reader.error {
+      videoRenderDiagnostic(
+        "VIDEO_STAGE source_pts_reader_error reflected=\(String(reflecting: error))"
+      )
+      throw error
     }
     guard reader.status == .completed, !timestamps.isEmpty else {
       throw VideoRenderError.sourceReadFailed
@@ -581,7 +600,19 @@ private final class SourceProvider {
   func image(at time: CMTime) async throws -> CGImage {
     let index = heldFrameIndex(at: time)
     if cachedFrame == index, let cachedImage { return cachedImage }
-    let generated = try await generator.image(at: timestamps[index])
+    let generated: (image: CGImage, actualTime: CMTime)
+    do {
+      generated = try await generator.image(at: timestamps[index])
+    } catch {
+      let nsError = error as NSError
+      videoRenderDiagnostic(
+        "VIDEO_STAGE generator_error reflected=\(String(reflecting: error)) domain=\(nsError.domain) code=\(nsError.code)"
+      )
+      throw error
+    }
+    if cachedImage == nil {
+      videoRenderDiagnostic("VIDEO_STAGE first_generator_image index=\(index)")
+    }
     cachedFrame = index
     cachedImage = generated.image
     return generated.image

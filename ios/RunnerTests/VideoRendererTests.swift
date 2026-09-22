@@ -156,19 +156,36 @@ final class VideoRendererTests: XCTestCase {
       audioRenderer: AudioRenderer(accompanimentGain: 0)
     )
     var outputs: [URL] = []
-    defer { outputs.forEach { try? FileManager.default.removeItem(at: $0) } }
+    defer {
+      outputs.forEach {
+        if FileManager.default.fileExists(atPath: $0.path) {
+          try? FileManager.default.removeItem(at: $0)
+        }
+      }
+    }
 
     for quality in ["preview", "full"] {
       print("VIDEO_RENDER_START quality=\(quality) time=\(Date().timeIntervalSince1970)")
       let request = try decodeRequest(quality: quality, layout: "stacked")
       let output = temporaryURL("\(quality).mp4")
       outputs.append(output)
-      let report = try await renderer.render(
-        request: request,
-        assets: assets,
-        outputURL: output,
-        cancellation: CancellationToken(operationId: quality)
-      )
+      let report: VideoRenderReport
+      do {
+        report = try await renderer.render(
+          request: request,
+          assets: assets,
+          outputURL: output,
+          cancellation: CancellationToken(operationId: quality)
+        )
+      } catch {
+        let nsError = error as NSError
+        print("VIDEO_RENDER_ERROR reflected=\(String(reflecting: error))")
+        print(
+          "VIDEO_RENDER_NSERROR domain=\(nsError.domain) code=\(nsError.code) description=\(nsError.localizedDescription)"
+        )
+        XCTFail("render failed: \(String(reflecting: error))")
+        return
+      }
       try preserveMovie(output, name: quality)
       print("VIDEO_RENDER_END quality=\(quality) frames=\(report.frameCount) time=\(Date().timeIntervalSince1970)")
       let validation = try await validateAndPersist(
@@ -192,19 +209,35 @@ final class VideoRendererTests: XCTestCase {
   func testRotatedVFRAndHDRSourcesNormalizeToSDR30fps() async throws {
     let renderer = VideoRenderer(audioRenderer: AudioRenderer(accompanimentGain: 0))
     var outputs: [URL] = []
-    defer { outputs.forEach { try? FileManager.default.removeItem(at: $0) } }
+    defer {
+      outputs.forEach {
+        if FileManager.default.fileExists(atPath: $0.path) {
+          try? FileManager.default.removeItem(at: $0)
+        }
+      }
+    }
     for fixture in ["rotated-vfr-tap.mp4", "hdr10-tap.mp4"] {
       let source = nativeFixtureURL(fixture)
       XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
       let output = temporaryURL("\(fixture).normalized.mp4")
       outputs.append(output)
       print("VIDEO_VARIANT_START fixture=\(fixture) time=\(Date().timeIntervalSince1970)")
-      _ = try await renderer.render(
-        request: try decodeRequest(quality: "preview", layout: "sequentialFocus"),
-        assets: ["tap": source, "sustain": source, "texture": source],
-        outputURL: output,
-        cancellation: CancellationToken(operationId: fixture)
-      )
+      do {
+        _ = try await renderer.render(
+          request: try decodeRequest(quality: "preview", layout: "sequentialFocus"),
+          assets: ["tap": source, "sustain": source, "texture": source],
+          outputURL: output,
+          cancellation: CancellationToken(operationId: fixture)
+        )
+      } catch {
+        let nsError = error as NSError
+        print("VIDEO_VARIANT_ERROR reflected=\(String(reflecting: error))")
+        print(
+          "VIDEO_VARIANT_NSERROR domain=\(nsError.domain) code=\(nsError.code) description=\(nsError.localizedDescription)"
+        )
+        XCTFail("variant render failed: \(String(reflecting: error))")
+        return
+      }
       let name = fixture.replacingOccurrences(of: ".mp4", with: "")
       try preserveMovie(output, name: name)
       _ = try await validateAndPersist(
