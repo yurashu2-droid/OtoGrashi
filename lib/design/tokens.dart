@@ -7,8 +7,9 @@ abstract final class AppTokens {
   static const controlGap = 12.0;
   static const smallGap = 16.0;
 
-  static const seedColor = Color(0xFF356859);
-  static const surfaceColor = Color(0xFFF8F5EF);
+  static const seedColor = Color(0xFF8F68DF);
+  static const surfaceColor = Color(0xFFFFFBF4);
+  static const coral = Color(0xFFFF776D);
 }
 
 ThemeData buildOtogurashiTheme() {
@@ -24,8 +25,14 @@ ThemeData buildOtogurashiTheme() {
     scaffoldBackgroundColor: colorScheme.surface,
     textTheme: const TextTheme(
       displaySmall: TextStyle(fontWeight: FontWeight.w700, height: 1.25),
+      headlineSmall: TextStyle(fontWeight: FontWeight.w700, height: 1.25),
+      titleMedium: TextStyle(fontWeight: FontWeight.w700, height: 1.35),
       bodyLarge: TextStyle(height: 1.6),
       bodySmall: TextStyle(height: 1.5),
+    ),
+    appBarTheme: const AppBarTheme(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
     ),
     filledButtonTheme: const FilledButtonThemeData(
       style: ButtonStyle(

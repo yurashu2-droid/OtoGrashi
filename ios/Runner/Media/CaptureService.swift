@@ -245,6 +245,7 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
   private var activeCaptureToken: CaptureAsyncToken?
   private var pickerGeneration = CaptureAsyncGeneration()
   private var activePickerToken: CaptureAsyncToken?
+  private var ownsAudioSession = false
 
   init(
     store: ManagedMediaStore,
@@ -293,12 +294,20 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
             }
             guard granted else { throw CaptureServiceError.permissionDenied }
             try self.configureSessionIfNeeded()
+            if !self.ownsAudioSession {
+              try self.audioSession.activateForRecording()
+              self.ownsAudioSession = true
+            }
             try self.lifecycle.finishPreparing()
             if !self.session.isRunning { self.session.startRunning() }
             completion(.success([
               "previewViewType": MediaPlugin.previewViewType
             ]))
           } catch {
+            if self.ownsAudioSession {
+              self.audioSession.deactivateRecording()
+              self.ownsAudioSession = false
+            }
             self.lifecycle.reset()
             completion(.failure(error))
           }
@@ -314,7 +323,6 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
   ) {
     queue.async { [weak self] in
       guard let self else { return }
-      var audioActivated = false
       do {
         guard maxDurationUs == 3_000_000 || maxDurationUs == 6_000_000 else {
           throw CaptureServiceError.invalidMedia
@@ -322,8 +330,7 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
         try self.lifecycle.beginRecording(operationId: operationId)
         let token = self.captureGeneration.begin(operationId: operationId)
         self.activeCaptureToken = token
-        try self.audioSession.activateForRecording()
-        audioActivated = true
+        guard self.ownsAudioSession else { throw CaptureServiceError.invalidState }
         let url = try self.store.newStagingURL(extension: "mov")
         self.outputURL = url
         self.finalized = nil
@@ -334,7 +341,6 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
         self.captureGeneration.invalidate()
         self.activeCaptureToken = nil
         self.lifecycle.reset()
-        if audioActivated { self.audioSession.deactivateRecording() }
         completion(.failure(error))
       }
     }
@@ -375,7 +381,10 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
       self.captureGeneration.invalidate()
       self.activeCaptureToken = nil
       if self.session.isRunning { self.session.stopRunning() }
-      self.audioSession.deactivateRecording()
+      if self.ownsAudioSession {
+        self.audioSession.deactivateRecording()
+        self.ownsAudioSession = false
+      }
       self.outputURL.map { try? FileManager.default.removeItem(at: $0) }
       self.startCompletion?(.failure(CaptureServiceError.cancelled))
       self.startCompletion = nil
@@ -516,7 +525,6 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
         try? FileManager.default.removeItem(at: outputFileURL)
         return
       }
-      self.audioSession.deactivateRecording()
       if self.lifecycle.phase == .interrupted {
         try? FileManager.default.removeItem(at: outputFileURL)
         let start = self.startCompletion
@@ -637,7 +645,11 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
       self.emitEvent(operationId: operationId, type: "interrupted", errorCode: code)
       if self.output.isRecording { self.output.stopRecording() }
       else { self.outputURL.map { try? FileManager.default.removeItem(at: $0) } }
-      self.audioSession.deactivateRecording()
+      if self.session.isRunning { self.session.stopRunning() }
+      if self.ownsAudioSession {
+        self.audioSession.deactivateRecording()
+        self.ownsAudioSession = false
+      }
     }
   }
 
@@ -665,6 +677,7 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
   }
 
   private func configureSessionIfNeeded() throws {
+    session.automaticallyConfiguresApplicationAudioSession = false
     guard session.inputs.isEmpty else { return }
     guard let camera = AVCaptureDevice.default(
       .builtInWideAngleCamera,
@@ -676,7 +689,6 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
     let microphoneInput = try AVCaptureDeviceInput(device: microphone)
     session.beginConfiguration()
     defer { session.commitConfiguration() }
-    session.automaticallyConfiguresApplicationAudioSession = false
     session.sessionPreset = .high
     guard session.canAddInput(cameraInput), session.canAddInput(microphoneInput),
       session.canAddOutput(output)

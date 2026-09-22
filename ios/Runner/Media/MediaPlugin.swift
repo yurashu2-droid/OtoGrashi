@@ -1,4 +1,5 @@
 import Flutter
+import AVFoundation
 import Foundation
 import UIKit
 
@@ -6,6 +7,7 @@ final class MediaPlugin: NSObject, FlutterPlugin {
   static let channelName = "dev.otogurashi/media"
   static let eventChannelName = "dev.otogurashi/media/events"
   static let previewViewType = "dev.otogurashi/capture-preview"
+  static let playbackViewType = "dev.otogurashi/playback-view"
 
   static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
@@ -24,17 +26,23 @@ final class MediaPlugin: NSObject, FlutterPlugin {
       CapturePreviewViewFactory(session: plugin.capture.captureSession),
       withId: previewViewType
     )
+    registrar.register(
+      PlaybackViewFactory(store: plugin.store, registry: plugin.playback),
+      withId: playbackViewType
+    )
   }
 
   private let jobs = JobRegistry()
   private let store: ManagedMediaStore
   private let eventStream: MediaEventStreamHandler
   fileprivate let capture: CaptureService
+  fileprivate let playback: PlaybackRegistry
 
   init(eventStream: MediaEventStreamHandler) {
     let store = ManagedMediaStore()
     self.store = store
     self.eventStream = eventStream
+    self.playback = PlaybackRegistry(audioSession: .shared)
     self.capture = CaptureService(store: store) { event in
       eventStream.emit(event)
     }
@@ -105,6 +113,52 @@ final class MediaPlugin: NSObject, FlutterPlugin {
       }
     case "disposeCapture":
       capture.dispose { self.succeed(result, value: nil) }
+    case "thumbnail":
+      Task.detached { [self] in
+        do {
+          guard let arguments = call.arguments as? [String: Any],
+            let relativePath = arguments["relativePath"] as? String
+          else { throw CaptureServiceError.invalidMedia }
+          let url = try store.resolvePlayable(relativePath: relativePath)
+          let asset = AVURLAsset(url: url)
+          let generator = AVAssetImageGenerator(asset: asset)
+          generator.appliesPreferredTrackTransform = true
+          generator.maximumSize = CGSize(width: 720, height: 720)
+          let image = try await generator.image(at: CMTime(value: 150, timescale: 1_000)).image
+          guard let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.78) else {
+            throw CaptureServiceError.invalidMedia
+          }
+          succeed(result, value: FlutterStandardTypedData(bytes: data))
+        } catch { fail(result, error: error) }
+      }
+    case "playbackPlay", "playbackPause", "playbackSeek", "playbackPosition",
+      "playbackState":
+      guard let arguments = call.arguments as? [String: Any],
+        let viewId = (arguments["viewId"] as? NSNumber)?.int64Value
+      else {
+        fail(result, error: CaptureServiceError.invalidMedia)
+        return
+      }
+      do {
+        switch call.method {
+        case "playbackPlay":
+          try playback.play(viewId: viewId)
+          succeed(result, value: nil)
+        case "playbackPause":
+          playback.pause(viewId: viewId)
+          succeed(result, value: nil)
+        case "playbackSeek":
+          guard let positionUs = (arguments["positionUs"] as? NSNumber)?.int64Value,
+            positionUs >= 0
+          else { throw CaptureServiceError.invalidMedia }
+          playback.seek(viewId: viewId, positionUs: positionUs)
+          succeed(result, value: nil)
+        case "playbackPosition":
+          succeed(result, value: playback.positionUs(viewId: viewId))
+        default:
+          succeed(result, value: try playback.state(viewId: viewId))
+        }
+      } catch { fail(result, error: error) }
     case "analyze":
       complete(result) {
         let request = try self.decode(MediaAnalysisRequest.self, call.arguments)
@@ -271,6 +325,158 @@ final class MediaEventStreamHandler: NSObject, FlutterStreamHandler {
   }
 }
 
+final class PlaybackRegistry {
+  private let audioSession: AudioSessionCoordinator
+  private var players: [Int64: AVPlayer] = [:]
+
+  init(audioSession: AudioSessionCoordinator) {
+    self.audioSession = audioSession
+    audioSession.registerPlaybackStopper { [weak self] in
+      self?.pauseAll()
+    }
+    let center = NotificationCenter.default
+    center.addObserver(
+      forName: AVAudioSession.interruptionNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in self?.pauseAll() }
+    center.addObserver(
+      forName: UIApplication.didEnterBackgroundNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in self?.pauseAll() }
+  }
+
+  func register(viewId: Int64, player: AVPlayer) { players[viewId] = player }
+
+  func unregister(viewId: Int64) {
+    players.removeValue(forKey: viewId)?.pause()
+  }
+
+  func play(viewId: Int64) throws {
+    guard let player = players[viewId] else { throw CaptureServiceError.invalidState }
+    if player.currentItem?.status == .failed {
+      throw player.currentItem?.error ?? CaptureServiceError.invalidMedia
+    }
+    pauseAll(except: viewId)
+    try audioSession.activateForPlayback()
+    let duration = player.currentItem?.duration ?? .invalid
+    if duration.isNumeric,
+      CMTimeCompare(player.currentTime(), duration - CMTime(seconds: 0.05, preferredTimescale: 600)) >= 0
+    {
+      player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+      player.play()
+    } else {
+      player.play()
+    }
+  }
+
+  func pause(viewId: Int64) { players[viewId]?.pause() }
+
+  func seek(viewId: Int64, positionUs: Int64) {
+    players[viewId]?.seek(
+      to: CMTime(value: positionUs, timescale: 1_000_000),
+      toleranceBefore: .zero,
+      toleranceAfter: .zero
+    )
+  }
+
+  func positionUs(viewId: Int64) -> Int64 {
+    guard let time = players[viewId]?.currentTime(), time.isNumeric else { return 0 }
+    return Int64((CMTimeGetSeconds(time) * 1_000_000).rounded())
+  }
+
+  func state(viewId: Int64) throws -> [String: Any] {
+    guard let player = players[viewId], let item = player.currentItem else {
+      throw CaptureServiceError.invalidState
+    }
+    if item.status == .failed { throw item.error ?? CaptureServiceError.invalidMedia }
+    let position = player.currentTime()
+    let duration = item.duration
+    let positionUs = position.isNumeric
+      ? Int64((CMTimeGetSeconds(position) * 1_000_000).rounded()) : 0
+    let durationUs = duration.isNumeric
+      ? Int64((CMTimeGetSeconds(duration) * 1_000_000).rounded()) : 0
+    let ended = durationUs > 0 && positionUs >= max(0, durationUs - 50_000)
+      && player.rate == 0
+    return [
+      "positionUs": positionUs,
+      "durationUs": durationUs,
+      "isPlaying": player.rate != 0,
+      "ended": ended,
+    ]
+  }
+
+  private func pauseAll(except keptViewId: Int64? = nil) {
+    for (viewId, player) in players where viewId != keptViewId { player.pause() }
+  }
+}
+
+final class PlaybackViewFactory: NSObject, FlutterPlatformViewFactory {
+  private let store: ManagedMediaStore
+  private let registry: PlaybackRegistry
+
+  init(store: ManagedMediaStore, registry: PlaybackRegistry) {
+    self.store = store
+    self.registry = registry
+  }
+
+  func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {
+    FlutterStandardMessageCodec.sharedInstance()
+  }
+
+  func create(
+    withFrame frame: CGRect,
+    viewIdentifier viewId: Int64,
+    arguments args: Any?
+  ) -> FlutterPlatformView {
+    let relativePath = (args as? [String: Any])?["relativePath"] as? String ?? ""
+    let url = try? store.resolvePlayable(relativePath: relativePath)
+    return PlaybackPlatformView(frame: frame, viewId: viewId, url: url, registry: registry)
+  }
+}
+
+final class PlaybackPlatformView: NSObject, FlutterPlatformView {
+  private let playerView: PlaybackUIView
+  private let viewId: Int64
+  private weak var registry: PlaybackRegistry?
+
+  init(frame: CGRect, viewId: Int64, url: URL?, registry: PlaybackRegistry) {
+    self.viewId = viewId
+    self.registry = registry
+    self.playerView = PlaybackUIView(frame: frame, url: url)
+    super.init()
+    registry.register(viewId: viewId, player: playerView.player)
+  }
+
+  deinit { registry?.unregister(viewId: viewId) }
+
+  func view() -> UIView { playerView }
+}
+
+final class PlaybackUIView: UIView {
+  override class var layerClass: AnyClass { AVPlayerLayer.self }
+  let player: AVPlayer
+
+  init(frame: CGRect, url: URL?) {
+    if let url {
+      player = AVPlayer(url: url)
+    } else {
+      player = AVPlayer()
+    }
+    super.init(frame: frame)
+    backgroundColor = .black
+    let layer = layer as! AVPlayerLayer
+    layer.player = player
+    layer.videoGravity = .resizeAspectFill
+    isAccessibilityElement = true
+    accessibilityLabel = "動画プレビュー"
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { nil }
+}
+
 struct ManagedMediaStore {
   private let fileManager = FileManager.default
   private let rootOverride: URL?
@@ -311,6 +517,21 @@ struct ManagedMediaStore {
     let resolved = candidate.resolvingSymlinksInPath()
     let values = try candidate.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
     guard resolved.path.hasPrefix(originals.path + "/"),
+      values.isRegularFile == true,
+      values.isSymbolicLink != true
+    else { throw VideoRenderError.missingAsset }
+    return resolved
+  }
+
+  func resolvePlayable(relativePath: String) throws -> URL {
+    guard (relativePath.hasPrefix("originals/") || relativePath.hasPrefix("renders/")),
+      safeRelativePath(relativePath)
+    else { throw VideoRenderError.unsupportedContract }
+    let root = try prepareRoot().resolvingSymlinksInPath()
+    let candidate = root.appendingPathComponent(relativePath).standardizedFileURL
+    let resolved = candidate.resolvingSymlinksInPath()
+    let values = try candidate.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    guard resolved.path.hasPrefix(root.path + "/"),
       values.isRegularFile == true,
       values.isSymbolicLink != true
     else { throw VideoRenderError.missingAsset }

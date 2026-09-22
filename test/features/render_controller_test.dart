@@ -8,6 +8,41 @@ import 'package:otogurashi/features/arrange/render_controller.dart';
 import 'package:otogurashi/media/media_gateway.dart';
 
 void main() {
+  test('render state changes are observable', () async {
+    final gateway = _FakeMediaGateway();
+    final controller = RenderController(
+      gateway: gateway,
+      operationIds: _ids(<String>['render']),
+    )..open(_projectAtRevision(3));
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+
+    final operationId = controller.generate(RenderQuality.preview);
+    gateway.complete(operationId, revision: 3);
+    await pumpEventQueue();
+
+    expect(controller.state.phase, RenderPhase.ready);
+    expect(notifications, greaterThanOrEqualTo(2));
+  });
+
+  test(
+    'completion after disposal is ignored and native work is cancelled',
+    () async {
+      final gateway = _FakeMediaGateway();
+      final controller = RenderController(
+        gateway: gateway,
+        operationIds: _ids(<String>['render']),
+      )..open(_projectAtRevision(3));
+      final operationId = controller.generate(RenderQuality.preview);
+
+      controller.dispose();
+      gateway.complete(operationId, revision: 3);
+      await pumpEventQueue();
+
+      expect(gateway.cancelledOperationIds, contains(operationId));
+    },
+  );
+
   test('late render cannot replace current revision', () async {
     final gateway = _FakeMediaGateway();
     final controller = RenderController(

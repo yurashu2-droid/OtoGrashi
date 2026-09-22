@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../../domain/arrangement.dart';
 import '../../domain/project.dart';
 import '../../domain/video_recipe.dart';
@@ -23,7 +25,7 @@ final class RenderState {
   final Object? error;
 }
 
-final class RenderController {
+final class RenderController extends ChangeNotifier {
   RenderController({required this.gateway, this.operationIds});
 
   final MediaGateway gateway;
@@ -33,6 +35,7 @@ final class RenderController {
   String? _undrainedOperationId;
   Future<void>? _drainAttempt;
   var _fallbackId = 0;
+  var _disposed = false;
 
   RenderState get state =>
       _stateValue ?? (throw StateError('Open a project before rendering.'));
@@ -46,7 +49,7 @@ final class RenderController {
     if (drain != null) {
       unawaited(drain.catchError((Object _, StackTrace _) {}));
     }
-    _stateValue = RenderState(project: project, phase: RenderPhase.idle);
+    _setState(RenderState(project: project, phase: RenderPhase.idle));
   }
 
   String generate(RenderQuality quality) {
@@ -65,10 +68,12 @@ final class RenderController {
       video: VideoRecipe.fromJson(project.videoRecipe),
       quality: quality,
     );
-    _stateValue = RenderState(
-      project: project,
-      phase: RenderPhase.rendering,
-      operationId: operationId,
+    _setState(
+      RenderState(
+        project: project,
+        phase: RenderPhase.rendering,
+        operationId: operationId,
+      ),
     );
     unawaited(_complete(request, requiredDrain: drain));
     return operationId;
@@ -78,10 +83,12 @@ final class RenderController {
     final current = state;
     final operationId = current.operationId;
     if (operationId == null || current.phase != RenderPhase.rendering) return;
-    _stateValue = RenderState(
-      project: current.project,
-      phase: RenderPhase.cancelled,
-      operationId: operationId,
+    _setState(
+      RenderState(
+        project: current.project,
+        phase: RenderPhase.cancelled,
+        operationId: operationId,
+      ),
     );
     await _requiredDrain(operationId);
   }
@@ -102,19 +109,23 @@ final class RenderController {
           media.revision != request.revision) {
         return;
       }
-      _stateValue = RenderState(
-        project: state.project,
-        phase: RenderPhase.ready,
-        operationId: request.operationId,
-        readyMedia: media,
+      _setState(
+        RenderState(
+          project: state.project,
+          phase: RenderPhase.ready,
+          operationId: request.operationId,
+          readyMedia: media,
+        ),
       );
     } catch (error) {
       if (!_isCurrent(request)) return;
-      _stateValue = RenderState(
-        project: state.project,
-        phase: RenderPhase.failed,
-        operationId: request.operationId,
-        error: error,
+      _setState(
+        RenderState(
+          project: state.project,
+          phase: RenderPhase.failed,
+          operationId: request.operationId,
+          error: error,
+        ),
       );
     }
   }
@@ -124,6 +135,28 @@ final class RenderController {
       state.operationId == request.operationId &&
       state.project.id == request.projectId &&
       state.project.revision == request.revision;
+
+  void _setState(RenderState value) {
+    if (_disposed) return;
+    _stateValue = value;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    final operationId = _stateValue?.phase == RenderPhase.rendering
+        ? _stateValue?.operationId
+        : null;
+    if (operationId != null) {
+      unawaited(
+        _enqueueCancellation(operationId)
+            .catchError((Object _, StackTrace _) {}),
+      );
+    }
+    super.dispose();
+  }
 
   Future<void>? _requiredDrain(String? candidateOperationId) {
     final operationId = _undrainedOperationId ?? candidateOperationId;

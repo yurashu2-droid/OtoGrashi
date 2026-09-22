@@ -2,15 +2,22 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../design/tokens.dart';
+import '../../design/capture_chrome.dart';
 import '../../media/media_messages.dart';
 import 'capture_controller.dart';
 import 'capture_state.dart';
 
 final class CaptureScreen extends StatefulWidget {
-  const CaptureScreen({required this.controller, this.onMediaReady, super.key});
+  const CaptureScreen({
+    required this.controller,
+    this.onMediaReady,
+    this.testFixture = false,
+    super.key,
+  });
 
   final CaptureController controller;
   final VoidCallback? onMediaReady;
+  final bool testFixture;
 
   @override
   State<CaptureScreen> createState() => _CaptureScreenState();
@@ -31,14 +38,21 @@ final class _CaptureScreenState extends State<CaptureScreen> {
             child: ListView(
               padding: const EdgeInsets.all(AppTokens.pagePadding),
               children: [
-                AspectRatio(
-                  aspectRatio: 9 / 16,
+                SizedBox(
+                  height: MediaQuery.textScalerOf(context).scale(16) > 21
+                      ? 330
+                      : 405,
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(24),
-                    child: _CapturePreview(handle: state.handle),
+                    child: CaptureChrome(
+                      child: _CapturePreview(
+                        handle: state.handle,
+                        testFixture: widget.testFixture,
+                      ),
+                    ),
                   ),
                 ),
-                const SizedBox(height: AppTokens.sectionGap),
+                const SizedBox(height: AppTokens.smallGap),
                 Text(
                   _statusText(state),
                   key: const ValueKey('capture-status'),
@@ -60,37 +74,46 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                     child: const Text('カメラとマイクを準備'),
                   ),
                 if (state.phase == CapturePhase.ready) ...[
-                  SegmentedButton<int>(
-                    segments: const [
-                      ButtonSegment(value: 3000000, label: Text('3秒')),
-                      ButtonSegment(value: 6000000, label: Text('6秒')),
+                  Row(
+                    children: [
+                      for (final duration in const [3000000, 6000000])
+                        Expanded(
+                          child: Padding(
+                            padding: EdgeInsets.only(
+                              right: duration == 3000000 ? 5 : 0,
+                              left: duration == 6000000 ? 5 : 0,
+                            ),
+                            child: _DurationChoice(
+                              label: duration == 3000000 ? '3秒' : '6秒',
+                              selected: _durationUs == duration,
+                              onPressed: () =>
+                                  setState(() => _durationUs = duration),
+                            ),
+                          ),
+                        ),
                     ],
-                    selected: {_durationUs},
-                    onSelectionChanged: (selection) {
-                      setState(() => _durationUs = selection.single);
-                    },
                   ),
                   const SizedBox(height: AppTokens.controlGap),
-                  FilledButton.icon(
+                  FilledButton(
                     onPressed: () =>
                         widget.controller.record(maxDurationUs: _durationUs),
-                    icon: const Icon(Icons.fiber_manual_record),
-                    label: Text(_durationUs == 3000000 ? '3秒撮る' : '6秒撮る'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppTokens.coral,
+                      foregroundColor: const Color(0xFF2C2730),
+                    ),
+                    child: Text(_durationUs == 3000000 ? '●  3秒撮る' : '●  6秒撮る'),
                   ),
                 ],
-                if (state.phase == CapturePhase.recording ||
-                    state.phase == CapturePhase.starting)
-                  FilledButton.icon(
+                if (state.phase == CapturePhase.recording)
+                  FilledButton(
                     onPressed: widget.controller.stop,
-                    icon: const Icon(Icons.stop_rounded),
-                    label: const Text('録画を止める'),
+                    child: const Text('■  録画を止める'),
                   ),
                 if (!state.isBusy && state.phase != CapturePhase.recording) ...[
                   const SizedBox(height: AppTokens.controlGap),
-                  OutlinedButton.icon(
+                  OutlinedButton(
                     onPressed: widget.controller.importVideo,
-                    icon: const Icon(Icons.video_library_outlined),
-                    label: const Text('写真から動画を選ぶ'),
+                    child: const Text('写真から動画を選ぶ'),
                   ),
                 ],
                 if (state.phase == CapturePhase.completed) ...[
@@ -123,10 +146,37 @@ final class _CaptureScreenState extends State<CaptureScreen> {
   };
 }
 
+class _DurationChoice extends StatelessWidget {
+  const _DurationChoice({
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+  });
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    selected: selected,
+    child: OutlinedButton(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        backgroundColor: selected
+            ? Theme.of(context).colorScheme.primaryContainer
+            : Colors.transparent,
+      ),
+      child: Text(label),
+    ),
+  );
+}
+
 final class _CapturePreview extends StatelessWidget {
-  const _CapturePreview({required this.handle});
+  const _CapturePreview({required this.handle, required this.testFixture});
 
   final CaptureHandle? handle;
+  final bool testFixture;
 
   @override
   Widget build(BuildContext context) {
@@ -136,10 +186,12 @@ final class _CapturePreview extends StatelessWidget {
     return ColoredBox(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: Center(
-        child: Icon(
-          Icons.videocam_outlined,
-          size: 48,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        child: Text(
+          testFixture ? 'TEST カメラプレビュー' : 'カメラ映像',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );

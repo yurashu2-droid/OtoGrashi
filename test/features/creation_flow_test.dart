@@ -1,0 +1,370 @@
+import 'dart:io';
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:otogurashi/design/tokens.dart';
+import 'package:otogurashi/domain/arrangement.dart';
+import 'package:otogurashi/domain/clip_asset.dart';
+import 'package:otogurashi/domain/project.dart';
+import 'package:otogurashi/features/create/creation_controller.dart';
+import 'package:otogurashi/features/create/creation_flow.dart';
+import 'package:otogurashi/features/capture/capture_controller.dart';
+import 'package:otogurashi/features/capture/capture_screen.dart';
+import 'package:otogurashi/media/media_gateway.dart';
+import 'package:otogurashi/media/media_presentation_gateway.dart';
+import 'package:otogurashi/storage/asset_repository.dart';
+import 'package:otogurashi/storage/project_repository.dart';
+
+void main() {
+  testWidgets('synthetic sample runs through style selection and completion', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+      renderOperationIds: <String>['preview-1', 'preview-2'].iterator,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.startDemo();
+    await controller.createPreview();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('合成素材 1'), findsWidgets);
+    expect(find.text('ぽつぽつ'), findsOneWidget);
+    await tester.tap(find.text('ゆらゆら'));
+    await tester.pumpAndSettle();
+    expect(controller.state.style, ArrangementStyle.swaying);
+
+    await tester.scrollUntilVisible(
+      find.text('これで完成'),
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('これで完成'));
+    await tester.pumpAndSettle();
+    expect(find.text('つくれたよ'), findsOneWidget);
+    expect(find.textContaining('保存'), findsWidgets);
+    expect(find.textContaining('シェア'), findsWidgets);
+  });
+
+  testWidgets('large text remains scrollable and controls meet 44 points', (
+    tester,
+  ) async {
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    await controller.createPreview();
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(
+          size: Size(390, 844),
+          textScaler: TextScaler.linear(1.8),
+          disableAnimations: true,
+        ),
+        child: MaterialApp(
+          theme: buildOtogurashiTheme(),
+          home: CreationFlow(controller: controller, media: media),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Scrollable), findsWidgets);
+    await tester.scrollUntilVisible(
+      find.text('もうひとつ'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    final button = find.ancestor(
+      of: find.text('もうひとつ'),
+      matching: find.byType(OutlinedButton),
+    );
+    expect(tester.getSize(button).height, greaterThanOrEqualTo(44));
+  });
+
+  testWidgets('capture Task 7 visual QA screens', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final fontData = await tester.runAsync(
+      () => File('C:/Windows/Fonts/NotoSansJP-VF.ttf').readAsBytes(),
+    );
+    final loader = FontLoader('Task7Japanese')
+      ..addFont(Future.value(ByteData.sublistView(fontData!)));
+    await tester.runAsync(loader.load);
+    final baseTheme = buildOtogurashiTheme();
+    final theme = baseTheme.copyWith(
+      textTheme: baseTheme.textTheme.apply(fontFamily: 'Task7Japanese'),
+      primaryTextTheme: baseTheme.primaryTextTheme.apply(
+        fontFamily: 'Task7Japanese',
+      ),
+    );
+    final boundaryKey = GlobalKey();
+    final output = Directory(
+      '.superpowers/sdd/2026-09-22-otogurashi-ios-implementation/task-7-artifacts',
+    );
+    await tester.runAsync(() => output.create(recursive: true));
+
+    final captureMedia = _FakeMedia();
+    final capture = CaptureController(
+      captureMedia,
+      operationIdFactory: () => 'visual-capture',
+    );
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: boundaryKey,
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: theme,
+          home: CaptureScreen(controller: capture, testFixture: true),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/capture.png'),
+    );
+    await capture.prepare();
+    await tester.pump(const Duration(milliseconds: 100));
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/capture-ready.png'),
+    );
+    await tester.runAsync(capture.releaseCapture);
+    capture.dispose();
+
+    final listMedia = _FakeMedia();
+    final listController = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: listMedia,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(count: 2),
+    );
+    await listController.startDemo();
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: boundaryKey,
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: theme,
+          home: CreationFlow(controller: listController, media: listMedia),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/clip-list.png'),
+    );
+    listController.dispose();
+
+    final completeMedia = _FakeMedia();
+    final completeController = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: completeMedia,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    await completeController.startDemo();
+    await tester.pump();
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: boundaryKey,
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: theme,
+          home: CreationFlow(
+            controller: completeController,
+            media: completeMedia,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/clip-list-ready.png'),
+    );
+    await completeController.createPreview();
+    await tester.pumpAndSettle();
+    completeController.complete();
+    await tester.pumpAndSettle();
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/completed.png'),
+    );
+    completeController.dispose();
+  }, skip: !const bool.fromEnvironment('TASK7_VISUALS'));
+}
+
+Future<void> _captureScreen(
+  WidgetTester tester,
+  GlobalKey key,
+  File output,
+) async {
+  await tester.runAsync(() async {
+    final boundary =
+        key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final image = await boundary.toImage(pixelRatio: 1);
+    final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    await output.writeAsBytes(data!.buffer.asUint8List(), flush: true);
+  });
+}
+
+final class _FakeDemo implements DemoAssetSource {
+  _FakeDemo({this.count = 3});
+  final int count;
+
+  @override
+  Future<List<ClipAsset>> install(AssetRepository repository) async =>
+      List<ClipAsset>.generate(
+        count,
+        (index) => ClipAsset(
+          id: 'clip-$index',
+          relativePath: 'originals/clip-$index.mp4',
+          durationUs: 3000000,
+          selectionStartUs: 0,
+          selectionDurationUs: 3000000,
+          width: 1080,
+          height: 1920,
+          rotation: 0,
+          sha256: '${index}hash',
+          label: '合成素材 ${index + 1}',
+        ),
+      );
+}
+
+final class _MemoryProjects implements ProjectRepository {
+  Project? project;
+
+  @override
+  Future<Project> create(String title) async => project = Project.empty(
+    id: 'project',
+    title: title,
+    now: DateTime.utc(2026, 9, 22),
+  );
+
+  @override
+  Future<void> save(Project project, {required int expectedRevision}) async {
+    expect(this.project?.revision, expectedRevision);
+    this.project = project;
+  }
+
+  @override
+  Future<Project?> load(String id) async => project;
+  @override
+  Future<List<Project>> list() async => [?project];
+  @override
+  Future<void> deleteProject(String id) async => project = null;
+}
+
+final class _UnusedAssets implements AssetRepository {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+final class _FakeMedia implements MediaGateway {
+  @override
+  Stream<MediaEvent> get events => const Stream.empty();
+
+  @override
+  Future<AnalyzedClip> analyze(MediaAnalysisRequest request) async =>
+      AnalyzedClip(
+        assetId: request.assetId,
+        durationSamples: 48000,
+        sampleRate: 48000,
+        onsetSamples: const [0],
+        peak: 0.8,
+        rms: 0.2,
+        suggestedRole: SuggestedRole.transient,
+      );
+
+  @override
+  Future<RenderedMedia> render(RenderRequest request) async => RenderedMedia(
+    operationId: request.operationId,
+    projectId: request.projectId,
+    revision: request.revision,
+    relativePath: 'renders/project/${request.revision}/preview.mp4',
+    durationUs: 15000000,
+    width: 360,
+    height: 640,
+  );
+
+  @override
+  Future<void> cancel(String operationId) async {}
+  @override
+  Future<void> disposeCapture() async {}
+  @override
+  Future<CaptureHandle> prepareCapture() async =>
+      const CaptureHandle(previewViewType: 'test-capture-preview');
+  @override
+  Future<void> startCapture(String operationId, {required int maxDurationUs}) =>
+      throw UnimplementedError();
+  @override
+  Future<CapturedMedia> stopCapture(String operationId) =>
+      throw UnimplementedError();
+  @override
+  Future<CapturedMedia?> pickVideo(String operationId) =>
+      throw UnimplementedError();
+  @override
+  Future<InspectedMedia> inspectStaged(String path) =>
+      throw UnimplementedError();
+}
+
+final class _FakePresentation implements MediaPresentationGateway {
+  @override
+  String get playbackViewType => 'fake-playback';
+  @override
+  Future<Uint8List> thumbnail(String relativePath) =>
+      throw StateError('fake fixture has no image bytes');
+  @override
+  Future<void> play(int viewId) async {}
+  @override
+  Future<void> pause(int viewId) async {}
+  @override
+  Future<void> seek(int viewId, Duration position) async {}
+  @override
+  Future<Duration> position(int viewId) async => Duration.zero;
+  @override
+  Future<PlaybackSnapshot> playbackState(int viewId) async =>
+      const PlaybackSnapshot(
+        position: Duration.zero,
+        duration: Duration(seconds: 15),
+        isPlaying: false,
+        ended: false,
+      );
+}

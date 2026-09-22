@@ -60,9 +60,9 @@ final class AudioSessionCoordinator {
 
   func deactivateRecording() {
     lock.lock()
+    defer { lock.unlock() }
     let owned = recordingOwnsSession
     recordingOwnsSession = false
-    lock.unlock()
     guard owned else { return }
     try? session.setActive(false, options: [.notifyOthersOnDeactivation])
   }
