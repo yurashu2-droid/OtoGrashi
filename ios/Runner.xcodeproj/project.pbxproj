@@ -14,6 +14,10 @@
 		A50000110000000000000011 /* AudioRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50000120000000000000012 /* AudioRenderer.swift */; };
 		A50000130000000000000013 /* JobRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50000140000000000000014 /* JobRegistry.swift */; };
 		A50000150000000000000015 /* NativePCMReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50000160000000000000016 /* NativePCMReader.swift */; };
+		A60000010000000000000001 /* VideoRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000020000000000000002 /* VideoRendererTests.swift */; };
+		A60000030000000000000003 /* VideoRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000040000000000000004 /* VideoRenderer.swift */; };
+		A60000050000000000000005 /* MediaValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000060000000000000006 /* MediaValidator.swift */; };
+		A60000070000000000000007 /* MediaPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000080000000000000008 /* MediaPlugin.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
@@ -55,6 +59,10 @@
 		A50000120000000000000012 /* AudioRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRenderer.swift; sourceTree = "<group>"; };
 		A50000140000000000000014 /* JobRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobRegistry.swift; sourceTree = "<group>"; };
 		A50000160000000000000016 /* NativePCMReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePCMReader.swift; sourceTree = "<group>"; };
+		A60000020000000000000002 /* VideoRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRendererTests.swift; sourceTree = "<group>"; };
+		A60000040000000000000004 /* VideoRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRenderer.swift; sourceTree = "<group>"; };
+		A60000060000000000000006 /* MediaValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaValidator.swift; sourceTree = "<group>"; };
+		A60000080000000000000008 /* MediaPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPlugin.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -88,6 +96,7 @@
 			children = (
 				331C807B294A618700263BE5 /* AudioAnalyzerTests.swift */,
 				A50000020000000000000002 /* AudioRendererTests.swift */,
+				A60000020000000000000002 /* VideoRendererTests.swift */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
@@ -99,6 +108,9 @@
 				A50000120000000000000012 /* AudioRenderer.swift */,
 				A50000140000000000000014 /* JobRegistry.swift */,
 				A50000160000000000000016 /* NativePCMReader.swift */,
+				A60000040000000000000004 /* VideoRenderer.swift */,
+				A60000060000000000000006 /* MediaValidator.swift */,
+				A60000080000000000000008 /* MediaPlugin.swift */,
 			);
 			path = Media;
 			sourceTree = "<group>";
@@ -298,6 +310,7 @@
 			files = (
 				331C808B294A63AB00263BE5 /* AudioAnalyzerTests.swift in Sources */,
 				A50000010000000000000001 /* AudioRendererTests.swift in Sources */,
+				A60000010000000000000001 /* VideoRendererTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -309,6 +322,9 @@
 				A50000110000000000000011 /* AudioRenderer.swift in Sources */,
 				A50000130000000000000013 /* JobRegistry.swift in Sources */,
 				A50000150000000000000015 /* NativePCMReader.swift in Sources */,
+				A60000030000000000000003 /* VideoRenderer.swift in Sources */,
+				A60000050000000000000005 /* MediaValidator.swift in Sources */,
+				A60000070000000000000007 /* MediaPlugin.swift in Sources */,
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,

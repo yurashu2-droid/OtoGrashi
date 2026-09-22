@@ -1,5 +1,7 @@
 enum SuggestedRole { transient, sustain, texture }
 
+enum RenderQuality { preview, full }
+
 final class MediaContractException implements Exception {
   const MediaContractException(this.message);
 

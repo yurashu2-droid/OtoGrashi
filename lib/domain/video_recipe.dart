@@ -1,0 +1,330 @@
+import 'arrangement.dart';
+
+enum VideoLayout { stacked, sequentialFocus, photoDump }
+
+final class VideoEffects {
+  const VideoEffects._(this.enabled);
+
+  static const none = VideoEffects._(<String>[]);
+
+  final List<String> enabled;
+
+  factory VideoEffects.fromJson(Map<String, Object?> json) {
+    final values = json['enabled'];
+    if (values is! List<Object?> || values.isNotEmpty) {
+      throw const MediaContractException(
+        'Video effects are unsupported by recipe version 1.',
+      );
+    }
+    return none;
+  }
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'enabled': const <Object?>[],
+  };
+}
+
+final class ClipCrop {
+  const ClipCrop({required this.assetId, required this.crop});
+
+  final String assetId;
+  final NormalizedCrop crop;
+
+  factory ClipCrop.fromJson(Map<String, Object?> json) => ClipCrop(
+    assetId: json['assetId'] as String,
+    crop: NormalizedCrop.fromJson(
+      (json['crop'] as Map<Object?, Object?>).cast(),
+    ),
+  );
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'assetId': assetId,
+    'crop': crop.toJson(),
+  };
+}
+
+final class VideoCaption {
+  const VideoCaption({
+    required this.text,
+    required this.x,
+    required this.y,
+    required this.destinationStartSample,
+    required this.durationSamples,
+  });
+
+  final String text;
+  final double x;
+  final double y;
+  final int destinationStartSample;
+  final int durationSamples;
+
+  int get destinationEndSample => destinationStartSample + durationSamples;
+
+  factory VideoCaption.fromJson(Map<String, Object?> json) => VideoCaption(
+    text: json['text'] as String,
+    x: (json['x'] as num).toDouble(),
+    y: (json['y'] as num).toDouble(),
+    destinationStartSample: json['destinationStartSample'] as int,
+    durationSamples: json['durationSamples'] as int,
+  );
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'text': text,
+    'x': x,
+    'y': y,
+    'destinationStartSample': destinationStartSample,
+    'durationSamples': durationSamples,
+  };
+}
+
+final class VideoSceneEvent {
+  VideoSceneEvent({
+    required this.destinationStartSample,
+    required this.durationSamples,
+    required List<String> assetIds,
+    this.primaryAssetId,
+  }) : assetIds = List<String>.unmodifiable(assetIds);
+
+  final int destinationStartSample;
+  final int durationSamples;
+  final List<String> assetIds;
+  final String? primaryAssetId;
+
+  int get destinationEndSample => destinationStartSample + durationSamples;
+
+  factory VideoSceneEvent.fromJson(Map<String, Object?> json) =>
+      VideoSceneEvent(
+        destinationStartSample: json['destinationStartSample'] as int,
+        durationSamples: json['durationSamples'] as int,
+        assetIds: (json['assetIds'] as List<Object?>).cast<String>(),
+        primaryAssetId: json['primaryAssetId'] as String?,
+      );
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'destinationStartSample': destinationStartSample,
+    'durationSamples': durationSamples,
+    'assetIds': assetIds,
+    'primaryAssetId': primaryAssetId,
+  };
+}
+
+final class VideoRecipe {
+  VideoRecipe({
+    required this.layout,
+    required List<ClipCrop> clipCrops,
+    required List<VideoCaption> captions,
+    required List<VideoSceneEvent> events,
+    this.effects = VideoEffects.none,
+  }) : clipCrops = List<ClipCrop>.unmodifiable(clipCrops),
+       captions = List<VideoCaption>.unmodifiable(captions),
+       events = List<VideoSceneEvent>.unmodifiable(events) {
+    if (clipCrops.length > 6 || captions.length > 12 || events.length > 64) {
+      throw const MediaContractException('Video recipe exceeds schema limits.');
+    }
+    final cropIds = clipCrops.map((value) => value.assetId).toList();
+    if (cropIds.isEmpty || cropIds.toSet().length != cropIds.length) {
+      throw const MediaContractException('Video recipe crops are invalid.');
+    }
+    if (clipCrops.any((value) => !_validCrop(value.crop)) ||
+        captions.any(
+          (value) =>
+              value.text.length > 80 ||
+              !value.x.isFinite ||
+              !value.y.isFinite ||
+              value.x < 0 ||
+              value.x > 1 ||
+              value.y < 0 ||
+              value.y > 1 ||
+              value.destinationStartSample < 0 ||
+              value.durationSamples <= 0 ||
+              value.destinationEndSample > ArrangementPayloadClock.totalSamples,
+        ) ||
+        events.isEmpty ||
+        events.first.destinationStartSample != 0 ||
+        events.last.destinationEndSample !=
+            ArrangementPayloadClock.totalSamples ||
+        events.any(
+          (value) =>
+              value.destinationStartSample % Arrangement.barSamples != 0 ||
+              value.durationSamples <= 0 ||
+              value.destinationEndSample >
+                  ArrangementPayloadClock.totalSamples ||
+              value.assetIds.isEmpty ||
+              value.assetIds.length > 3 ||
+              value.assetIds.any((id) => !cropIds.contains(id)) ||
+              (value.primaryAssetId != null &&
+                  !value.assetIds.contains(value.primaryAssetId)),
+        )) {
+      throw const MediaContractException('Video recipe is out of range.');
+    }
+    for (var index = 1; index < events.length; index++) {
+      if (events[index - 1].destinationEndSample !=
+          events[index].destinationStartSample) {
+        throw const MediaContractException('Video scenes must be contiguous.');
+      }
+    }
+  }
+
+  factory VideoRecipe.fromArrangement({
+    required Arrangement arrangement,
+    required VideoLayout layout,
+  }) {
+    final ids = arrangement.sourceAssetIds;
+    if (ids.length < 3 || ids.length > 6) {
+      throw const MediaContractException(
+        'Video recipes require 3 to 6 sources.',
+      );
+    }
+    return VideoRecipe(
+      layout: layout,
+      clipCrops: ids
+          .map((id) => ClipCrop(assetId: id, crop: NormalizedCrop.fullFrame))
+          .toList(),
+      captions: const <VideoCaption>[],
+      events: _buildScenes(ids, layout),
+    );
+  }
+
+  factory VideoRecipe.fromJson(Map<String, Object?> json) {
+    if (json['schemaVersion'] != schemaVersion) {
+      throw MediaContractException(
+        'Unsupported video recipe schema: ${json['schemaVersion']}.',
+      );
+    }
+    try {
+      final cropValues = json['clipCrops'] as List<Object?>;
+      final captionValues = json['captions'] as List<Object?>;
+      final eventValues = json['events'] as List<Object?>;
+      if (cropValues.length > 6 ||
+          captionValues.length > 12 ||
+          eventValues.length > 64) {
+        throw const MediaContractException(
+          'Video recipe exceeds schema limits.',
+        );
+      }
+      final effectsJson = json['effects'];
+      return VideoRecipe(
+        layout: VideoLayout.values.byName(json['layout'] as String),
+        clipCrops: cropValues
+            .map(
+              (value) =>
+                  ClipCrop.fromJson((value as Map<Object?, Object?>).cast()),
+            )
+            .toList(),
+        captions: captionValues
+            .map(
+              (value) => VideoCaption.fromJson(
+                (value as Map<Object?, Object?>).cast(),
+              ),
+            )
+            .toList(),
+        events: eventValues
+            .map(
+              (value) => VideoSceneEvent.fromJson(
+                (value as Map<Object?, Object?>).cast(),
+              ),
+            )
+            .toList(),
+        effects: effectsJson == null
+            ? VideoEffects.none
+            : VideoEffects.fromJson(
+                (effectsJson as Map<Object?, Object?>).cast(),
+              ),
+      );
+    } on TypeError {
+      throw const MediaContractException('Malformed video recipe JSON.');
+    } on ArgumentError {
+      throw const MediaContractException('Unsupported video layout.');
+    }
+  }
+
+  static const int schemaVersion = 1;
+  static const int framesPerSecond = 30;
+  final VideoLayout layout;
+  final List<ClipCrop> clipCrops;
+  final List<VideoCaption> captions;
+  final List<VideoSceneEvent> events;
+  final VideoEffects effects;
+
+  static int nearestFrameForSample(int sample) {
+    if (sample < 0 || sample > ArrangementPayloadClock.totalSamples) {
+      throw const MediaContractException('Video sample is out of range.');
+    }
+    return (sample * framesPerSecond + 24000) ~/ 48000;
+  }
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'schemaVersion': schemaVersion,
+    'layout': layout.name,
+    'clipCrops': clipCrops.map((value) => value.toJson()).toList(),
+    'captions': captions.map((value) => value.toJson()).toList(),
+    'events': events.map((value) => value.toJson()).toList(),
+    'effects': effects.toJson(),
+  };
+}
+
+abstract final class ArrangementPayloadClock {
+  static const int totalSamples = 720000;
+}
+
+List<VideoSceneEvent> _buildScenes(List<String> ids, VideoLayout layout) {
+  switch (layout) {
+    case VideoLayout.stacked:
+      if (ids.length == 3) {
+        return <VideoSceneEvent>[
+          VideoSceneEvent(
+            destinationStartSample: 0,
+            durationSamples: ArrangementPayloadClock.totalSamples,
+            assetIds: ids,
+          ),
+        ];
+      }
+      return <VideoSceneEvent>[
+        VideoSceneEvent(
+          destinationStartSample: 0,
+          durationSamples: 360000,
+          assetIds: ids.take(3).toList(),
+        ),
+        VideoSceneEvent(
+          destinationStartSample: 360000,
+          durationSamples: 360000,
+          assetIds: ids.skip(3).toList(),
+        ),
+      ];
+    case VideoLayout.sequentialFocus:
+      return List<VideoSceneEvent>.generate(8, (index) {
+        final id = ids[index * ids.length ~/ 8];
+        return VideoSceneEvent(
+          destinationStartSample: index * Arrangement.barSamples,
+          durationSamples: Arrangement.barSamples,
+          assetIds: <String>[id],
+          primaryAssetId: id,
+        );
+      });
+    case VideoLayout.photoDump:
+      return List<VideoSceneEvent>.generate(4, (index) {
+        final visible = <String>[
+          for (var offset = 0; offset < 3; offset++)
+            ids[(index * 2 + offset) % ids.length],
+        ];
+        return VideoSceneEvent(
+          destinationStartSample: index * Arrangement.barSamples * 2,
+          durationSamples: Arrangement.barSamples * 2,
+          assetIds: visible.toSet().toList(),
+          primaryAssetId: visible.first,
+        );
+      });
+  }
+}
+
+bool _validCrop(NormalizedCrop crop) =>
+    crop.x.isFinite &&
+    crop.y.isFinite &&
+    crop.width.isFinite &&
+    crop.height.isFinite &&
+    crop.x >= 0 &&
+    crop.y >= 0 &&
+    crop.width > 0 &&
+    crop.height > 0 &&
+    crop.x + crop.width <= 1 &&
+    crop.y + crop.height <= 1;

@@ -24,6 +24,7 @@ final class CancellationToken: @unchecked Sendable {
 
 actor JobRegistry {
   private var operations: [String: CancellationToken] = [:]
+  private var exportOperationId: String?
 
   func start(operationId: String) throws -> CancellationToken {
     guard !operationId.isEmpty else { throw AudioRenderError.unsupportedContract }
@@ -35,11 +36,19 @@ actor JobRegistry {
     return token
   }
 
+  func startExclusiveExport(operationId: String) throws -> CancellationToken {
+    guard exportOperationId == nil else { throw AudioRenderError.duplicateOperationId }
+    let token = try start(operationId: operationId)
+    exportOperationId = operationId
+    return token
+  }
+
   func cancel(operationId: String) {
     operations[operationId]?.cancel()
   }
 
   func finish(operationId: String) {
     operations.removeValue(forKey: operationId)
+    if exportOperationId == operationId { exportOperationId = nil }
   }
 }

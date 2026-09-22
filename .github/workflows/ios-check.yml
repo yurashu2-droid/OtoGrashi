@@ -129,6 +129,15 @@ jobs:
           test -f ci-artifacts/audio-render-fixture.wav
           test -f ci-artifacts/audio-render-report.json
 
+      - name: Verify rendered video evidence
+        if: always()
+        shell: bash
+        run: |
+          test -f ci-artifacts/video-render-preview.mp4
+          test -f ci-artifacts/video-render-preview.json
+          test -f ci-artifacts/video-render-full.mp4
+          test -f ci-artifacts/video-render-full.json
+
       - name: Upload validation evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
