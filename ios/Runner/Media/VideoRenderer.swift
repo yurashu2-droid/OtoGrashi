@@ -337,13 +337,22 @@ struct VideoRenderer {
     let reader = try AVAssetReader(asset: asset)
     let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
     output.alwaysCopiesSampleData = false
-    guard reader.canAdd(output) else { throw VideoRenderError.sourceReadFailed }
+    guard reader.canAdd(output) else {
+      videoRenderDiagnostic("VIDEO_STAGE source_pts_reader cannot_add_output")
+      throw VideoRenderError.sourceReadFailed
+    }
     reader.add(output)
-    guard reader.startReading() else { throw VideoRenderError.sourceReadFailed }
+    guard reader.startReading() else {
+      videoRenderDiagnostic("VIDEO_STAGE source_pts_reader start_failed")
+      throw VideoRenderError.sourceReadFailed
+    }
     var timestamps: [CMTime] = []
     while let sample = output.copyNextSampleBuffer() {
       let timestamp = CMSampleBufferGetPresentationTimeStamp(sample)
       guard timestamp.isNumeric, timestamps.count < 2_000 else {
+        videoRenderDiagnostic(
+          "VIDEO_STAGE source_pts_reader invalid_pts_or_cap count=\(timestamps.count)"
+        )
         throw VideoRenderError.sourceReadFailed
       }
       timestamps.append(timestamp)
@@ -358,6 +367,9 @@ struct VideoRenderer {
       throw error
     }
     guard reader.status == .completed, !timestamps.isEmpty else {
+      videoRenderDiagnostic(
+        "VIDEO_STAGE source_pts_reader incomplete_or_empty status=\(reader.status.rawValue) count=\(timestamps.count)"
+      )
       throw VideoRenderError.sourceReadFailed
     }
     return timestamps.sorted { CMTimeCompare($0, $1) < 0 }
