@@ -437,7 +437,7 @@ final class AudioRendererTests: XCTestCase {
     let format = try XCTUnwrap(
       AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)
     )
-    let file = try AVAudioFile(forWriting: url, settings: format.settings)
+    var file: AVAudioFile? = try AVAudioFile(forWriting: url, settings: format.settings)
     let buffer = try XCTUnwrap(
       AVAudioPCMBuffer(
         pcmFormat: format,
@@ -447,7 +447,8 @@ final class AudioRendererTests: XCTestCase {
     buffer.frameLength = AVAudioFrameCount(samples.count)
     let channel = try XCTUnwrap(buffer.floatChannelData?[0])
     for index in samples.indices { channel[index] = samples[index] }
-    try file.write(from: buffer)
+    try file?.write(from: buffer)
+    file = nil
     return url
   }
 

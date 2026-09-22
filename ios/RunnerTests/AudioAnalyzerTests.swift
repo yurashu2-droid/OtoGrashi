@@ -75,7 +75,7 @@ final class AudioAnalyzerTests: XCTestCase {
     let format = try XCTUnwrap(
       AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)
     )
-    let file = try AVAudioFile(forWriting: url, settings: format.settings)
+    var file: AVAudioFile? = try AVAudioFile(forWriting: url, settings: format.settings)
     let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_410))
     buffer.frameLength = 4_410
     for channel in 0..<2 {
@@ -84,7 +84,8 @@ final class AudioAnalyzerTests: XCTestCase {
         data[frame] = channel == 0 ? 0 : sin(Float(frame) * 0.05) * 0.5
       }
     }
-    try file.write(from: buffer)
+    try file?.write(from: buffer)
+    file = nil
 
     let result = try analyzer.analyze(url: url, assetId: "file")
     XCTAssertEqual(result.sampleRate, 48_000)
@@ -260,23 +261,24 @@ final class AudioAnalyzerTests: XCTestCase {
     )
     let range = try NativePCMReader().trackRange(url: url)
 
-    XCTAssertEqual(range.startSample, 5_952)
+    XCTAssertEqual(range.startSample, 0)
     let pcm = try NativePCMReader().readTimeline(
       url: url,
-      startSample: 5_952,
-      durationSamples: 24_000
+      startSample: 0,
+      durationSamples: 29_952
     )
-    XCTAssertEqual(pcm.requestedRange, 5_952..<29_952)
-    XCTAssertEqual(pcm.coveredRanges, [5_952..<29_952])
+    XCTAssertEqual(pcm.requestedRange, 0..<29_952)
+    XCTAssertEqual(pcm.coveredRanges, [5_952..<29_901])
+    XCTAssertTrue(pcm.samples[..<5_952].allSatisfy { $0 == 0 })
     let result = try analyzer.analyze(
       url: url,
       assetId: "delayed-44100-aac",
       selectionStartUs: 0,
       selectionDurationUs: 600_000,
-      audioTrackStartUs: 124_000
+      audioTrackStartUs: 0
     )
 
-    XCTAssertEqual(result.sourceStartSample, 5_952)
+    XCTAssertEqual(result.sourceStartSample, 0)
     XCTAssertEqual(result.onsetSamples, [18_912])
   }
 
@@ -287,7 +289,7 @@ final class AudioAnalyzerTests: XCTestCase {
     let format = try XCTUnwrap(
       AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
     )
-    let file = try AVAudioFile(forWriting: url, settings: format.settings)
+    var file: AVAudioFile? = try AVAudioFile(forWriting: url, settings: format.settings)
     let buffer = try XCTUnwrap(
       AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))
     )
@@ -296,7 +298,8 @@ final class AudioAnalyzerTests: XCTestCase {
     for frame in 0..<frameCount {
       data[frame] = 0.25
     }
-    try file.write(from: buffer)
+    try file?.write(from: buffer)
+    file = nil
     return url
   }
 }

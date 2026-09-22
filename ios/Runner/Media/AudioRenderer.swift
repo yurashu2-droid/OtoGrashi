@@ -392,13 +392,14 @@ struct AudioRenderer {
       if FileManager.default.fileExists(atPath: url.path) {
         try FileManager.default.removeItem(at: url)
       }
-      let file = try AVAudioFile(
+      var file: AVAudioFile? = try AVAudioFile(
         forWriting: url,
         settings: format.settings,
         commonFormat: .pcmFormatFloat32,
         interleaved: false
       )
-      try file.write(from: buffer)
+      try file?.write(from: buffer)
+      file = nil
     } catch {
       try? FileManager.default.removeItem(at: url)
       throw AudioRenderError.writeFailed

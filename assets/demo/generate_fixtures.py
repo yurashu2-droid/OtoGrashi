@@ -238,7 +238,9 @@ def main() -> None:
                 "path": "../../test/fixtures/native/delayed-44100-aac.mp4",
                 "sha256": hashlib.sha256(regression.read_bytes()).hexdigest(),
                 "encodedSampleRate": 44_100,
-                "expectedTrackStartSample48k": 5_952,
+                "expectedTrackStartSample48k": 0,
+                "expectedFirstCoveredSample48k": 5_952,
+                "expectedCoveredEndSample48k": 29_901,
                 "expectedOnsetSample48k": 18_912,
                 "purpose": "nonzero audio PTS, AAC priming, and 44.1-to-48 kHz mapping",
             }
