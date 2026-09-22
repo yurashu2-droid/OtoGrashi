@@ -28,17 +28,36 @@ final class VideoRendererTests: XCTestCase {
   func testWriterProgressWatchdogTracksEitherProducerAndDetectsAFullStall() {
     var now: UInt64 = 0
     let progress = VideoWriterProgress(now: { now })
+    var stalled = false
+    let watchdog = VideoWriterWatchdog(progress: progress) { stalled = true }
 
-    XCTAssertFalse(progress.hasStalled)
+    XCTAssertFalse(watchdog.check())
     now = VideoWriterProgress.watchdogNanoseconds
-    XCTAssertTrue(progress.hasStalled)
+    XCTAssertTrue(watchdog.check())
+    XCTAssertTrue(stalled)
 
-    progress.markProgress()
-    XCTAssertFalse(progress.hasStalled)
+    // A successful append from either producer resets the aggregate watchdog.
+    now = 0
+    let activeProgress = VideoWriterProgress(now: { now })
+    var activeStalled = false
+    let activeWatchdog = VideoWriterWatchdog(progress: activeProgress) {
+      activeStalled = true
+    }
+    now = VideoWriterProgress.watchdogNanoseconds - 1
+    activeProgress.markProgress()
     now += VideoWriterProgress.watchdogNanoseconds - 1
-    XCTAssertFalse(progress.hasStalled)
-    now += 1
-    XCTAssertTrue(progress.hasStalled)
+    XCTAssertFalse(activeWatchdog.check())
+    now += 2
+    XCTAssertTrue(activeWatchdog.check())
+    XCTAssertTrue(activeStalled)
+
+    // A frozen writer fires once, so cancellation/drain can be coordinated once.
+    XCTAssertTrue(activeWatchdog.check())
+    XCTAssertTrue(activeStalled)
+
+    now = 0
+    progress.markProgress()
+    XCTAssertTrue(watchdog.check())
   }
 
   func testSourceTimestampIgnoresZeroSampleMarkerButRejectsInvalidMediaPTS() throws {

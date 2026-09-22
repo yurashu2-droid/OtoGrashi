@@ -249,6 +249,25 @@ struct VideoRenderer {
     videoRenderDiagnostic("VIDEO_STAGE writer_started status=\(writer.status.rawValue)")
     writer.startSession(atSourceTime: .zero)
     let writerProgress = VideoWriterProgress()
+    let watchdog = VideoWriterWatchdog(progress: writerProgress) {
+      cancellation.cancel()
+      providers.values.forEach { $0.cancelImageGeneration() }
+      writer.cancelWriting()
+      videoRenderDiagnostic(
+        "VIDEO_STAGE writer_watchdog stalled \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
+      )
+    }
+    let watchdogTask = Task {
+      while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        if cancellation.isCancelled || writer.status == .failed || writer.status == .cancelled {
+          providers.values.forEach { $0.cancelImageGeneration() }
+          writer.cancelWriting()
+          break
+        }
+        if watchdog.check() { break }
+      }
+    }
 
     let audioTask = Task { () -> Result<Void, Error> in
       do {
@@ -290,14 +309,18 @@ struct VideoRenderer {
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &optionalBuffer) == kCVReturnSuccess,
           let buffer = optionalBuffer
         else { throw VideoRenderError.writerFailed }
-        try await drawFrame(
-          frame,
-          request: request,
-          providers: providers,
-          into: buffer,
-          width: dimensions.width,
-          height: dimensions.height
-        )
+        try await withTaskCancellationHandler(operation: {
+          try await drawFrame(
+            frame,
+            request: request,
+            providers: providers,
+            into: buffer,
+            width: dimensions.width,
+            height: dimensions.height
+          )
+        }, onCancel: {
+          providers.values.forEach { $0.cancelImageGeneration() }
+        })
         guard adaptor.append(
           buffer,
           withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: 30)
@@ -321,6 +344,7 @@ struct VideoRenderer {
       )
       let audioResult = await audioTask.value
       try audioResult.get()
+      watchdogTask.cancel()
       writer.endSession(atSourceTime: CMTime(value: 15, timescale: 1))
       videoRenderDiagnostic(
         "VIDEO_STAGE finish_writing begin \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
@@ -341,6 +365,8 @@ struct VideoRenderer {
       )
     } catch {
       cancellation.cancel()
+      watchdogTask.cancel()
+      providers.values.forEach { $0.cancelImageGeneration() }
       audioTask.cancel()
       let audioResult = await audioTask.value
       writer.cancelWriting()
@@ -804,6 +830,36 @@ final class VideoWriterProgress: @unchecked Sendable {
   }
 }
 
+final class VideoWriterWatchdog: @unchecked Sendable {
+  private let onStall: () -> Void
+  private var didFire = false
+  private let lock = NSLock()
+  let progress: VideoWriterProgress
+
+  init(progress: VideoWriterProgress, onStall: @escaping () -> Void) {
+    self.progress = progress
+    self.onStall = onStall
+  }
+
+  convenience init(_ onStall: @escaping () -> Void) {
+    self.init(progress: VideoWriterProgress(), onStall: onStall)
+  }
+
+  @discardableResult
+  func check() -> Bool {
+    guard progress.hasStalled else { return false }
+    lock.lock()
+    if didFire {
+      lock.unlock()
+      return true
+    }
+    didFire = true
+    lock.unlock()
+    onStall()
+    return true
+  }
+}
+
 private final class SourceProvider {
   let generator: AVAssetImageGenerator
   let duration: CMTime
@@ -816,6 +872,10 @@ private final class SourceProvider {
     self.generator = generator
     self.duration = duration
     self.timestamps = timestamps
+  }
+
+  func cancelImageGeneration() {
+    generator.cancelAllCGImageGeneration()
   }
 
   func image(at time: CMTime) async throws -> CGImage {
