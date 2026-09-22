@@ -197,6 +197,36 @@ final class VideoRendererTests: XCTestCase {
     }
   }
 
+  func testSequentialFocusUsesPrimaryAssetWhenSceneContainsMultipleSources() {
+    let scene = VideoSceneEventPayload(
+      destinationStartSample: 0,
+      durationSamples: 720_000,
+      assetIds: ["tap", "sustain", "texture"],
+      primaryAssetId: "tap"
+    )
+
+    XCTAssertEqual(
+      VideoRenderer.visibleAssetIds(scene: scene, layout: .sequentialFocus),
+      ["tap"]
+    )
+    XCTAssertEqual(
+      VideoRenderer.visibleAssetIds(
+        scene: VideoSceneEventPayload(
+          destinationStartSample: 0,
+          durationSamples: 720_000,
+          assetIds: ["tap", "sustain", "texture"],
+          primaryAssetId: nil
+        ),
+        layout: .sequentialFocus
+      ),
+      ["tap"]
+    )
+    XCTAssertEqual(
+      VideoRenderer.visibleAssetIds(scene: scene, layout: .stacked),
+      ["tap", "sustain", "texture"]
+    )
+  }
+
   func testAllLayoutsDecodeWithBarBoundaryScenesAndEverySource() throws {
     for layout in ["stacked", "sequentialFocus", "photoDump"] {
       let request = try decodeRequest(quality: "preview", layout: layout)

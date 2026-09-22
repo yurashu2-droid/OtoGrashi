@@ -505,7 +505,8 @@ struct VideoRenderer {
       width: CGFloat(width),
       height: CGFloat(height)
     )
-    for (index, id) in scene.assetIds.enumerated() {
+    let visibleAssetIds = Self.visibleAssetIds(scene: scene, layout: request.video.layout)
+    for (index, id) in visibleAssetIds.enumerated() {
       guard let provider = providers[id],
         let crop = request.video.clipCrops.first(where: { $0.assetId == id })?.crop
       else { throw VideoRenderError.missingAsset }
@@ -584,6 +585,17 @@ struct VideoRenderer {
         )
       }
     }
+  }
+
+  static func visibleAssetIds(
+    scene: VideoSceneEventPayload,
+    layout: VideoLayoutPayload
+  ) -> [String] {
+    guard layout == .sequentialFocus else { return scene.assetIds }
+    if let primary = scene.primaryAssetId, scene.assetIds.contains(primary) {
+      return [primary]
+    }
+    return Array(scene.assetIds.prefix(1))
   }
 
   private func sourceTime(
