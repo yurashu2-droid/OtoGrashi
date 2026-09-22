@@ -58,7 +58,7 @@
     {
       "id": "hdr10-tap",
       "path": "../../test/fixtures/native/hdr10-tap.mp4",
-      "sha256": "0f0090d3270e6437af72a2cdfad0950ec4d8af4062acb03e6d5c41ae4a5b6db2",
+      "sha256": "c3c2716a2215a5f14b93557547eb1699ed92ca477760186a1319196cc1fbd742",
       "purpose": "PQ/BT.2020 input normalized to SDR BT.709 output"
     }
   ]

@@ -270,7 +270,11 @@ def render_video_regressions(source: Path) -> tuple[Path, Path]:
             "-pix_fmt",
             "yuv420p10le",
             "-x265-params",
-            "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc",
+            (
+                "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:"
+                "master-display=G(8500,39850)B(6550,2300)R(35400,14600)"
+                "WP(15635,16450)L(10000000,1):max-cll=1000,400"
+            ),
             "-color_primaries",
             "bt2020",
             "-color_trc",
@@ -282,7 +286,7 @@ def render_video_regressions(source: Path) -> tuple[Path, Path]:
             "-tag:v",
             "hvc1",
             "-movflags",
-            "+faststart",
+            "+faststart+write_colr",
             str(hdr),
         ],
         check=True,
