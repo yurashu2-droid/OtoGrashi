@@ -164,6 +164,37 @@ void main() {
       expect(controller.state.savedAssetId, isNull);
     },
   );
+
+  test('Photos result must belong to the requested operation', () async {
+    gateway.pickResult = CapturedMedia(
+      operationId: 'stale-picker',
+      assetId: 'asset-stale',
+      relativePath: 'staging/stale.mov',
+      durationUs: 3000000,
+      audioTrackStartUs: 0,
+      width: 1080,
+      height: 1920,
+      rotation: 0,
+    );
+
+    await controller.importVideo();
+
+    expect(controller.state.phase, CapturePhase.failed);
+    expect(controller.state.savedAssetId, isNull);
+  });
+
+  test('stop is ignored until native recording has started', () async {
+    gateway.startGate = Completer<void>();
+    await controller.prepare();
+    final starting = controller.record();
+
+    await controller.stop();
+
+    expect(controller.state.phase, CapturePhase.starting);
+    expect(gateway.stopCalls, 0);
+    gateway.startGate!.complete();
+    await starting;
+  });
 }
 
 final class _FakeMediaGateway implements MediaGateway {
@@ -172,6 +203,9 @@ final class _FakeMediaGateway implements MediaGateway {
   Object? prepareError;
   Object? stopError;
   CapturedMedia? _stopResult;
+  CapturedMedia? pickResult;
+  Completer<void>? startGate;
+  int stopCalls = 0;
   int prepareCalls = 0;
   int? maxDurationUs;
   final startedOperations = <String>[];
@@ -199,10 +233,12 @@ final class _FakeMediaGateway implements MediaGateway {
   }) async {
     startedOperations.add(operationId);
     this.maxDurationUs = maxDurationUs;
+    await startGate?.future;
   }
 
   @override
   Future<CapturedMedia> stopCapture(String operationId) async {
+    stopCalls += 1;
     if (stopError case final error?) throw error;
     return _stopResult ??
         CapturedMedia(
@@ -218,7 +254,7 @@ final class _FakeMediaGateway implements MediaGateway {
   }
 
   @override
-  Future<CapturedMedia?> pickVideo(String operationId) async => null;
+  Future<CapturedMedia?> pickVideo(String operationId) async => pickResult;
 
   @override
   Future<InspectedMedia> inspectStaged(String path) =>

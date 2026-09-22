@@ -90,9 +90,7 @@ final class CaptureController extends ChangeNotifier {
 
   Future<void> stop() async {
     final id = _state.operationId;
-    if (id == null ||
-        (_state.phase != CapturePhase.recording &&
-            _state.phase != CapturePhase.starting)) {
+    if (id == null || _state.phase != CapturePhase.recording) {
       return;
     }
     _set(_state.copyWith(phase: CapturePhase.stopping));
@@ -140,6 +138,13 @@ final class CaptureController extends ChangeNotifier {
       if (_state.operationId != id) return;
       if (media == null) {
         _set(_state.copyWith(phase: returnPhase));
+      } else if (media.operationId != id) {
+        _fail(
+          const MediaCaptureException(
+            MediaCaptureErrorCode.invalidMedia,
+            '選んだ動画の操作情報を確認できませんでした。もう一度選んでください。',
+          ),
+        );
       } else {
         _set(
           _state.copyWith(

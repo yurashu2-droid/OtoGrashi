@@ -112,6 +112,32 @@ struct InspectedMediaPayload {
   }
 }
 
+struct CaptureAsyncToken: Equatable {
+  let generation: Int
+  let operationId: String
+}
+
+struct CaptureAsyncGeneration {
+  private var value = 0
+  private var current: CaptureAsyncToken?
+
+  mutating func begin(operationId: String) -> CaptureAsyncToken {
+    value += 1
+    let token = CaptureAsyncToken(generation: value, operationId: operationId)
+    current = token
+    return token
+  }
+
+  mutating func invalidate() {
+    value += 1
+    current = nil
+  }
+
+  func owns(_ token: CaptureAsyncToken, operationId: String) -> Bool {
+    current == token && token.operationId == operationId
+  }
+}
+
 struct CapturedMediaPayload {
   let operationId: String
   let assetId: String
@@ -144,7 +170,13 @@ struct ManagedMediaInspector {
     let transform = try await video.load(.preferredTransform)
     let audioRange = try await audio.load(.timeRange)
     let audioTrackStartUs = try Self.microseconds(audioRange.start)
-    guard audioTrackStartUs >= 0 else { throw CaptureServiceError.invalidMedia }
+    let audioTrackDurationUs = try Self.microseconds(audioRange.duration)
+    guard Self.audioRangeIsUsable(
+      startUs: audioTrackStartUs,
+      durationUs: audioTrackDurationUs,
+      assetDurationUs: durationUs,
+      maximumSelectionUs: 6_000_000
+    ) else { throw CaptureServiceError.noAudio }
     let rotation = Self.rotation(transform)
     let oriented = naturalSize.applying(transform)
     let width = Int(abs(oriented.width).rounded())
@@ -157,6 +189,20 @@ struct ManagedMediaInspector {
       height: height,
       rotation: rotation
     )
+  }
+
+  static func audioRangeIsUsable(
+    startUs: Int64,
+    durationUs: Int64,
+    assetDurationUs: Int64,
+    maximumSelectionUs: Int64
+  ) -> Bool {
+    guard startUs >= 0, durationUs > 0, assetDurationUs > 0, maximumSelectionUs > 0,
+      startUs < assetDurationUs,
+      startUs < min(assetDurationUs, maximumSelectionUs),
+      durationUs <= Int64.max - startUs
+    else { return false }
+    return startUs + durationUs > 0
   }
 
   private static func microseconds(_ time: CMTime) throws -> Int64 {
@@ -195,6 +241,10 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
   private var pickerCompletion: ((Result<CapturedMediaPayload?, Error>) -> Void)?
   private weak var activePicker: PHPickerViewController?
   private var preparationGeneration = 0
+  private var captureGeneration = CaptureAsyncGeneration()
+  private var activeCaptureToken: CaptureAsyncToken?
+  private var pickerGeneration = CaptureAsyncGeneration()
+  private var activePickerToken: CaptureAsyncToken?
 
   init(
     store: ManagedMediaStore,
@@ -269,6 +319,8 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
           throw CaptureServiceError.invalidMedia
         }
         try self.lifecycle.beginRecording(operationId: operationId)
+        let token = self.captureGeneration.begin(operationId: operationId)
+        self.activeCaptureToken = token
         try self.audioSession.activateForRecording()
         let url = try self.store.newStagingURL(extension: "mov")
         self.outputURL = url
@@ -277,6 +329,8 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
         self.output.maxRecordedDuration = CMTime(value: maxDurationUs, timescale: 1_000_000)
         self.output.startRecording(to: url, recordingDelegate: self)
       } catch {
+        self.captureGeneration.invalidate()
+        self.activeCaptureToken = nil
         self.lifecycle.reset()
         self.audioSession.deactivateRecording()
         completion(.failure(error))
@@ -296,14 +350,16 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
         return
       }
       do {
-        try self.lifecycle.beginFinalizing(operationId: operationId)
+        guard self.lifecycle.phase == .recording,
+          self.lifecycle.operationId == operationId
+        else { throw CaptureServiceError.invalidOperation }
         self.stopCompletion = completion
-        guard self.output.isRecording else {
-          self.stopCompletion = nil
-          throw CaptureServiceError.incompleteCapture
+        if self.output.isRecording {
+          try self.lifecycle.beginFinalizing(operationId: operationId)
+          self.output.stopRecording()
         }
-        self.output.stopRecording()
       } catch {
+        self.stopCompletion = nil
         completion(.failure(error))
       }
     }
@@ -314,6 +370,8 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
       guard let self else { completion(); return }
       if self.output.isRecording { self.output.stopRecording() }
       self.preparationGeneration += 1
+      self.captureGeneration.invalidate()
+      self.activeCaptureToken = nil
       if self.session.isRunning { self.session.stopRunning() }
       self.audioSession.deactivateRecording()
       self.outputURL.map { try? FileManager.default.removeItem(at: $0) }
@@ -325,6 +383,8 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
       self.finalized = nil
       self.lifecycle.reset()
       DispatchQueue.main.async {
+        self.pickerGeneration.invalidate()
+        self.activePickerToken = nil
         self.activePicker?.dismiss(animated: false)
         self.activePicker = nil
         let pickerCompletion = self.pickerCompletion
@@ -349,6 +409,8 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
       completion(.failure(CaptureServiceError.invalidState))
       return
     }
+    let token = pickerGeneration.begin(operationId: operationId)
+    activePickerToken = token
     pickerCompletion = completion
     var configuration = PHPickerConfiguration(photoLibrary: .shared())
     configuration.filter = .videos
@@ -363,20 +425,26 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
 
   func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
     let operationId = picker.view.accessibilityIdentifier ?? ""
+    guard let token = activePickerToken,
+      pickerGeneration.owns(token, operationId: operationId),
+      picker === activePicker
+    else { return }
     activePicker = nil
     picker.dismiss(animated: true)
     guard let provider = results.first?.itemProvider else {
       let completion = pickerCompletion
       pickerCompletion = nil
+      activePickerToken = nil
+      pickerGeneration.invalidate()
       completion?(.success(nil))
       return
     }
     provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) {
       [weak self] source, error in
       guard let self else { return }
-      if let error { self.finishPicker(.failure(error)); return }
+      if let error { self.finishPicker(token: token, stagedURL: nil, .failure(error)); return }
       guard let source else {
-        self.finishPicker(.failure(CaptureServiceError.invalidMedia))
+        self.finishPicker(token: token, stagedURL: nil, .failure(CaptureServiceError.invalidMedia))
         return
       }
       do {
@@ -384,10 +452,6 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
           extension: source.pathExtension.isEmpty ? "mov" : source.pathExtension
         )
         try FileManager.default.copyItem(at: source, to: url)
-        guard self.pickerCompletion != nil else {
-          try? FileManager.default.removeItem(at: url)
-          return
-        }
         Task {
           do {
             let inspection = try await self.inspector.inspect(url: url)
@@ -396,14 +460,13 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
               url: url,
               inspection: inspection
             )
-            self.finishPicker(.success(payload))
+            self.finishPicker(token: token, stagedURL: url, .success(payload))
           } catch {
-            try? FileManager.default.removeItem(at: url)
-            self.finishPicker(.failure(error))
+            self.finishPicker(token: token, stagedURL: url, .failure(error))
           }
         }
       } catch {
-        self.finishPicker(.failure(error))
+        self.finishPicker(token: token, stagedURL: nil, .failure(error))
       }
     }
   }
@@ -414,11 +477,25 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
     from connections: [AVCaptureConnection]
   ) {
     queue.async { [weak self] in
-      guard let self, let operationId = self.lifecycle.operationId else { return }
+      guard let self, let operationId = self.lifecycle.operationId,
+        let token = self.activeCaptureToken,
+        self.captureGeneration.owns(token, operationId: operationId),
+        self.outputURL == fileURL
+      else { return }
       let completion = self.startCompletion
       self.startCompletion = nil
       completion?(.success(()))
       self.emitEvent(operationId: operationId, type: "recording", progress: 0)
+      if self.stopCompletion != nil {
+        do {
+          try self.lifecycle.beginFinalizing(operationId: operationId)
+          self.output.stopRecording()
+        } catch {
+          let stop = self.stopCompletion
+          self.stopCompletion = nil
+          stop?(.failure(error))
+        }
+      }
     }
   }
 
@@ -429,7 +506,11 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
     error: Error?
   ) {
     queue.async { [weak self] in
-      guard let self, let operationId = self.lifecycle.operationId else {
+      guard let self, let operationId = self.lifecycle.operationId,
+        let token = self.activeCaptureToken,
+        self.captureGeneration.owns(token, operationId: operationId),
+        self.outputURL == outputFileURL
+      else {
         try? FileManager.default.removeItem(at: outputFileURL)
         return
       }
@@ -474,6 +555,13 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
             inspection: inspection
           )
           self.queue.async {
+            guard self.captureGeneration.owns(token, operationId: operationId),
+              self.activeCaptureToken == token,
+              self.outputURL == outputFileURL
+            else {
+              try? FileManager.default.removeItem(at: outputFileURL)
+              return
+            }
             do { try self.lifecycle.finish(operationId: operationId) }
             catch {
               try? FileManager.default.removeItem(at: outputFileURL)
@@ -482,6 +570,7 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
               return
             }
             self.outputURL = nil
+            self.activeCaptureToken = nil
             if let completion = self.stopCompletion {
               self.stopCompletion = nil
               completion(.success(payload))
@@ -493,8 +582,16 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
         } catch {
           try? FileManager.default.removeItem(at: outputFileURL)
           self.queue.async {
+            guard self.captureGeneration.owns(token, operationId: operationId),
+              self.activeCaptureToken == token,
+              self.outputURL == outputFileURL
+            else {
+              try? FileManager.default.removeItem(at: outputFileURL)
+              return
+            }
             self.lifecycle.reset()
             self.outputURL = nil
+            self.activeCaptureToken = nil
             let completion = self.stopCompletion
             self.stopCompletion = nil
             completion?(.failure(error))
@@ -614,10 +711,26 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
     ])
   }
 
-  private func finishPicker(_ result: Result<CapturedMediaPayload?, Error>) {
+  private func finishPicker(
+    token: CaptureAsyncToken,
+    stagedURL: URL?,
+    _ result: Result<CapturedMediaPayload?, Error>
+  ) {
     DispatchQueue.main.async { [weak self] in
-      let completion = self?.pickerCompletion
-      self?.pickerCompletion = nil
+      guard let self,
+        self.pickerGeneration.owns(token, operationId: token.operationId),
+        self.activePickerToken == token
+      else {
+        if let stagedURL { try? FileManager.default.removeItem(at: stagedURL) }
+        return
+      }
+      let completion = self.pickerCompletion
+      self.pickerCompletion = nil
+      self.activePickerToken = nil
+      self.pickerGeneration.invalidate()
+      if case .failure = result, let stagedURL {
+        try? FileManager.default.removeItem(at: stagedURL)
+      }
       completion?(result)
     }
   }

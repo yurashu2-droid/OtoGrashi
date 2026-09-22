@@ -3,6 +3,23 @@ import XCTest
 @testable import Runner
 
 final class CaptureStateTests: XCTestCase {
+  func testAsyncGenerationRejectsWorkFromBeforeInvalidation() {
+    var generations = CaptureAsyncGeneration()
+    let old = generations.begin(operationId: "old")
+    generations.invalidate()
+    let current = generations.begin(operationId: "current")
+
+    XCTAssertFalse(generations.owns(old, operationId: "old"))
+    XCTAssertTrue(generations.owns(current, operationId: "current"))
+  }
+
+  func testAsyncGenerationRejectsWrongOperationInSameGeneration() {
+    var generations = CaptureAsyncGeneration()
+    let token = generations.begin(operationId: "capture")
+
+    XCTAssertFalse(generations.owns(token, operationId: "other"))
+  }
+
   func testInterruptionCannotPublishACompletedCapture() throws {
     var lifecycle = CaptureLifecycle()
     try lifecycle.beginPreparing()
@@ -40,6 +57,33 @@ final class CaptureStateTests: XCTestCase {
     XCTAssertTrue(CaptureService.recordingFinishedSuccessfully(error: successfulLimit))
     XCTAssertFalse(CaptureService.recordingFinishedSuccessfully(error: interrupted))
     XCTAssertTrue(CaptureService.recordingFinishedSuccessfully(error: nil))
+  }
+
+  func testAudioRangeMustBePositiveAndOverlapSelection() {
+    XCTAssertTrue(
+      ManagedMediaInspector.audioRangeIsUsable(
+        startUs: 100_000,
+        durationUs: 500_000,
+        assetDurationUs: 2_000_000,
+        maximumSelectionUs: 6_000_000
+      )
+    )
+    XCTAssertFalse(
+      ManagedMediaInspector.audioRangeIsUsable(
+        startUs: 100_000,
+        durationUs: 0,
+        assetDurationUs: 2_000_000,
+        maximumSelectionUs: 6_000_000
+      )
+    )
+    XCTAssertFalse(
+      ManagedMediaInspector.audioRangeIsUsable(
+        startUs: 7_000_000,
+        durationUs: 500_000,
+        assetDurationUs: 8_000_000,
+        maximumSelectionUs: 6_000_000
+      )
+    )
   }
 
   func testInspectorPathMustBeARegularManagedStagingFile() throws {
