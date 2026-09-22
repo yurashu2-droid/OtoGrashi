@@ -79,11 +79,40 @@ jobs:
           set -o pipefail
           flutter build ios --simulator --debug 2>&1 | tee ci-logs/ios-simulator-build.txt
 
-      - name: Upload failure logs
-        if: failure()
+      - name: Run native tests on an installed iPhone simulator
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ci-artifacts
+          SIMULATOR_UDID="$(xcrun simctl list devices available --json | ruby -rjson -e '
+            devices = JSON.parse(STDIN.read).fetch("devices")
+            iphone = devices
+              .select { |runtime, _| runtime.include?("iOS") }
+              .flat_map { |_, entries| entries }
+              .find { |device| device["isAvailable"] && device["name"].include?("iPhone") }
+            puts iphone && iphone.fetch("udid")
+          ')"
+          test -n "$SIMULATOR_UDID"
+          echo "simulator_udid=$SIMULATOR_UDID" | tee ci-logs/simulator.txt
+          xcrun simctl boot "$SIMULATOR_UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b 2>&1 | tee -a ci-logs/simulator.txt
+          xcodebuild test \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -resultBundlePath ci-artifacts/RunnerTests.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee ci-logs/xctest.txt
+
+      - name: Upload validation evidence
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ios-check-failure-${{ github.run_id }}
-          path: ci-logs
-          if-no-files-found: error
+          name: ios-check-evidence-${{ github.run_id }}
+          path: |
+            ci-logs
+            ci-artifacts
+          if-no-files-found: warn
           retention-days: 14

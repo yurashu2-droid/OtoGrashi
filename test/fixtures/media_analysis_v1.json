@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "analysisVersion": 1,
+  "assetId": "fixture-tap",
+  "sourceStartSample": 0,
+  "durationSamples": 48000,
+  "sampleRate": 48000,
+  "onsetSamples": [960, 12000],
+  "peak": 0.75,
+  "rms": 0.125,
+  "suggestedRole": "transient"
+}

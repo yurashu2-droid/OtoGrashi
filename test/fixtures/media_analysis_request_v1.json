@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "assetId": "fixture-tap",
+  "relativePath": "assets/fixture-tap.mov",
+  "selectionStartUs": 30000,
+  "selectionDurationUs": 20000,
+  "audioTrackStartUs": 10000
+}
