@@ -3,6 +3,7 @@ final class ClipAsset {
     required this.id,
     required this.relativePath,
     required this.durationUs,
+    this.audioTrackStartUs = 0,
     required this.selectionStartUs,
     required this.selectionDurationUs,
     required this.width,
@@ -15,6 +16,7 @@ final class ClipAsset {
   final String id;
   final String relativePath;
   final int durationUs;
+  final int audioTrackStartUs;
   final int selectionStartUs;
   final int selectionDurationUs;
   final int width;

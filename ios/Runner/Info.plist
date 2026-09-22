@@ -16,6 +16,10 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>otogurashi</string>
+	<key>NSCameraUsageDescription</key>
+	<string>暮らしの音と映像を短く録画するためにカメラを使います。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>暮らしの音からリズムを作るためにマイクを使います。</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

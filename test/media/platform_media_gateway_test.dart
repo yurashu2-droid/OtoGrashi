@@ -17,6 +17,28 @@ void main() {
           calls.add(call);
           return switch (call.method) {
             'managedRoot' => '/application-support/OtoGrashi',
+            'prepareCapture' => <String, Object?>{
+              'previewViewType': 'dev.otogurashi/capture-preview',
+            },
+            'startCapture' => null,
+            'stopCapture' => <String, Object?>{
+              'operationId': 'capture-1',
+              'assetId': 'asset-1',
+              'relativePath': 'staging/asset-1.mov',
+              'durationUs': 3000000,
+              'audioTrackStartUs': 120000,
+              'width': 1080,
+              'height': 1920,
+              'rotation': 90,
+            },
+            'inspectStaged' => <String, Object?>{
+              'durationUs': 3000000,
+              'audioTrackStartUs': 120000,
+              'width': 1080,
+              'height': 1920,
+              'rotation': 90,
+            },
+            'disposeCapture' => null,
             'render' => <String, Object?>{
               'operationId': 'render-1',
               'projectId': 'project',
@@ -65,6 +87,34 @@ void main() {
 
     expect(calls.map((call) => call.method), <String>['managedRoot', 'cancel']);
     expect(calls.last.arguments, <String, Object?>{'operationId': 'render-1'});
+  });
+
+  test('capture and inspection stay on the shared media plugin', () async {
+    final gateway = PlatformMediaGateway(channel: channel);
+
+    final handle = await gateway.prepareCapture();
+    await gateway.startCapture('capture-1', maxDurationUs: 3000000);
+    final media = await gateway.stopCapture('capture-1');
+    final inspected = await gateway.inspectStaged(
+      r'C:\Application Support\OtoGrashi\staging\copy.partial.mov',
+    );
+    await gateway.disposeCapture();
+
+    expect(handle.previewViewType, 'dev.otogurashi/capture-preview');
+    expect(media.operationId, 'capture-1');
+    expect(media.audioTrackStartUs, 120000);
+    expect(inspected.audioTrackStartUs, 120000);
+    expect(calls.map((call) => call.method), <String>[
+      'prepareCapture',
+      'startCapture',
+      'stopCapture',
+      'inspectStaged',
+      'disposeCapture',
+    ]);
+    expect(calls[1].arguments, <String, Object?>{
+      'operationId': 'capture-1',
+      'maxDurationUs': 3000000,
+    });
   });
 }
 

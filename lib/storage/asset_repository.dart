@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import '../domain/clip_asset.dart';
+import '../media/media_gateway.dart';
 import 'project_database.dart';
 
 /// Persists immutable shared originals and their import metadata.
@@ -14,6 +15,7 @@ import 'project_database.dart';
 /// deliberately has no shared-global selection update method.
 abstract interface class AssetRepository {
   Future<ClipAsset> importFile(String sourcePath);
+  Future<ClipAsset> importManagedStaging(String relativePath);
   Future<ClipAsset?> load(String id);
   Future<List<ClipAsset>> list();
   Future<String> resolvePath(String assetId);
@@ -28,15 +30,35 @@ abstract interface class AssetInspector {
 final class InspectedAsset {
   const InspectedAsset({
     required this.durationUs,
+    this.audioTrackStartUs = 0,
     required this.width,
     required this.height,
     required this.rotation,
   });
 
   final int durationUs;
+  final int audioTrackStartUs;
   final int width;
   final int height;
   final int rotation;
+}
+
+final class NativeAssetInspector implements AssetInspector {
+  const NativeAssetInspector(this._gateway);
+
+  final MediaGateway _gateway;
+
+  @override
+  Future<InspectedAsset> inspect(String path) async {
+    final media = await _gateway.inspectStaged(path);
+    return InspectedAsset(
+      durationUs: media.durationUs,
+      audioTrackStartUs: media.audioTrackStartUs,
+      width: media.width,
+      height: media.height,
+      rotation: media.rotation,
+    );
+  }
 }
 
 final class RejectingAssetInspector implements AssetInspector {
@@ -58,6 +80,20 @@ final class SqliteAssetRepository implements AssetRepository {
 
   final ProjectDatabase _database;
   final AssetInspector _inspector;
+
+  @override
+  Future<ClipAsset> importManagedStaging(String relativePath) async {
+    final components = p.url.split(relativePath);
+    if (components.length != 2 || components.first != 'staging') {
+      throw InvalidAsset('Unsafe managed staging path: $relativePath');
+    }
+    final source = _resolveRelative(relativePath);
+    try {
+      return await importFile(source.path);
+    } finally {
+      if (await source.exists()) await source.delete();
+    }
+  }
 
   @override
   Future<ClipAsset> importFile(String sourcePath) async {
@@ -87,6 +123,7 @@ final class SqliteAssetRepository implements AssetRepository {
         id: id,
         relativePath: relativePath,
         durationUs: inspection.durationUs,
+        audioTrackStartUs: inspection.audioTrackStartUs,
         selectionStartUs: 0,
         selectionDurationUs: min(inspection.durationUs, 6000000),
         width: inspection.width,
@@ -99,14 +136,15 @@ final class SqliteAssetRepository implements AssetRepository {
         _database.connection.execute(
           '''
           INSERT INTO assets (
-            id, relative_path, duration_us, selection_start_us,
+            id, relative_path, duration_us, audio_track_start_us, selection_start_us,
             selection_duration_us, width, height, rotation, sha256, label
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ''',
           <Object?>[
             asset.id,
             asset.relativePath,
             asset.durationUs,
+            asset.audioTrackStartUs,
             asset.selectionStartUs,
             asset.selectionDurationUs,
             asset.width,
@@ -233,6 +271,7 @@ ClipAsset _decodeAsset(Map<String, Object?> row) {
     id: row['id'] as String,
     relativePath: row['relative_path'] as String,
     durationUs: row['duration_us'] as int,
+    audioTrackStartUs: row['audio_track_start_us'] as int,
     selectionStartUs: row['selection_start_us'] as int,
     selectionDurationUs: row['selection_duration_us'] as int,
     width: row['width'] as int,
@@ -253,6 +292,8 @@ String _safeExtension(String sourcePath) {
 
 void _validateInspection(InspectedAsset inspection) {
   if (inspection.durationUs <= 0 ||
+      inspection.audioTrackStartUs < 0 ||
+      inspection.audioTrackStartUs >= inspection.durationUs ||
       inspection.width <= 0 ||
       inspection.height <= 0 ||
       !const <int>{0, 90, 180, 270}.contains(inspection.rotation)) {

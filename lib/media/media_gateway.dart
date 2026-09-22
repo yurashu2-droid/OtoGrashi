@@ -6,8 +6,15 @@ abstract interface class MediaAnalysisGateway {
 }
 
 abstract interface class MediaGateway implements MediaAnalysisGateway {
+  Stream<MediaEvent> get events;
+  Future<CaptureHandle> prepareCapture();
+  Future<void> startCapture(String operationId, {required int maxDurationUs});
+  Future<CapturedMedia> stopCapture(String operationId);
+  Future<CapturedMedia?> pickVideo(String operationId);
+  Future<InspectedMedia> inspectStaged(String path);
   Future<RenderedMedia> render(RenderRequest request);
   Future<void> cancel(String operationId);
+  Future<void> disposeCapture();
 }
 
 final class RenderRequest {

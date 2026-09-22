@@ -265,6 +265,31 @@ final class _FakeMediaGateway implements MediaGateway {
   var cancelFailuresRemaining = 0;
 
   @override
+  Stream<MediaEvent> get events => const Stream<MediaEvent>.empty();
+
+  @override
+  Future<CaptureHandle> prepareCapture() => throw UnimplementedError();
+
+  @override
+  Future<void> startCapture(String operationId, {required int maxDurationUs}) =>
+      throw UnimplementedError();
+
+  @override
+  Future<CapturedMedia> stopCapture(String operationId) =>
+      throw UnimplementedError();
+
+  @override
+  Future<CapturedMedia?> pickVideo(String operationId) =>
+      throw UnimplementedError();
+
+  @override
+  Future<InspectedMedia> inspectStaged(String path) =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> disposeCapture() async {}
+
+  @override
   Future<AnalyzedClip> analyze(MediaAnalysisRequest request) =>
       throw UnimplementedError();
 

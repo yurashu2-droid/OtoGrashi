@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:otogurashi/domain/project.dart';
 import 'package:otogurashi/domain/project_reducer.dart';
+import 'package:otogurashi/media/media_messages.dart';
 import 'package:otogurashi/storage/asset_repository.dart';
 import 'package:otogurashi/storage/project_database.dart';
 import 'package:otogurashi/storage/project_repository.dart';
@@ -166,6 +167,7 @@ void main() {
       expect(loaded.width, 1080);
       expect(loaded.height, 1920);
       expect(loaded.rotation, 90);
+      expect(loaded.audioTrackStartUs, 125000);
       expect(
         loaded.sha256,
         '17e88db187afd62c16e5debf3e6527cd006bc012bc90b51a810cd80c2d511f43',
@@ -174,7 +176,44 @@ void main() {
       expect(listed.map((asset) => asset.id), <String>[imported.id]);
       expect(listed.single.selectionDurationUs, 6000000);
       expect(listed.single.sha256, loaded.sha256);
+      final analysisRequest = MediaAnalysisRequest.forAsset(loaded);
+      expect(analysisRequest.audioTrackStartUs, 125000);
+      expect(analysisRequest.relativePath, loaded.relativePath);
     });
+
+    test(
+      'version-one asset rows migrate with a zero audio track origin',
+      () async {
+        database.close();
+        final legacy = sqlite3.open(p.join(root.path, 'projects.sqlite3'));
+        legacy.execute('DROP TABLE assets');
+        legacy.execute('''
+        CREATE TABLE assets (
+          id TEXT NOT NULL PRIMARY KEY,
+          relative_path TEXT NOT NULL UNIQUE,
+          duration_us INTEGER NOT NULL,
+          selection_start_us INTEGER NOT NULL,
+          selection_duration_us INTEGER NOT NULL,
+          width INTEGER NOT NULL,
+          height INTEGER NOT NULL,
+          rotation INTEGER NOT NULL,
+          sha256 TEXT NOT NULL,
+          label TEXT NOT NULL
+        ) STRICT
+      ''');
+        legacy.execute('PRAGMA user_version = 1');
+        legacy.close();
+
+        database = await ProjectDatabase.open(root);
+        final columns = database.connection
+            .select("PRAGMA table_info('assets')")
+            .map((row) => row['name'])
+            .toSet();
+
+        expect(columns, contains('audio_track_start_us'));
+        expect(database.connection.userVersion, 2);
+      },
+    );
 
     test('asset rows store portable relative paths', () async {
       final asset = await assets.importFile(fixture.path);
@@ -192,6 +231,26 @@ void main() {
       expect(p.isAbsolute(stored), isFalse);
       expect(stored.replaceAll('\\', '/'), 'originals/${asset.id}.mov');
       expect(asset.relativePath, stored);
+    });
+
+    test('managed capture staging promotes to an immutable original', () async {
+      final capture = File(
+        p.join(database.stagingDirectory.path, 'capture.mov'),
+      );
+      await capture.writeAsBytes(<int>[6, 5, 4, 3]);
+
+      final asset = await assets.importManagedStaging('staging/capture.mov');
+
+      expect(await capture.exists(), isFalse);
+      expect(
+        await File(await assets.resolvePath(asset.id)).readAsBytes(),
+        <int>[6, 5, 4, 3],
+      );
+      expect(asset.audioTrackStartUs, 125000);
+      await expectLater(
+        assets.importManagedStaging('../outside.mov'),
+        throwsA(isA<InvalidAsset>()),
+      );
     });
 
     test(
@@ -312,6 +371,7 @@ final class _FixtureInspector implements AssetInspector {
     }
     return InspectedAsset(
       durationUs: durationUs,
+      audioTrackStartUs: 125000,
       width: 1080,
       height: 1920,
       rotation: 90,

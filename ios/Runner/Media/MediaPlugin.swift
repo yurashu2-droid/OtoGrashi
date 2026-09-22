@@ -1,19 +1,45 @@
 import Flutter
 import Foundation
+import UIKit
 
 final class MediaPlugin: NSObject, FlutterPlugin {
   static let channelName = "dev.otogurashi/media"
+  static let eventChannelName = "dev.otogurashi/media/events"
+  static let previewViewType = "dev.otogurashi/capture-preview"
 
   static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
       name: channelName,
       binaryMessenger: registrar.messenger()
     )
-    registrar.addMethodCallDelegate(MediaPlugin(), channel: channel)
+    let eventChannel = FlutterEventChannel(
+      name: eventChannelName,
+      binaryMessenger: registrar.messenger()
+    )
+    let stream = MediaEventStreamHandler()
+    eventChannel.setStreamHandler(stream)
+    let plugin = MediaPlugin(eventStream: stream)
+    registrar.addMethodCallDelegate(plugin, channel: channel)
+    registrar.register(
+      CapturePreviewViewFactory(session: plugin.capture.captureSession),
+      withId: previewViewType
+    )
   }
 
   private let jobs = JobRegistry()
-  private let store = ManagedMediaStore()
+  private let store: ManagedMediaStore
+  private let eventStream: MediaEventStreamHandler
+  fileprivate let capture: CaptureService
+
+  init(eventStream: MediaEventStreamHandler) {
+    let store = ManagedMediaStore()
+    self.store = store
+    self.eventStream = eventStream
+    self.capture = CaptureService(store: store) { event in
+      eventStream.emit(event)
+    }
+    super.init()
+  }
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
@@ -21,6 +47,64 @@ final class MediaPlugin: NSObject, FlutterPlugin {
       complete(result) {
         try self.store.prepareRoot().path
       }
+    case "prepareCapture":
+      capture.prepare { outcome in
+        self.finish(result, outcome)
+      }
+    case "startCapture":
+      guard let arguments = call.arguments as? [String: Any],
+        let operationId = arguments["operationId"] as? String,
+        let maxDuration = arguments["maxDurationUs"] as? NSNumber
+      else {
+        fail(result, error: CaptureServiceError.invalidMedia)
+        return
+      }
+      capture.start(
+        operationId: operationId,
+        maxDurationUs: maxDuration.int64Value
+      ) { outcome in
+        switch outcome {
+        case .success: self.succeed(result, value: nil)
+        case .failure(let error): self.fail(result, error: error)
+        }
+      }
+    case "stopCapture":
+      guard let arguments = call.arguments as? [String: Any],
+        let operationId = arguments["operationId"] as? String
+      else {
+        fail(result, error: CaptureServiceError.invalidMedia)
+        return
+      }
+      capture.stop(operationId: operationId) { outcome in
+        self.finish(result, outcome.map(\.dictionary))
+      }
+    case "pickVideo":
+      guard let arguments = call.arguments as? [String: Any],
+        let operationId = arguments["operationId"] as? String,
+        let presenter = Self.topViewController()
+      else {
+        fail(result, error: CaptureServiceError.unavailable)
+        return
+      }
+      capture.pickVideo(operationId: operationId, presenter: presenter) { outcome in
+        switch outcome {
+        case .success(let payload): self.succeed(result, value: payload?.dictionary)
+        case .failure(let error): self.fail(result, error: error)
+        }
+      }
+    case "inspectStaged":
+      guard let arguments = call.arguments as? [String: Any],
+        let path = arguments["path"] as? String
+      else {
+        fail(result, error: CaptureServiceError.invalidMedia)
+        return
+      }
+      Task {
+        do { succeed(result, value: try await capture.inspectStaged(path: path).dictionary) }
+        catch { fail(result, error: error) }
+      }
+    case "disposeCapture":
+      capture.dispose { self.succeed(result, value: nil) }
     case "analyze":
       complete(result) {
         let request = try self.decode(MediaAnalysisRequest.self, call.arguments)
@@ -132,6 +216,13 @@ final class MediaPlugin: NSObject, FlutterPlugin {
     return dictionary
   }
 
+  private func finish<Value>(_ result: @escaping FlutterResult, _ outcome: Result<Value, Error>) {
+    switch outcome {
+    case .success(let value): succeed(result, value: value)
+    case .failure(let error): fail(result, error: error)
+    }
+  }
+
   private func succeed(_ result: @escaping FlutterResult, value: Any?) {
     DispatchQueue.main.async { result(value) }
   }
@@ -140,12 +231,43 @@ final class MediaPlugin: NSObject, FlutterPlugin {
     DispatchQueue.main.async {
       result(
         FlutterError(
-          code: "media_error",
+          code: (error as? CaptureServiceError)?.flutterCode ?? "media_error",
           message: String(describing: error),
           details: nil
         )
       )
     }
+  }
+
+  private static func topViewController() -> UIViewController? {
+    let root = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap(\.windows)
+      .first(where: \.isKeyWindow)?
+      .rootViewController
+    var current = root
+    while let presented = current?.presentedViewController { current = presented }
+    return current
+  }
+}
+
+final class MediaEventStreamHandler: NSObject, FlutterStreamHandler {
+  private var sink: FlutterEventSink?
+
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
+    -> FlutterError?
+  {
+    sink = events
+    return nil
+  }
+
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    sink = nil
+    return nil
+  }
+
+  func emit(_ event: [String: Any]) {
+    DispatchQueue.main.async { [weak self] in self?.sink?(event) }
   }
 }
 
@@ -238,6 +360,31 @@ struct ManagedMediaStore {
       throw VideoRenderError.unsupportedContract
     }
     return String(standardized.path.dropFirst(root.path.count + 1))
+  }
+
+  func newStagingURL(extension fileExtension: String) throws -> URL {
+    let safeExtension = fileExtension.lowercased()
+    guard !safeExtension.isEmpty,
+      safeExtension.count <= 10,
+      safeExtension.unicodeScalars.allSatisfy(CharacterSet.alphanumerics.contains)
+    else { throw CaptureServiceError.invalidMedia }
+    return try prepareRoot()
+      .appendingPathComponent("staging", isDirectory: true)
+      .appendingPathComponent("\(UUID().uuidString.lowercased()).\(safeExtension)")
+  }
+
+  func resolveStaged(path: String) throws -> URL {
+    let root = try prepareRoot().resolvingSymlinksInPath()
+    let staging = root.appendingPathComponent("staging", isDirectory: true)
+      .resolvingSymlinksInPath()
+    let candidate = URL(fileURLWithPath: path).standardizedFileURL
+    let resolved = candidate.resolvingSymlinksInPath()
+    let values = try candidate.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    guard resolved.path.hasPrefix(staging.path + "/"),
+      values.isRegularFile == true,
+      values.isSymbolicLink != true
+    else { throw CaptureServiceError.invalidMedia }
+    return resolved
   }
 
   private func safeRelativePath(_ path: String) -> Bool {

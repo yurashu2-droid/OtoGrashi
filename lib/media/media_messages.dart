@@ -1,6 +1,166 @@
+import '../domain/clip_asset.dart';
+
 enum SuggestedRole { transient, sustain, texture }
 
 enum RenderQuality { preview, full }
+
+enum MediaEventType { recording, progress, completed, interrupted, failed }
+
+enum MediaCaptureErrorCode {
+  permissionDenied,
+  unavailable,
+  interrupted,
+  incompleteCapture,
+  noAudio,
+  tooShort,
+  invalidMedia,
+  cancelled,
+}
+
+final class MediaCaptureException implements Exception {
+  const MediaCaptureException(this.code, this.message);
+
+  final MediaCaptureErrorCode code;
+  final String message;
+
+  @override
+  String toString() => 'MediaCaptureException(${code.name}): $message';
+}
+
+final class CaptureHandle {
+  const CaptureHandle({required this.previewViewType});
+
+  factory CaptureHandle.fromJson(Map<String, Object?> json) {
+    try {
+      return CaptureHandle(previewViewType: json['previewViewType'] as String);
+    } on TypeError {
+      throw const MediaContractException('Malformed capture handle.');
+    }
+  }
+
+  final String previewViewType;
+}
+
+class InspectedMedia {
+  InspectedMedia({
+    required this.durationUs,
+    required this.audioTrackStartUs,
+    required this.width,
+    required this.height,
+    required this.rotation,
+  }) {
+    if (durationUs < 300000 ||
+        audioTrackStartUs < 0 ||
+        width <= 0 ||
+        height <= 0 ||
+        !const <int>{0, 90, 180, 270}.contains(rotation)) {
+      throw const MediaContractException('Inspected media is invalid.');
+    }
+  }
+
+  factory InspectedMedia.fromJson(Map<String, Object?> json) {
+    try {
+      return InspectedMedia(
+        durationUs: json['durationUs'] as int,
+        audioTrackStartUs: json['audioTrackStartUs'] as int,
+        width: json['width'] as int,
+        height: json['height'] as int,
+        rotation: json['rotation'] as int,
+      );
+    } on TypeError {
+      throw const MediaContractException('Malformed inspected media.');
+    }
+  }
+
+  final int durationUs;
+  final int audioTrackStartUs;
+  final int width;
+  final int height;
+  final int rotation;
+}
+
+final class CapturedMedia extends InspectedMedia {
+  CapturedMedia({
+    required this.operationId,
+    required this.assetId,
+    required this.relativePath,
+    required super.durationUs,
+    required super.audioTrackStartUs,
+    required super.width,
+    required super.height,
+    required super.rotation,
+  }) {
+    if (operationId.isEmpty ||
+        assetId.isEmpty ||
+        !relativePath.startsWith('staging/') ||
+        relativePath.contains(r'\') ||
+        relativePath.split('/').contains('..')) {
+      throw const MediaContractException('Captured media identity is invalid.');
+    }
+  }
+
+  factory CapturedMedia.fromJson(Map<String, Object?> json) {
+    try {
+      return CapturedMedia(
+        operationId: json['operationId'] as String,
+        assetId: json['assetId'] as String,
+        relativePath: json['relativePath'] as String,
+        durationUs: json['durationUs'] as int,
+        audioTrackStartUs: json['audioTrackStartUs'] as int,
+        width: json['width'] as int,
+        height: json['height'] as int,
+        rotation: json['rotation'] as int,
+      );
+    } on TypeError {
+      throw const MediaContractException('Malformed captured media.');
+    }
+  }
+
+  final String operationId;
+  final String assetId;
+  final String relativePath;
+}
+
+final class MediaEvent {
+  const MediaEvent({
+    required this.operationId,
+    required this.type,
+    this.progress,
+    this.errorCode,
+  });
+
+  factory MediaEvent.fromJson(Map<String, Object?> json) {
+    final type = MediaEventType.values
+        .where((value) => value.name == json['type'])
+        .firstOrNull;
+    if (type == null) {
+      throw const MediaContractException('Unsupported media event.');
+    }
+    try {
+      final event = MediaEvent(
+        operationId: json['operationId'] as String,
+        type: type,
+        progress: (json['progress'] as num?)?.toDouble(),
+        errorCode: json['errorCode'] as String?,
+      );
+      if (event.operationId.isEmpty ||
+          (event.progress != null &&
+              (!event.progress!.isFinite ||
+                  event.progress! < 0 ||
+                  event.progress! > 1))) {
+        throw const MediaContractException('Invalid media event.');
+      }
+      return event;
+    } on TypeError {
+      throw const MediaContractException('Malformed media event.');
+    }
+  }
+
+  final String operationId;
+  final MediaEventType type;
+  final double? progress;
+  final String? errorCode;
+}
 
 final class MediaContractException implements Exception {
   const MediaContractException(this.message);
@@ -47,6 +207,15 @@ final class MediaAnalysisRequest {
       throw const MediaContractException('Malformed analysis request JSON.');
     }
   }
+
+  factory MediaAnalysisRequest.forAsset(ClipAsset asset) =>
+      MediaAnalysisRequest(
+        assetId: asset.id,
+        relativePath: asset.relativePath,
+        selectionStartUs: asset.selectionStartUs,
+        selectionDurationUs: asset.selectionDurationUs,
+        audioTrackStartUs: asset.audioTrackStartUs,
+      );
 
   static const int schemaVersion = 1;
   final String assetId;

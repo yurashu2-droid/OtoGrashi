@@ -18,6 +18,9 @@
 		A60000030000000000000003 /* VideoRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000040000000000000004 /* VideoRenderer.swift */; };
 		A60000050000000000000005 /* MediaValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000060000000000000006 /* MediaValidator.swift */; };
 		A60000070000000000000007 /* MediaPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60000080000000000000008 /* MediaPlugin.swift */; };
+		A70000010000000000000001 /* CaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A70000020000000000000002 /* CaptureService.swift */; };
+		A70000030000000000000003 /* AudioSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A70000040000000000000004 /* AudioSessionCoordinator.swift */; };
+		A70000050000000000000005 /* CaptureStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A70000060000000000000006 /* CaptureStateTests.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
@@ -63,6 +66,9 @@
 		A60000040000000000000004 /* VideoRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRenderer.swift; sourceTree = "<group>"; };
 		A60000060000000000000006 /* MediaValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaValidator.swift; sourceTree = "<group>"; };
 		A60000080000000000000008 /* MediaPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPlugin.swift; sourceTree = "<group>"; };
+		A70000020000000000000002 /* CaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureService.swift; sourceTree = "<group>"; };
+		A70000040000000000000004 /* AudioSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionCoordinator.swift; sourceTree = "<group>"; };
+		A70000060000000000000006 /* CaptureStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureStateTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -97,6 +103,7 @@
 				331C807B294A618700263BE5 /* AudioAnalyzerTests.swift */,
 				A50000020000000000000002 /* AudioRendererTests.swift */,
 				A60000020000000000000002 /* VideoRendererTests.swift */,
+				A70000060000000000000006 /* CaptureStateTests.swift */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
@@ -104,8 +111,10 @@
 		A40000030000000000000003 /* Media */ = {
 			isa = PBXGroup;
 			children = (
+				A70000040000000000000004 /* AudioSessionCoordinator.swift */,
 				A40000020000000000000002 /* AudioAnalyzer.swift */,
 				A50000120000000000000012 /* AudioRenderer.swift */,
+				A70000020000000000000002 /* CaptureService.swift */,
 				A50000140000000000000014 /* JobRegistry.swift */,
 				A50000160000000000000016 /* NativePCMReader.swift */,
 				A60000040000000000000004 /* VideoRenderer.swift */,
@@ -311,6 +320,7 @@
 				331C808B294A63AB00263BE5 /* AudioAnalyzerTests.swift in Sources */,
 				A50000010000000000000001 /* AudioRendererTests.swift in Sources */,
 				A60000010000000000000001 /* VideoRendererTests.swift in Sources */,
+				A70000050000000000000005 /* CaptureStateTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -318,8 +328,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A70000030000000000000003 /* AudioSessionCoordinator.swift in Sources */,
 				A40000010000000000000001 /* AudioAnalyzer.swift in Sources */,
 				A50000110000000000000011 /* AudioRenderer.swift in Sources */,
+				A70000010000000000000001 /* CaptureService.swift in Sources */,
 				A50000130000000000000013 /* JobRegistry.swift in Sources */,
 				A50000150000000000000015 /* NativePCMReader.swift in Sources */,
 				A60000030000000000000003 /* VideoRenderer.swift in Sources */,

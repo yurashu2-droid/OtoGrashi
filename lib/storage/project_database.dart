@@ -78,6 +78,7 @@ final class ProjectDatabase {
           id TEXT NOT NULL PRIMARY KEY,
           relative_path TEXT NOT NULL UNIQUE,
           duration_us INTEGER NOT NULL,
+          audio_track_start_us INTEGER NOT NULL DEFAULT 0,
           selection_start_us INTEGER NOT NULL,
           selection_duration_us INTEGER NOT NULL,
           width INTEGER NOT NULL,
@@ -115,8 +116,20 @@ final class ProjectDatabase {
           relative_path TEXT NOT NULL,
           created_at TEXT NOT NULL
         ) STRICT
-      ''')
-      ..execute('PRAGMA user_version = 1');
+      ''');
+    final currentVersion = _connection.userVersion;
+    final assetColumns = _connection
+        .select("PRAGMA table_info('assets')")
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (!assetColumns.contains('audio_track_start_us')) {
+      _connection.execute(
+        'ALTER TABLE assets ADD COLUMN audio_track_start_us INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    if (currentVersion < 2) {
+      _connection.execute('PRAGMA user_version = 2');
+    }
   }
 
   Future<void> _recoverManagedFiles() async {
