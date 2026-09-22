@@ -6,7 +6,18 @@ enum AudioAnalysisError: Error, Equatable {
   case emptyAudio
   case conversionFailed
   case selectionOutOfBounds
+  case noAudioOverlap
+  case timestampOutOfRange
   case unsupportedContract
+
+  var recoverable: Bool {
+    switch self {
+    case .selectionOutOfBounds, .noAudioOverlap, .timestampOutOfRange:
+      return true
+    default:
+      return false
+    }
+  }
 }
 
 enum SuggestedRole: String, Codable, Equatable {
@@ -33,10 +44,14 @@ struct MediaAnalysisRequest: Codable, Equatable {
     let selectionStartUs = try container.decode(Int64.self, forKey: .selectionStartUs)
     let selectionDurationUs = try container.decode(Int64.self, forKey: .selectionDurationUs)
     let audioTrackStartUs = try container.decode(Int64.self, forKey: .audioTrackStartUs)
+    let (_, selectionEndOverflow) = selectionStartUs.addingReportingOverflow(
+      selectionDurationUs
+    )
+    guard !selectionEndOverflow else { throw AudioAnalysisError.timestampOutOfRange }
     guard schemaVersion == Self.supportedSchemaVersion,
       !assetId.isEmpty, !relativePath.isEmpty,
       audioTrackStartUs >= 0,
-      selectionStartUs >= audioTrackStartUs,
+      selectionStartUs >= 0,
       selectionDurationUs > 0
     else { throw AudioAnalysisError.unsupportedContract }
     self.schemaVersion = schemaVersion
@@ -73,9 +88,12 @@ struct AnalyzedClip: Codable, Equatable {
     suggestedRole: SuggestedRole
   ) throws {
     guard !assetId.isEmpty else { throw AudioAnalysisError.emptyAssetId }
+    let (sourceEndSample, sourceEndOverflow) = sourceStartSample
+      .addingReportingOverflow(durationSamples)
+    guard !sourceEndOverflow else { throw AudioAnalysisError.timestampOutOfRange }
     guard sourceStartSample >= 0, durationSamples > 0,
       onsetSamples.allSatisfy({
-        $0 >= sourceStartSample && $0 < sourceStartSample + durationSamples
+        $0 >= sourceStartSample && $0 < sourceEndSample
       }),
       peak.isFinite, rms.isFinite,
       (0...1).contains(peak), (0...1).contains(rms)
@@ -158,19 +176,38 @@ struct AudioAnalyzer {
   ) throws -> AnalyzedClip {
     let allSamples = try readMono48k(url: url)
     guard audioTrackStartUs >= 0,
-      selectionStartUs >= audioTrackStartUs,
+      selectionStartUs >= 0,
       selectionDurationUs == nil || selectionDurationUs! > 0
     else { throw AudioAnalysisError.selectionOutOfBounds }
-    let localStartUs = selectionStartUs - audioTrackStartUs
-    let start = Int(localStartUs * Int64(Self.sampleRate) / 1_000_000)
-    let requestedDuration = selectionDurationUs.map {
-      Int($0 * Int64(Self.sampleRate) / 1_000_000)
+    let selectionEndUs: Int64?
+    if let selectionDurationUs {
+      let (end, overflow) = selectionStartUs.addingReportingOverflow(selectionDurationUs)
+      guard !overflow else { throw AudioAnalysisError.timestampOutOfRange }
+      selectionEndUs = end
+    } else {
+      selectionEndUs = nil
     }
-    let end = requestedDuration.map { start + $0 } ?? allSamples.count
-    guard start < allSamples.count, end > start, end <= allSamples.count else {
-      throw AudioAnalysisError.selectionOutOfBounds
+    let selectionStartSample = try Self.samples(fromMicroseconds: selectionStartUs)
+    let selectionEndSample = try selectionEndUs.map {
+      try Self.samples(fromMicroseconds: $0)
     }
-    let sourceStart = Int(selectionStartUs * Int64(Self.sampleRate) / 1_000_000)
+    let trackStartSample = try Self.samples(fromMicroseconds: audioTrackStartUs)
+    guard let audioLength = Int64(exactly: allSamples.count) else {
+      throw AudioAnalysisError.timestampOutOfRange
+    }
+    let (audioEndSample, audioEndOverflow) = trackStartSample.addingReportingOverflow(
+      audioLength
+    )
+    guard !audioEndOverflow else { throw AudioAnalysisError.timestampOutOfRange }
+    let intersectionStart = max(selectionStartSample, trackStartSample)
+    let intersectionEnd = min(selectionEndSample ?? audioEndSample, audioEndSample)
+    guard intersectionEnd > intersectionStart else {
+      throw AudioAnalysisError.noAudioOverlap
+    }
+    guard let start = Int(exactly: intersectionStart - trackStartSample),
+      let end = Int(exactly: intersectionEnd - trackStartSample),
+      let sourceStart = Int(exactly: intersectionStart)
+    else { throw AudioAnalysisError.timestampOutOfRange }
     return try analyze(
       samples: Array(allSamples[start..<end]),
       assetId: assetId,
@@ -263,6 +300,7 @@ struct AudioAnalyzer {
     guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
       throw AudioAnalysisError.conversionFailed
     }
+    converter.downmix = true
     let expectedFrames = Int(ceil(Double(input.frameLength) * targetFormat.sampleRate
       / sourceFormat.sampleRate)) + 32
     guard let output = AVAudioPCMBuffer(
@@ -286,5 +324,25 @@ struct AudioAnalyzer {
       let channel = output.floatChannelData?[0]
     else { throw AudioAnalysisError.conversionFailed }
     return Array(UnsafeBufferPointer(start: channel, count: Int(output.frameLength)))
+  }
+
+  private static func samples(fromMicroseconds microseconds: Int64) throws -> Int64 {
+    guard microseconds >= 0 else { throw AudioAnalysisError.timestampOutOfRange }
+    let wholeSeconds = microseconds / 1_000_000
+    let remainingMicroseconds = microseconds % 1_000_000
+    let (wholeSamples, wholeOverflow) = wholeSeconds.multipliedReportingOverflow(
+      by: Int64(sampleRate)
+    )
+    let (fractionProduct, fractionOverflow) = remainingMicroseconds
+      .multipliedReportingOverflow(by: Int64(sampleRate))
+    guard !wholeOverflow, !fractionOverflow else {
+      throw AudioAnalysisError.timestampOutOfRange
+    }
+    let fractionalSamples = fractionProduct / 1_000_000
+    let (samples, additionOverflow) = wholeSamples.addingReportingOverflow(
+      fractionalSamples
+    )
+    guard !additionOverflow else { throw AudioAnalysisError.timestampOutOfRange }
+    return samples
   }
 }

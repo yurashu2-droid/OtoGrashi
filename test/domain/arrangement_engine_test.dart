@@ -221,6 +221,19 @@ void main() {
         ),
         throwsA(isA<MediaContractException>()),
       );
+      expect(
+        () => AnalyzedClip(
+          assetId: 'overflow',
+          sourceStartSample: 9223372036854775807,
+          durationSamples: 1,
+          sampleRate: 48000,
+          onsetSamples: const [],
+          peak: 0.5,
+          rms: 0.2,
+          suggestedRole: SuggestedRole.sustain,
+        ),
+        throwsA(isA<MediaContractException>()),
+      );
       final valid = arrange(
         clips: threeFixtures,
         style: ArrangementStyle.sparse,
@@ -260,6 +273,33 @@ void main() {
     expect(
       MediaAnalysisRequest.fromJson(request.toJson()).toJson(),
       request.toJson(),
+    );
+  });
+
+  test('video selection may begin before a delayed audio track', () {
+    final request = MediaAnalysisRequest(
+      assetId: 'delayed-audio',
+      relativePath: 'assets/delayed.mov',
+      selectionStartUs: 0,
+      selectionDurationUs: 20000,
+      audioTrackStartUs: 10000,
+    );
+
+    expect(request.selectionStartUs, 0);
+    expect(request.audioTrackStartUs, 10000);
+  });
+
+  test('analysis request rejects timestamp end overflow', () {
+    expect(
+      () => MediaAnalysisRequest.fromJson({
+        'schemaVersion': 1,
+        'assetId': 'huge',
+        'relativePath': 'assets/huge.mov',
+        'selectionStartUs': 9223372036854775807,
+        'selectionDurationUs': 1,
+        'audioTrackStartUs': 0,
+      }),
+      throwsA(isA<MediaContractException>()),
     );
   });
 
@@ -320,6 +360,21 @@ void main() {
       File('test/fixtures/arrangement_seed_0_v1.json').readAsStringSync(),
     );
     expect(actual, expected);
+  });
+
+  test('seeds that normalize to uint32 zero use the defined nonzero state', () {
+    final zero = arrange(
+      clips: threeFixtures,
+      style: ArrangementStyle.sparse,
+      seed: 0,
+    );
+    final wrapped = arrange(
+      clips: threeFixtures,
+      style: ArrangementStyle.sparse,
+      seed: 0x100000000,
+    );
+
+    expect(wrapped.toJson(), zero.toJson());
   });
 
   test('checked-in analysis JSON round trips through the Dart contract', () {

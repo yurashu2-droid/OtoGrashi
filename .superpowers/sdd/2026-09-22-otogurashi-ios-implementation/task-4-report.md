@@ -52,3 +52,12 @@ Swift/XCTest cannot run on this Windows host. The tests and Xcode registration a
 
 - Synthetic unit signals cover silence, mixed energy, separated impulses, sustained audio, resampling, and selection bounds. Real-world listening evaluation remains Task 5 evidence and is not claimed here.
 - The gateway is a contract only. Task 3 will connect capture/import inspection; Tasks 5/6 will consume these contracts for real audio/video rendering.
+
+## Review fix round 1
+
+- Enabled `AVAudioConverter.downmix` explicitly and changed the stereo conversion regression to use a silent left channel plus audible right channel, so channel remapping cannot masquerade as a successful downmix.
+- Allowed a video selection to begin before a delayed audio track. Native analysis now intersects the requested video interval with the actual audio interval, reports `.noAudioOverlap` as recoverable, and records the intersection's absolute media sample as `sourceStartSample`.
+- Replaced direct timestamp multiplication/addition with overflow-aware Int64 conversion and checked interval ends. Dart and Swift serialized requests reject overflowing selection ends; analyzed-source end validation is checked too.
+- Normalized the arrangement seed to uint32 before testing for zero. `0x100000000` now uses the specified `0x6d2b79f5` state and matches the unchanged seed-zero golden.
+- Added delayed-track, no-overlap, huge-timestamp, right-only stereo, analyzed-range overflow, and uint32-wrapped seed regressions.
+- Fresh local evidence after the fixes: `flutter test test/domain` 15/15, full `flutter test` 28/28, and `flutter analyze --fatal-infos` with no issues. Native XCTest remains pending on macOS CI because this host is Windows.

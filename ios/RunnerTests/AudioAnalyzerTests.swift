@@ -55,7 +55,7 @@ final class AudioAnalyzerTests: XCTestCase {
     XCTAssertEqual(result.suggestedRole, .sustain)
   }
 
-  func testAVFoundationConversionProducesMono48kAndRejectsOutOfBoundsSelection() throws {
+  func testAVFoundationDownmixUsesRightOnlyStereoAndProducesMono48k() throws {
     let url = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString)
       .appendingPathExtension("caf")
@@ -69,7 +69,7 @@ final class AudioAnalyzerTests: XCTestCase {
     for channel in 0..<2 {
       let data = try XCTUnwrap(buffer.floatChannelData?[channel])
       for frame in 0..<4_410 {
-        data[frame] = sin(Float(frame) * 0.05) * 0.25
+        data[frame] = channel == 0 ? 0 : sin(Float(frame) * 0.05) * 0.5
       }
     }
     try file.write(from: buffer)
@@ -77,6 +77,7 @@ final class AudioAnalyzerTests: XCTestCase {
     let result = try analyzer.analyze(url: url, assetId: "file")
     XCTAssertEqual(result.sampleRate, 48_000)
     XCTAssertLessThanOrEqual(abs(result.durationSamples - 4_800), 1)
+    XCTAssertGreaterThan(result.peak, 0.1)
     let selected = try analyzer.analyze(
       url: url,
       assetId: "selected",
@@ -94,7 +95,52 @@ final class AudioAnalyzerTests: XCTestCase {
         selectionDurationUs: 100_000
       )
     ) { error in
-      XCTAssertEqual(error as? AudioAnalysisError, .selectionOutOfBounds)
+      XCTAssertEqual(error as? AudioAnalysisError, .noAudioOverlap)
+    }
+  }
+
+  func testSelectionIntersectsDelayedAudioAndPreservesAbsoluteSourceTime() throws {
+    let url = try makeMonoFile(frameCount: 4_800, sampleRate: 48_000)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let result = try analyzer.analyze(
+      url: url,
+      assetId: "delayed",
+      selectionStartUs: 0,
+      selectionDurationUs: 50_000,
+      audioTrackStartUs: 30_000
+    )
+
+    XCTAssertEqual(result.sourceStartSample, 1_440)
+    XCTAssertEqual(result.durationSamples, 960)
+    XCTAssertThrowsError(
+      try analyzer.analyze(
+        url: url,
+        assetId: "no-overlap",
+        selectionStartUs: 0,
+        selectionDurationUs: 20_000,
+        audioTrackStartUs: 30_000
+      )
+    ) { error in
+      XCTAssertEqual(error as? AudioAnalysisError, .noAudioOverlap)
+      XCTAssertEqual((error as? AudioAnalysisError)?.recoverable, true)
+    }
+  }
+
+  func testHugeTimestampsAreRejectedWithoutIntegerTrap() throws {
+    let url = try makeMonoFile(frameCount: 480, sampleRate: 48_000)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    XCTAssertThrowsError(
+      try analyzer.analyze(
+        url: url,
+        assetId: "overflow",
+        selectionStartUs: Int64.max,
+        selectionDurationUs: 1
+      )
+    ) { error in
+      XCTAssertEqual(error as? AudioAnalysisError, .timestampOutOfRange)
+      XCTAssertEqual((error as? AudioAnalysisError)?.recoverable, true)
     }
   }
 
@@ -124,6 +170,18 @@ final class AudioAnalyzerTests: XCTestCase {
         from: JSONSerialization.data(withJSONObject: unsupported)
       )
     )
+
+    unsupported["schemaVersion"] = 1
+    unsupported["sourceStartSample"] = Int64.max
+    unsupported["durationSamples"] = 1
+    XCTAssertThrowsError(
+      try JSONDecoder().decode(
+        AnalyzedClip.self,
+        from: JSONSerialization.data(withJSONObject: unsupported)
+      )
+    ) { error in
+      XCTAssertEqual(error as? AudioAnalysisError, .timestampOutOfRange)
+    }
   }
 
   func testDartAnalysisRequestFixturePreservesSelectionAndTrackOrigin() throws {
@@ -145,5 +203,48 @@ final class AudioAnalyzerTests: XCTestCase {
       try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary,
       try JSONSerialization.jsonObject(with: data) as? NSDictionary
     )
+
+    var delayed = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: data) as? [String: Any]
+    )
+    delayed["selectionStartUs"] = 0
+    delayed["audioTrackStartUs"] = 10_000
+    XCTAssertNoThrow(
+      try JSONDecoder().decode(
+        MediaAnalysisRequest.self,
+        from: JSONSerialization.data(withJSONObject: delayed)
+      )
+    )
+
+    delayed["selectionStartUs"] = Int64.max
+    delayed["selectionDurationUs"] = 1
+    XCTAssertThrowsError(
+      try JSONDecoder().decode(
+        MediaAnalysisRequest.self,
+        from: JSONSerialization.data(withJSONObject: delayed)
+      )
+    ) { error in
+      XCTAssertEqual(error as? AudioAnalysisError, .timestampOutOfRange)
+    }
+  }
+
+  private func makeMonoFile(frameCount: Int, sampleRate: Double) throws -> URL {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathExtension("caf")
+    let format = try XCTUnwrap(
+      AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
+    )
+    let file = try AVAudioFile(forWriting: url, settings: format.settings)
+    let buffer = try XCTUnwrap(
+      AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))
+    )
+    buffer.frameLength = AVAudioFrameCount(frameCount)
+    let data = try XCTUnwrap(buffer.floatChannelData?[0])
+    for frame in 0..<frameCount {
+      data[frame] = 0.25
+    }
+    try file.write(from: buffer)
+    return url
   }
 }

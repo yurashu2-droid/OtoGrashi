@@ -238,8 +238,13 @@ const _templates = <ArrangementStyle, _ArrangementTemplate>{
 
 final class _XorShift32 {
   _XorShift32(int seed)
-    : initialState = seed == 0 ? 0x6d2b79f5 : seed & 0xffffffff,
-      _state = seed == 0 ? 0x6d2b79f5 : seed & 0xffffffff;
+    : initialState = _normalizeSeed(seed),
+      _state = _normalizeSeed(seed);
+
+  static int _normalizeSeed(int seed) {
+    final normalized = seed & 0xffffffff;
+    return normalized == 0 ? 0x6d2b79f5 : normalized;
+  }
 
   final int initialState;
   int _state;

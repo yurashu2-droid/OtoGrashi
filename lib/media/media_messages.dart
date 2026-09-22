@@ -21,8 +21,12 @@ final class MediaAnalysisRequest {
       throw const MediaContractException('Asset identity cannot be empty.');
     }
     if (audioTrackStartUs < 0 ||
-        selectionStartUs < audioTrackStartUs ||
-        selectionDurationUs <= 0) {
+        audioTrackStartUs > _maxInt64 ||
+        selectionStartUs < 0 ||
+        selectionStartUs > _maxInt64 ||
+        selectionDurationUs <= 0 ||
+        selectionDurationUs > _maxInt64 ||
+        selectionStartUs > _maxInt64 - selectionDurationUs) {
       throw const MediaContractException('Analysis selection is out of range.');
     }
   }
@@ -59,6 +63,8 @@ final class MediaAnalysisRequest {
   };
 }
 
+const int _maxInt64 = 0x7fffffffffffffff;
+
 final class AnalyzedClip {
   AnalyzedClip({
     required this.assetId,
@@ -71,7 +77,6 @@ final class AnalyzedClip {
     required this.suggestedRole,
     this.analysisVersion = 1,
   }) : onsetSamples = List<int>.unmodifiable(onsetSamples) {
-    final sourceEnd = sourceStartSample + durationSamples;
     if (assetId.isEmpty) {
       throw const MediaContractException('Asset id cannot be empty.');
     }
@@ -79,9 +84,14 @@ final class AnalyzedClip {
       throw const MediaContractException('Unsupported analysis contract.');
     }
     if (sourceStartSample < 0 ||
+        sourceStartSample > _maxInt64 ||
         durationSamples <= 0 ||
+        durationSamples > _maxInt64 ||
+        sourceStartSample > _maxInt64 - durationSamples ||
         onsetSamples.any(
-          (sample) => sample < sourceStartSample || sample >= sourceEnd,
+          (sample) =>
+              sample < sourceStartSample ||
+              sample >= sourceStartSample + durationSamples,
         )) {
       throw const MediaContractException('Analysis sample range is invalid.');
     }
