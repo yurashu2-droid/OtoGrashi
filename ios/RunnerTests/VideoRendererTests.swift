@@ -38,7 +38,8 @@ final class VideoRendererTests: XCTestCase {
     let renderer = VideoRenderer()
     for url in fixtures {
       let asset = AVURLAsset(url: url)
-      let track = try XCTUnwrap(try await asset.loadTracks(withMediaType: .video).first)
+      let tracks = try await asset.loadTracks(withMediaType: .video)
+      let track = try XCTUnwrap(tracks.first)
       let timestamps = try renderer.sourceTimestamps(asset: asset, track: track)
       XCTAssertFalse(timestamps.isEmpty)
       XCTAssertTrue(timestamps.allSatisfy(\.isNumeric))
