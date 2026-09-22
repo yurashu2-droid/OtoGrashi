@@ -174,7 +174,6 @@ struct AudioAnalyzer {
     selectionDurationUs: Int64? = nil,
     audioTrackStartUs: Int64 = 0
   ) throws -> AnalyzedClip {
-    let allSamples = try readMono48k(url: url)
     guard audioTrackStartUs >= 0,
       selectionStartUs >= 0,
       selectionDurationUs == nil || selectionDurationUs! > 0
@@ -192,7 +191,13 @@ struct AudioAnalyzer {
       try Self.samples(fromMicroseconds: $0)
     }
     let trackStartSample = try Self.samples(fromMicroseconds: audioTrackStartUs)
-    guard let audioLength = Int64(exactly: allSamples.count) else {
+    let decodedTrackRange: NativePCMReader.TrackRange
+    do {
+      decodedTrackRange = try NativePCMReader().trackRange(url: url)
+    } catch {
+      throw AudioAnalysisError.conversionFailed
+    }
+    guard let audioLength = Int64(exactly: decodedTrackRange.durationSamples) else {
       throw AudioAnalysisError.timestampOutOfRange
     }
     let (audioEndSample, audioEndOverflow) = trackStartSample.addingReportingOverflow(
@@ -205,11 +210,22 @@ struct AudioAnalyzer {
       throw AudioAnalysisError.noAudioOverlap
     }
     guard let start = Int(exactly: intersectionStart - trackStartSample),
-      let end = Int(exactly: intersectionEnd - trackStartSample),
+      let duration = Int(exactly: intersectionEnd - intersectionStart),
       let sourceStart = Int(exactly: intersectionStart)
     else { throw AudioAnalysisError.timestampOutOfRange }
+    let selectedSamples: [Float]
+    do {
+      selectedSamples = try NativePCMReader().readTrackOffset(
+        url: url,
+        offsetSamples: start,
+        durationSamples: duration
+      )
+    } catch {
+      throw AudioAnalysisError.conversionFailed
+    }
+    guard !selectedSamples.isEmpty else { throw AudioAnalysisError.emptyAudio }
     return try analyze(
-      samples: Array(allSamples[start..<end]),
+      samples: selectedSamples,
       assetId: assetId,
       sourceStartSample: sourceStart
     )
@@ -270,60 +286,6 @@ struct AudioAnalyzer {
       onsetSamples: onsets,
       suggestedRole: role
     )
-  }
-
-  private func readMono48k(url: URL) throws -> [Float] {
-    let sourceFile = try AVAudioFile(forReading: url)
-    let sourceFormat = sourceFile.processingFormat
-    guard sourceFile.length > 0,
-      let targetFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: Double(Self.sampleRate),
-        channels: 1,
-        interleaved: false
-      ),
-      let input = AVAudioPCMBuffer(
-        pcmFormat: sourceFormat,
-        frameCapacity: AVAudioFrameCount(sourceFile.length)
-      )
-    else { throw AudioAnalysisError.emptyAudio }
-    try sourceFile.read(into: input)
-
-    if sourceFormat.sampleRate == targetFormat.sampleRate,
-      sourceFormat.channelCount == 1,
-      sourceFormat.commonFormat == .pcmFormatFloat32,
-      let channel = input.floatChannelData?[0]
-    {
-      return Array(UnsafeBufferPointer(start: channel, count: Int(input.frameLength)))
-    }
-
-    guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
-      throw AudioAnalysisError.conversionFailed
-    }
-    converter.downmix = true
-    let expectedFrames = Int(ceil(Double(input.frameLength) * targetFormat.sampleRate
-      / sourceFormat.sampleRate)) + 32
-    guard let output = AVAudioPCMBuffer(
-      pcmFormat: targetFormat,
-      frameCapacity: AVAudioFrameCount(expectedFrames)
-    ) else { throw AudioAnalysisError.conversionFailed }
-    var suppliedInput = false
-    var conversionError: NSError?
-    let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
-      if suppliedInput {
-        inputStatus.pointee = .endOfStream
-        return nil
-      }
-      suppliedInput = true
-      inputStatus.pointee = .haveData
-      return input
-    }
-    guard conversionError == nil,
-      status != .error,
-      output.frameLength > 0,
-      let channel = output.floatChannelData?[0]
-    else { throw AudioAnalysisError.conversionFailed }
-    return Array(UnsafeBufferPointer(start: channel, count: Int(output.frameLength)))
   }
 
   private static func samples(fromMicroseconds microseconds: Int64) throws -> Int64 {

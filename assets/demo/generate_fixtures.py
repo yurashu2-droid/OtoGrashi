@@ -1,0 +1,191 @@
+"""Generate OtoGrashi's deterministic synthetic practice fixtures.
+
+These are authored test signals, not captured household recordings.  The
+runtime never invokes Python or FFmpeg; this script is only for regenerating
+the small checked-in development fixtures.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import wave
+
+import numpy as np
+from PIL import Image, ImageDraw
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "source"
+RATE = 48_000
+FFMPEG = Path(
+    os.environ.get(
+        "OTOGRASHI_FFMPEG",
+        r"C:\Users\raito\.cache\otogurashi-tools\imageio_ffmpeg\binaries\ffmpeg-win-x86_64-v7.1.exe",
+    )
+)
+
+
+def tap() -> np.ndarray:
+    samples = np.zeros(RATE, dtype=np.float32)
+    start = RATE // 4
+    length = 4_800
+    time = np.arange(length, dtype=np.float64) / RATE
+    rng = np.random.default_rng(8_153)
+    body = (np.sin(2 * np.pi * 880 * time) + rng.normal(0, 0.15, length))
+    samples[start : start + length] = (body * np.exp(-time * 42) * 0.72).astype(np.float32)
+    return samples
+
+
+def sustain() -> np.ndarray:
+    time = np.arange(RATE, dtype=np.float64) / RATE
+    envelope = np.minimum(1, time / 0.03) * np.minimum(1, (1 - time) / 0.04)
+    return (
+        (np.sin(2 * np.pi * 220 * time) + 0.35 * np.sin(2 * np.pi * 330 * time))
+        * envelope
+        * 0.28
+    ).astype(np.float32)
+
+
+def texture() -> np.ndarray:
+    length = RATE * 3 // 2
+    rng = np.random.default_rng(22_092_026)
+    noise = rng.normal(0, 1, length)
+    smooth = np.convolve(noise, np.ones(96) / 96, mode="same")
+    return (smooth * 0.025).astype(np.float32)
+
+
+def write_wav(path: Path, samples: np.ndarray) -> None:
+    pcm = np.clip(samples, -1, 1)
+    pcm = np.round(pcm * 32_767).astype("<i2")
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(RATE)
+        output.writeframes(pcm.tobytes())
+
+
+def draw_frames(name: str, frame_count: int, color: str, kind: str) -> Path:
+    directory = SOURCE / f".{name}-frames"
+    shutil.rmtree(directory, ignore_errors=True)
+    directory.mkdir()
+    background = color.removeprefix("0x")
+    rgb = tuple(int(background[index : index + 2], 16) for index in (0, 2, 4))
+    for frame in range(frame_count):
+        image = Image.new("RGB", (160, 90), rgb)
+        draw = ImageDraw.Draw(image)
+        if kind == "tap":
+            cue = 8
+            distance = abs(frame - cue)
+            radius = max(5, 24 - distance * 5)
+            y = 62 - max(0, cue - frame) * 6
+            draw.ellipse((80 - radius, y - radius, 80 + radius, y + radius), fill="white")
+            draw.line((42, 70, 118, 70), fill=(57, 38, 30), width=4)
+        elif kind == "sustain":
+            points = []
+            for x in range(160):
+                y = 45 + int(16 * np.sin((x + frame * 5) * 2 * np.pi / 80))
+                points.append((x, y))
+            draw.line(points, fill="white", width=4)
+            draw.ellipse((frame * 5 % 170 - 10, 36, frame * 5 % 170 + 8, 54), fill=(255, 224, 130))
+        else:
+            for column in range(8):
+                active = (frame // 3 + column) % 8 == 0
+                shade = (245, 238, 214) if active else (74, 83, 76)
+                x = 12 + column * 18
+                draw.rounded_rectangle((x, 20, x + 12, 70), radius=3, fill=shade)
+        image.save(directory / f"frame-{frame:03d}.png", optimize=True)
+    return directory
+
+
+def render_mp4(name: str, samples: np.ndarray, color: str, kind: str) -> Path:
+    wav = SOURCE / f".{name}.wav"
+    output = SOURCE / f"{name}.mp4"
+    write_wav(wav, samples)
+    duration = len(samples) / RATE
+    frames = draw_frames(name, int(round(duration * 30)), color, kind)
+    command = [
+        str(FFMPEG),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "image2",
+        "-framerate",
+        "30",
+        "-i",
+        str(frames / "frame-%03d.png"),
+        "-i",
+        str(wav),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryslow",
+        "-crf",
+        "35",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "64k",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(output),
+    ]
+    try:
+        subprocess.run(command, check=True)
+    finally:
+        wav.unlink(missing_ok=True)
+        shutil.rmtree(frames, ignore_errors=True)
+    return output
+
+
+def main() -> None:
+    if not FFMPEG.is_file():
+        raise SystemExit(f"FFmpeg not found: {FFMPEG}")
+    SOURCE.mkdir(parents=True, exist_ok=True)
+    definitions = [
+        ("synthetic-tap", tap(), "0xD67A63", "transient", "tap", 12_000),
+        ("synthetic-sustain", sustain(), "0x568EA3", "sustain", "sustain", 0),
+        ("synthetic-texture", texture(), "0x88937D", "texture", "texture", 0),
+    ]
+    fixtures = []
+    for name, samples, color, role, visual, cue_sample in definitions:
+        path = render_mp4(name, samples, color, visual)
+        fixtures.append(
+            {
+                "id": name,
+                "path": f"source/{path.name}",
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "durationSamples": len(samples),
+                "sampleRate": RATE,
+                "videoFrameRate": 30,
+                "videoCueFrame": (cue_sample * 30 + 24_000) // 48_000,
+                "visual": visual,
+                "suggestedAcousticRole": role,
+            }
+        )
+    manifest = {
+        "schemaVersion": 1,
+        "label": "Synthetic practice fixtures — not real household recordings",
+        "license": "CC0-1.0",
+        "provenance": (
+            "Authored for OtoGrashi from deterministic mathematical signals and "
+            "geometric animation by assets/demo/generate_fixtures.py. No third-party media."
+        ),
+        "fixtures": fixtures,
+    }
+    (ROOT / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+
+if __name__ == "__main__":
+    main()

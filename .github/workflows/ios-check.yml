@@ -106,6 +106,21 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee ci-logs/xctest.txt
 
+      - name: Summarize native test result bundle
+        if: always()
+        shell: bash
+        run: |
+          if [[ -d ci-artifacts/RunnerTests.xcresult ]]; then
+            xcrun xcresulttool get test-results summary \
+              --path ci-artifacts/RunnerTests.xcresult \
+              | tee ci-logs/xctest-summary.json
+            xcrun xcresulttool get test-results tests \
+              --path ci-artifacts/RunnerTests.xcresult \
+              | tee ci-logs/xctest-details.json
+          else
+            echo "RunnerTests.xcresult was not created" | tee ci-logs/xctest-summary.txt
+          fi
+
       - name: Upload validation evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

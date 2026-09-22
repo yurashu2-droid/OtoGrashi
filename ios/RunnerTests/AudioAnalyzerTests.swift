@@ -228,6 +228,28 @@ final class AudioAnalyzerTests: XCTestCase {
     }
   }
 
+  func testCheckedInSyntheticMP4UsesBoundedAudioTrackSelection() throws {
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let url = repository.appendingPathComponent(
+      "assets/demo/source/synthetic-tap.mp4"
+    )
+
+    let result = try analyzer.analyze(
+      url: url,
+      assetId: "synthetic-tap",
+      selectionStartUs: 250_000,
+      selectionDurationUs: 100_000
+    )
+
+    XCTAssertEqual(result.sourceStartSample, 12_000)
+    XCTAssertEqual(result.durationSamples, 4_800)
+    XCTAssertGreaterThan(result.peak, 0.1)
+    XCTAssertTrue(result.onsetSamples.allSatisfy { (12_000..<16_800).contains($0) })
+  }
+
   private func makeMonoFile(frameCount: Int, sampleRate: Double) throws -> URL {
     let url = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString)

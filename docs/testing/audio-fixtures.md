@@ -1,0 +1,28 @@
+# Audio fixture evidence
+
+The three files under `assets/demo/source` are deterministic synthetic audiovisual
+practice samples. They are not captured household recordings and do not count
+toward the product requirement to listen to 30 or more real object recordings.
+
+`assets/demo/generate_fixtures.py` creates the PCM signals and original geometric
+160×90, 30 fps frame sequences, then invokes the pinned development FFmpeg binary
+to mux them. The tap's expanding marker reaches its cue on frame 8, the nearest
+30 fps frame to audio sample 12000 using the product's half-up mapping. The
+sustain has a flowing wave and the texture has deterministic key pulses. Python
+and FFmpeg are fixture-generation tools only; iOS runtime analysis
+and rendering use AVFoundation. Set `OTOGRASHI_FFMPEG` to another FFmpeg 7.1
+binary when regenerating on a different machine.
+
+The checked-in manifest records duration, SHA-256, license, and provenance. All
+audio/video content is original mathematical output dedicated to CC0-1.0. The
+fixtures cover a decaying impact, a sustained two-tone sound, and quiet filtered
+noise. They support deterministic pipeline tests and demonstrations, but do not
+substitute for listening tests with real objects or validation on a physical iOS
+device.
+
+The manifest's `durationSamples` records the authored PCM timeline before AAC
+encoding. FFmpeg 7.1 decodes the checked-in files to 48,128, 48,128, and 72,704
+samples respectively because AAC priming/padding is codec/container behavior.
+Native tests therefore select and trim by presentation time. They do not assert
+that full-file compressed decode counts equal authored PCM counts. The renderer's
+own PCM output has the separate exact requirement of 720,000 frames at 48 kHz.

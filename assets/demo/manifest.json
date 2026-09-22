@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "label": "Synthetic practice fixtures — not real household recordings",
+  "license": "CC0-1.0",
+  "provenance": "Authored for OtoGrashi from deterministic mathematical signals and geometric animation by assets/demo/generate_fixtures.py. No third-party media.",
+  "fixtures": [
+    {
+      "id": "synthetic-tap",
+      "path": "source/synthetic-tap.mp4",
+      "sha256": "1fbb7be707193c3ae4826ab36eb2761d1107d0258e79d6a7dc52893d6b7a2ae4",
+      "durationSamples": 48000,
+      "sampleRate": 48000,
+      "videoFrameRate": 30,
+      "videoCueFrame": 8,
+      "visual": "tap",
+      "suggestedAcousticRole": "transient"
+    },
+    {
+      "id": "synthetic-sustain",
+      "path": "source/synthetic-sustain.mp4",
+      "sha256": "fbadd124e740b8973ff5c68a0c601970ff9af3bc09535f8c49edb0e047f6f94a",
+      "durationSamples": 48000,
+      "sampleRate": 48000,
+      "videoFrameRate": 30,
+      "videoCueFrame": 0,
+      "visual": "sustain",
+      "suggestedAcousticRole": "sustain"
+    },
+    {
+      "id": "synthetic-texture",
+      "path": "source/synthetic-texture.mp4",
+      "sha256": "5e633ccf2c26202b5d3ec892dbdb35a587e169af412b7805b1c5f60962409df0",
+      "durationSamples": 72000,
+      "sampleRate": 48000,
+      "videoFrameRate": 30,
+      "videoCueFrame": 0,
+      "visual": "texture",
+      "suggestedAcousticRole": "texture"
+    }
+  ]
+}
