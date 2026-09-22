@@ -7,8 +7,15 @@ import 'package:path/path.dart' as p;
 import '../domain/clip_asset.dart';
 import 'project_database.dart';
 
+/// Persists immutable shared originals and their import metadata.
+///
+/// Selection fields are import defaults. Per-project trim, gain, and later
+/// selection edits belong to that project's versioned recipe, so this boundary
+/// deliberately has no shared-global selection update method.
 abstract interface class AssetRepository {
   Future<ClipAsset> importFile(String sourcePath);
+  Future<ClipAsset?> load(String id);
+  Future<List<ClipAsset>> list();
   Future<String> resolvePath(String assetId);
   Future<List<String>> referencingProjectIds(String assetId);
   Future<void> deleteUnreferenced(String assetId);
@@ -123,6 +130,23 @@ final class SqliteAssetRepository implements AssetRepository {
   }
 
   @override
+  Future<ClipAsset?> load(String id) async {
+    final rows = _database.connection.select(
+      'SELECT * FROM assets WHERE id = ?',
+      <Object?>[id],
+    );
+    return rows.isEmpty ? null : _decodeAsset(rows.single);
+  }
+
+  @override
+  Future<List<ClipAsset>> list() async {
+    return _database.connection
+        .select('SELECT * FROM assets ORDER BY label COLLATE NOCASE, id')
+        .map(_decodeAsset)
+        .toList(growable: false);
+  }
+
+  @override
   Future<String> resolvePath(String assetId) async {
     final rows = _database.connection.select(
       'SELECT relative_path FROM assets WHERE id = ?',
@@ -202,6 +226,21 @@ final class SqliteAssetRepository implements AssetRepository {
     }
     return File(resolved);
   }
+}
+
+ClipAsset _decodeAsset(Map<String, Object?> row) {
+  return ClipAsset(
+    id: row['id'] as String,
+    relativePath: row['relative_path'] as String,
+    durationUs: row['duration_us'] as int,
+    selectionStartUs: row['selection_start_us'] as int,
+    selectionDurationUs: row['selection_duration_us'] as int,
+    width: row['width'] as int,
+    height: row['height'] as int,
+    rotation: row['rotation'] as int,
+    sha256: row['sha256'] as String,
+    label: row['label'] as String,
+  );
 }
 
 String _safeExtension(String sourcePath) {

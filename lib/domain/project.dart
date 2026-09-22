@@ -16,9 +16,6 @@ final class Project {
     if (id.isEmpty) {
       throw const ProjectValidationException('Project id cannot be empty.');
     }
-    if (title.trim().isEmpty) {
-      throw const ProjectValidationException('Project title cannot be empty.');
-    }
     if (revision < 0) {
       throw const ProjectValidationException('Revision cannot be negative.');
     }

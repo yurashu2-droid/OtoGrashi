@@ -69,6 +69,34 @@ void main() {
       expect((await projects.load(original.id))!.title, 'first edit');
     });
 
+    test(
+      'empty project title survives create rename save and restart',
+      () async {
+        final created = await projects.create('');
+        expect((await projects.load(created.id))!.title, isEmpty);
+        final named = ProjectReducer.reduce(
+          created,
+          const RenameProject('temporary'),
+        );
+        await projects.save(named, expectedRevision: 0);
+        final blankAgain = ProjectReducer.reduce(
+          named,
+          const RenameProject(''),
+        );
+        await projects.save(blankAgain, expectedRevision: 1);
+        database.close();
+
+        database = await ProjectDatabase.open(root);
+        assets = SqliteAssetRepository(
+          database,
+          inspector: const _FixtureInspector(),
+        );
+        projects = SqliteProjectRepository(database);
+
+        expect((await projects.load(created.id))!.title, isEmpty);
+      },
+    );
+
     test('restart removes copies that were never committed', () async {
       final pending = File(
         p.join(database.stagingDirectory.path, 'crash.partial'),
@@ -113,6 +141,40 @@ void main() {
         expect(await File(managedPath).exists(), isTrue);
       },
     );
+
+    test('asset metadata can be loaded and listed after restart', () async {
+      final longAssets = SqliteAssetRepository(
+        database,
+        inspector: const _FixtureInspector(durationUs: 8000000),
+      );
+      final imported = await longAssets.importFile(fixture.path);
+      database.close();
+
+      database = await ProjectDatabase.open(root);
+      assets = SqliteAssetRepository(database);
+      projects = SqliteProjectRepository(database);
+
+      final loaded = await assets.load(imported.id);
+      final listed = await assets.list();
+      expect(await assets.load('missing'), isNull);
+      expect(loaded, isNotNull);
+      expect(loaded!.id, imported.id);
+      expect(loaded.relativePath, imported.relativePath);
+      expect(loaded.durationUs, 8000000);
+      expect(loaded.selectionStartUs, 0);
+      expect(loaded.selectionDurationUs, 6000000);
+      expect(loaded.width, 1080);
+      expect(loaded.height, 1920);
+      expect(loaded.rotation, 90);
+      expect(
+        loaded.sha256,
+        '17e88db187afd62c16e5debf3e6527cd006bc012bc90b51a810cd80c2d511f43',
+      );
+      expect(loaded.label, 'fixture');
+      expect(listed.map((asset) => asset.id), <String>[imported.id]);
+      expect(listed.single.selectionDurationUs, 6000000);
+      expect(listed.single.sha256, loaded.sha256);
+    });
 
     test('asset rows store portable relative paths', () async {
       final asset = await assets.importFile(fixture.path);
