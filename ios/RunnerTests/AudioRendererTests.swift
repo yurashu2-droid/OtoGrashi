@@ -59,6 +59,8 @@ final class AudioRendererTests: XCTestCase {
     )
 
     XCTAssertEqual(report.sampleCount, 720_000)
+    XCTAssertEqual(report.fileLength, 720_000)
+    XCTAssertEqual(report.readChunkFrameCounts.reduce(0, +), 720_000)
     XCTAssertEqual(report.sampleRate, 48_000)
     XCTAssertEqual(report.channels, 1)
     XCTAssertEqual(report.nonFiniteCount, 0)
@@ -259,7 +261,11 @@ final class AudioRendererTests: XCTestCase {
       "assets/demo/source/synthetic-tap.mp4"
     )
     let outputURL = temporaryURL(extension: "wav")
-    defer { remove([outputURL]) }
+    var evidenceReport: AudioRenderReport?
+    defer {
+      persistCIEvidence(evidenceReport, outputURL: outputURL)
+      remove([outputURL])
+    }
     var json = validJSON(
       sourceDuration: 4_800,
       destinationStart: 90_000,
@@ -281,11 +287,13 @@ final class AudioRendererTests: XCTestCase {
       outputURL: outputURL,
       cancellation: CancellationToken(operationId: "mp4")
     )
+    evidenceReport = report
 
     XCTAssertEqual(report.sampleCount, 720_000)
+    XCTAssertEqual(report.fileLength, 720_000)
+    XCTAssertEqual(report.readChunkFrameCounts.reduce(0, +), 720_000)
     XCTAssertGreaterThan(report.peak, 0.01)
     XCTAssertLessThanOrEqual(abs(try firstAudibleSample(outputURL) - 90_000), 240)
-    try persistCIEvidence(report)
   }
 
   func testLoopAndHoldCannotStartBeforeTheNativeTrackOrigin() async throws {
@@ -437,7 +445,7 @@ final class AudioRendererTests: XCTestCase {
     let format = try XCTUnwrap(
       AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)
     )
-    var file: AVAudioFile? = try AVAudioFile(forWriting: url, settings: format.settings)
+    let file = try AVAudioFile(forWriting: url, settings: format.settings)
     let buffer = try XCTUnwrap(
       AVAudioPCMBuffer(
         pcmFormat: format,
@@ -447,22 +455,38 @@ final class AudioRendererTests: XCTestCase {
     buffer.frameLength = AVAudioFrameCount(samples.count)
     let channel = try XCTUnwrap(buffer.floatChannelData?[0])
     for index in samples.indices { channel[index] = samples[index] }
-    try file?.write(from: buffer)
-    file = nil
+    try file.write(from: buffer)
+    file.close()
     return url
   }
 
   private func readMonoFile(_ url: URL) throws -> [Float] {
+    try readMonoFileWithDiagnostics(url).samples
+  }
+
+  private func readMonoFileWithDiagnostics(
+    _ url: URL
+  ) throws -> (samples: [Float], fileLength: Int, chunkFrameCounts: [Int]) {
     let file = try AVAudioFile(forReading: url)
-    let buffer = try XCTUnwrap(
-      AVAudioPCMBuffer(
-        pcmFormat: file.processingFormat,
-        frameCapacity: AVAudioFrameCount(file.length)
+    let fileLength = Int(file.length)
+    var samples: [Float] = []
+    samples.reserveCapacity(fileLength)
+    var chunkFrameCounts: [Int] = []
+    while true {
+      let buffer = try XCTUnwrap(
+        AVAudioPCMBuffer(
+          pcmFormat: file.processingFormat,
+          frameCapacity: 32_768
+        )
       )
-    )
-    try file.read(into: buffer)
-    let channel = try XCTUnwrap(buffer.floatChannelData?[0])
-    return Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+      try file.read(into: buffer)
+      let frameCount = Int(buffer.frameLength)
+      guard frameCount > 0 else { break }
+      let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+      samples.append(contentsOf: UnsafeBufferPointer(start: channel, count: frameCount))
+      chunkFrameCounts.append(frameCount)
+    }
+    return (samples, fileLength, chunkFrameCounts)
   }
 
   private func firstAudibleSample(_ url: URL) throws -> Int {
@@ -480,32 +504,78 @@ final class AudioRendererTests: XCTestCase {
     for url in urls { try? FileManager.default.removeItem(at: url) }
   }
 
-  private func persistCIEvidence(_ report: AudioRenderReport) throws {
-    guard ProcessInfo.processInfo.environment["CI"] == "true" else { return }
-    let repository = URL(fileURLWithPath: #filePath)
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-    let directory = repository.appendingPathComponent("ci-artifacts", isDirectory: true)
-    try FileManager.default.createDirectory(
-      at: directory,
-      withIntermediateDirectories: true
-    )
-    let audioURL = directory.appendingPathComponent("audio-render-fixture.wav")
-    let reportURL = directory.appendingPathComponent("audio-render-report.json")
-    try? FileManager.default.removeItem(at: audioURL)
-    try FileManager.default.copyItem(at: report.url, to: audioURL)
-    let evidence: [String: Any] = [
-      "fixture": "synthetic-tap",
-      "syntheticPracticeSample": true,
-      "sampleCount": report.sampleCount,
-      "sampleRate": report.sampleRate,
-      "channels": report.channels,
-      "peak": report.peak,
-      "nonFiniteCount": report.nonFiniteCount,
-      "scheduledOnsetSample": 90_000,
-    ]
-    try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
-      .write(to: reportURL, options: .atomic)
+  private func persistCIEvidence(_ report: AudioRenderReport?, outputURL: URL) {
+    do {
+      let repository = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+      let directory = repository.appendingPathComponent("ci-artifacts", isDirectory: true)
+      try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+      )
+      let audioURL = directory.appendingPathComponent("audio-render-fixture.wav")
+      let reportURL = directory.appendingPathComponent("audio-render-report.json")
+      try? FileManager.default.removeItem(at: audioURL)
+      try? FileManager.default.removeItem(at: reportURL)
+      try FileManager.default.copyItem(at: outputURL, to: audioURL)
+
+      let fallback: (samples: [Float], fileLength: Int, chunkFrameCounts: [Int])?
+      let diagnosticError: String?
+      do {
+        fallback = try readMonoFileWithDiagnostics(outputURL)
+        diagnosticError = nil
+      } catch {
+        fallback = nil
+        diagnosticError = String(describing: error)
+      }
+      let fileLength: Any
+      let readFrameCount: Any
+      let readChunkFrameCounts: Any
+      if let report {
+        fileLength = report.fileLength
+        readFrameCount = report.sampleCount
+        readChunkFrameCounts = report.readChunkFrameCounts
+      } else if let fallback {
+        fileLength = fallback.fileLength
+        readFrameCount = fallback.samples.count
+        readChunkFrameCounts = fallback.chunkFrameCounts
+      } else {
+        fileLength = NSNull()
+        readFrameCount = NSNull()
+        readChunkFrameCounts = NSNull()
+      }
+      let evidence: [String: Any] = [
+        "fixture": "synthetic-tap",
+        "syntheticPracticeSample": true,
+        "renderReturnedReport": report != nil,
+        "fileLength": fileLength,
+        "readFrameCount": readFrameCount,
+        "readChunkFrameCounts": readChunkFrameCounts,
+        "diagnosticReadError": diagnosticError.map { $0 as Any } ?? NSNull(),
+        "sampleRate": report?.sampleRate ?? 48_000,
+        "channels": report?.channels ?? 1,
+        "peak": report.map { $0.peak as Any } ?? NSNull(),
+        "nonFiniteCount": report.map { $0.nonFiniteCount as Any } ?? NSNull(),
+        "scheduledOnsetSample": 90_000,
+      ]
+      try JSONSerialization.data(
+        withJSONObject: evidence,
+        options: [.prettyPrinted, .sortedKeys]
+      ).write(to: reportURL, options: .atomic)
+
+      for (url, name) in [
+        (audioURL, "audio-render-fixture.wav"),
+        (reportURL, "audio-render-report.json"),
+      ] {
+        let attachment = XCTAttachment(contentsOfFile: url)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+      }
+    } catch {
+      XCTFail("Failed to preserve audio render evidence: \(error)")
+    }
   }
 }

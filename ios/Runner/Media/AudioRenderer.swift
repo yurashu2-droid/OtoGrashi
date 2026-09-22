@@ -193,6 +193,8 @@ struct ArrangementPayload: Decodable, Equatable {
 struct AudioRenderReport: Equatable {
   let url: URL
   let sampleCount: Int
+  let fileLength: Int
+  let readChunkFrameCounts: [Int]
   let sampleRate: Int
   let channels: Int
   let peak: Double
@@ -392,14 +394,14 @@ struct AudioRenderer {
       if FileManager.default.fileExists(atPath: url.path) {
         try FileManager.default.removeItem(at: url)
       }
-      var file: AVAudioFile? = try AVAudioFile(
+      let file = try AVAudioFile(
         forWriting: url,
         settings: format.settings,
         commonFormat: .pcmFormatFloat32,
         interleaved: false
       )
-      try file?.write(from: buffer)
-      file = nil
+      try file.write(from: buffer)
+      file.close()
     } catch {
       try? FileManager.default.removeItem(at: url)
       throw AudioRenderError.writeFailed
@@ -410,31 +412,45 @@ struct AudioRenderer {
     do {
       let file = try AVAudioFile(forReading: url)
       let format = file.processingFormat
-      guard let frameCount = Int(exactly: file.length),
-        let buffer = AVAudioPCMBuffer(
-          pcmFormat: format,
-          frameCapacity: AVAudioFrameCount(frameCount)
-        )
-      else { throw AudioRenderError.writeFailed }
-      try file.read(into: buffer)
-      guard let channels = buffer.floatChannelData else {
+      guard let fileLength = Int(exactly: file.length) else {
         throw AudioRenderError.writeFailed
       }
       var peak = 0.0
       var nonFiniteCount = 0
-      for channelIndex in 0..<Int(format.channelCount) {
-        for frame in 0..<Int(buffer.frameLength) {
-          let sample = channels[channelIndex][frame]
-          if sample.isFinite {
-            peak = max(peak, Double(abs(sample)))
-          } else {
-            nonFiniteCount += 1
+      var sampleCount = 0
+      var readChunkFrameCounts: [Int] = []
+      while true {
+        guard let buffer = AVAudioPCMBuffer(
+          pcmFormat: format,
+          frameCapacity: 32_768
+        ) else { throw AudioRenderError.writeFailed }
+        try file.read(into: buffer)
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { break }
+        guard let channels = buffer.floatChannelData else {
+          throw AudioRenderError.writeFailed
+        }
+        for channelIndex in 0..<Int(format.channelCount) {
+          for frame in 0..<frameCount {
+            let sample = channels[channelIndex][frame]
+            if sample.isFinite {
+              peak = max(peak, Double(abs(sample)))
+            } else {
+              nonFiniteCount += 1
+            }
           }
         }
+        sampleCount += frameCount
+        readChunkFrameCounts.append(frameCount)
       }
+      guard fileLength == ArrangementPayload.totalSamples,
+        sampleCount == ArrangementPayload.totalSamples
+      else { throw AudioRenderError.writeFailed }
       return AudioRenderReport(
         url: url,
-        sampleCount: Int(buffer.frameLength),
+        sampleCount: sampleCount,
+        fileLength: fileLength,
+        readChunkFrameCounts: readChunkFrameCounts,
         sampleRate: Int(format.sampleRate.rounded()),
         channels: Int(format.channelCount),
         peak: peak,

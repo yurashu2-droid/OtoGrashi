@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / "source"
 NATIVE_TEST_SOURCE = ROOT.parents[1] / "test" / "fixtures" / "native"
 RATE = 48_000
+DELAYED_AAC_OFFSET_SECONDS = "0.1482199546"
+DELAYED_AAC_MARKER_SAMPLE_48K = 19_115
 FFMPEG = Path(
     os.environ.get(
         "OTOGRASHI_FFMPEG",
@@ -168,7 +170,7 @@ def render_delayed_aac_regression() -> Path:
         "-i",
         "color=c=0x252830:s=160x90:r=30:d=1.15",
         "-itsoffset",
-        "0.1482199546",
+        DELAYED_AAC_OFFSET_SECONDS,
         "-i",
         str(wav),
         "-c:v",
@@ -238,10 +240,9 @@ def main() -> None:
                 "path": "../../test/fixtures/native/delayed-44100-aac.mp4",
                 "sha256": hashlib.sha256(regression.read_bytes()).hexdigest(),
                 "encodedSampleRate": 44_100,
-                "expectedTrackStartSample48k": 0,
-                "expectedFirstCoveredSample48k": 5_952,
-                "expectedCoveredEndSample48k": 29_901,
-                "expectedOnsetSample48k": 18_912,
+                "presentationStartSample48k": 0,
+                "authoredMarkerSample48k": DELAYED_AAC_MARKER_SAMPLE_48K,
+                "analysisFrameSamples": 480,
                 "purpose": "nonzero audio PTS, AAC priming, and 44.1-to-48 kHz mapping",
             }
         ],

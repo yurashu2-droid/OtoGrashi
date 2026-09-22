@@ -122,6 +122,13 @@ jobs:
             echo "RunnerTests.xcresult was not created" | tee ci-logs/xctest-summary.txt
           fi
 
+      - name: Verify rendered audio evidence
+        if: always()
+        shell: bash
+        run: |
+          test -f ci-artifacts/audio-render-fixture.wav
+          test -f ci-artifacts/audio-render-report.json
+
       - name: Upload validation evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
