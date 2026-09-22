@@ -76,7 +76,7 @@ struct NativePCMReader {
       AVLinearPCMBitDepthKey: 32,
       AVLinearPCMIsFloatKey: true,
       AVLinearPCMIsBigEndianKey: false,
-      AVLinearPCMIsNonInterleavedKey: false,
+      AVLinearPCMIsNonInterleaved: false,
     ]
     let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
     output.alwaysCopiesSampleData = false
