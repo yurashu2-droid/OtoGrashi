@@ -21,6 +21,110 @@ import 'package:otogurashi/storage/asset_repository.dart';
 import 'package:otogurashi/storage/project_repository.dart';
 
 void main() {
+  test('adding a fourth clip rebuilds a renderable recipe', () async {
+    final projects = _MemoryProjects();
+    final controller = CreationController(
+      projects: projects,
+      assets: _UnusedAssets(),
+      media: _FakeMedia(),
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.startDemo();
+    await controller.createPreview();
+    await Future<void>.delayed(Duration.zero);
+    final added = (await _FakeDemo(count: 4).install(_UnusedAssets())).last;
+    await controller.addExisting(added);
+    expect(controller.state.preview, isNull);
+    expect(controller.state.phase, CreationPhase.readyToCreate);
+    await controller.createPreview();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.state.error, isNull);
+    expect(controller.state.phase, CreationPhase.ready);
+    final crops = projects.project!.videoRecipe['clipCrops'] as List<Object?>;
+    expect(crops, hasLength(4));
+    expect((crops.last as Map)['assetId'], added.id);
+  });
+
+  test(
+    'new creation starts empty and removed clips stay out of its recipe',
+    () async {
+      final projects = _MemoryProjects();
+      final controller = CreationController(
+        projects: projects,
+        assets: _UnusedAssets(),
+        media: _FakeMedia(),
+        presentation: _FakePresentation(),
+        demo: _FakeDemo(),
+      );
+      addTearDown(controller.dispose);
+      await controller.startDemo();
+      controller.startNew();
+      expect(controller.state.clips, isEmpty);
+      expect(controller.state.project, isNull);
+
+      final clips = await _FakeDemo(count: 4).install(_UnusedAssets());
+      for (final clip in clips.take(3)) {
+        await controller.addExisting(clip);
+      }
+      expect(controller.state.phase, CreationPhase.readyToCreate);
+      await controller.removeClip(clips[1].id);
+      expect(controller.state.phase, CreationPhase.collecting);
+      expect(projects.project!.clipIds, [clips[0].id, clips[2].id]);
+      await controller.addExisting(clips[3]);
+      await controller.createPreview();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.state.phase, CreationPhase.ready);
+      expect(controller.state.error, isNull);
+      expect(projects.project!.clipIds, [
+        clips[0].id,
+        clips[2].id,
+        clips[3].id,
+      ]);
+      final crops = projects.project!.videoRecipe['clipCrops'] as List<Object?>;
+      expect(
+        crops.map((crop) => (crop as Map)['assetId']),
+        projects.project!.clipIds,
+      );
+    },
+  );
+
+  testWidgets('clip list can remove a sample and start empty', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final projects = _MemoryProjects();
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: projects,
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    await tester.pumpWidget(MaterialApp(
+      theme: buildOtogurashiTheme(),
+      home: CreationFlow(controller: controller, media: media),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('合成素材 1を作品から外す'));
+    await tester.pumpAndSettle();
+    expect(controller.state.clips, hasLength(2));
+    expect(projects.project!.clipIds, ['clip-1', 'clip-2']);
+    await tester.tap(find.text('新しくつくる'));
+    await tester.pumpAndSettle();
+    expect(controller.state.clips, isEmpty);
+    expect(find.text('家の中の短い音を、まず3つ。'), findsOneWidget);
+  });
+
   testWidgets('original comparison visits every selected clip', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;

@@ -46,7 +46,7 @@ class _CreationHostState extends State<_CreationHost> {
   bool _startWithCapture = false;
   Object? _error;
 
-  Future<void> _begin({required bool sample}) async {
+  Future<void> _begin() async {
     if (_busy) return;
     setState(() {
       _busy = true;
@@ -63,7 +63,6 @@ class _CreationHostState extends State<_CreationHost> {
           stagingDirectory: dependencies.database.stagingDirectory,
         ),
       );
-      if (sample) await controller.startDemo();
       if (!mounted) {
         controller.dispose();
         dependencies.close();
@@ -72,7 +71,7 @@ class _CreationHostState extends State<_CreationHost> {
       setState(() {
         _dependencies = dependencies;
         _controller = controller;
-        _startWithCapture = !sample;
+        _startWithCapture = true;
         _busy = false;
       });
     } catch (error) {
@@ -105,8 +104,7 @@ class _CreationHostState extends State<_CreationHost> {
     return OnboardingScreen(
       busy: _busy,
       error: _error == null ? null : '準備できませんでした。もう一度お試しください。',
-      onTrySample: () => _begin(sample: true),
-      onCreate: () => _begin(sample: false),
+      onCreate: _begin,
     );
   }
 }

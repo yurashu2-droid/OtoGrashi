@@ -164,7 +164,17 @@ class _CollectScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = controller.state;
     return Scaffold(
-      appBar: AppBar(title: const Text('今日のクリップ'), centerTitle: true),
+      appBar: AppBar(
+        title: const Text('今日のクリップ'),
+        centerTitle: true,
+        actions: [
+          if (state.clips.isNotEmpty)
+            TextButton(
+              onPressed: controller.startNew,
+              child: const Text('新しくつくる'),
+            ),
+        ],
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(AppTokens.pagePadding),
@@ -192,6 +202,9 @@ class _CollectScreen extends StatelessWidget {
                         clip: state.clips[index],
                         index: index,
                         thumbnail: state.thumbnails[state.clips[index].id],
+                        onRemove: () => unawaited(
+                          controller.removeClip(state.clips[index].id),
+                        ),
                         onMove: (offset) {
                           final target = (index + offset).clamp(
                             0,
@@ -215,7 +228,7 @@ class _CollectScreen extends StatelessWidget {
             Text(
               state.clips.length < 3
                   ? 'あと${3 - state.clips.length}つで音楽にできます'
-                  : '3つの音がそろいました',
+                  : '${state.clips.length}つの音がそろいました',
               textAlign: TextAlign.center,
             ),
             if (state.phase == CreationPhase.preparing) ...[
@@ -266,12 +279,14 @@ class _ClipCard extends StatelessWidget {
     required this.index,
     required this.thumbnail,
     required this.onMove,
+    required this.onRemove,
     super.key,
   });
   final ClipAsset clip;
   final int index;
   final dynamic thumbnail;
   final ValueChanged<int> onMove;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -331,6 +346,11 @@ class _ClipCard extends StatelessWidget {
                   style: TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
+            ),
+            IconButton(
+              onPressed: onRemove,
+              tooltip: '${clip.label}を作品から外す',
+              icon: const Icon(Icons.close_rounded),
             ),
             const SizedBox(width: 4),
           ],
@@ -399,6 +419,11 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
         title: const Text('音づくり'),
         centerTitle: true,
         actions: [
+          IconButton(
+            onPressed: widget.controller.editClips,
+            tooltip: '素材を編集',
+            icon: const Icon(Icons.edit_outlined),
+          ),
           Pressable(
             enabled: state.phase == CreationPhase.ready,
             onPressed: widget.controller.complete,
@@ -608,6 +633,11 @@ class _CompletedScreenState extends State<_CompletedScreen> {
               '映り込みや会話がないか、最後に確認してください。',
               textAlign: TextAlign.center,
               style: TextStyle(color: Color(0xFFCBC7D2)),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: widget.controller.startNew,
+              child: const Text('新しくつくる'),
             ),
           ],
         ),

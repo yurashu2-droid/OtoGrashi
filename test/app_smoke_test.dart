@@ -4,19 +4,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:otogurashi/app/otogurashi_app.dart';
 
 void main() {
-  testWidgets('first launch offers a sample and personal recording', (
-    tester,
-  ) async {
+  testWidgets('first launch starts with personal recording', (tester) async {
     await tester.pumpWidget(const OtogurashiApp());
 
-    expect(find.text('聴いてみる'), findsOneWidget);
+    expect(find.text('聴いてみる'), findsNothing);
     expect(find.text('自分の音でつくる'), findsOneWidget);
-    final semantics = tester.getSemantics(find.bySemanticsLabel('聴いてみる'));
+    final semantics = tester.getSemantics(find.bySemanticsLabel('自分の音でつくる'));
     final data = semantics.getSemanticsData();
     expect(data.hasAction(SemanticsAction.tap), isTrue);
     expect(
       find.descendant(
-        of: find.bySemanticsLabel('聴いてみる'),
+        of: find.bySemanticsLabel('自分の音でつくる'),
         matching: find.byType(FilledButton),
       ),
       findsNothing,

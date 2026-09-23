@@ -5,14 +5,12 @@ import '../../design/tokens.dart';
 
 class OnboardingScreen extends StatelessWidget {
   const OnboardingScreen({
-    required this.onTrySample,
     required this.onCreate,
     this.busy = false,
     this.error,
     super.key,
   });
 
-  final VoidCallback onTrySample;
   final VoidCallback onCreate;
   final bool busy;
   final String? error;
@@ -52,23 +50,16 @@ class OnboardingScreen extends StatelessWidget {
           const SizedBox(height: 32),
           Pressable(
             enabled: !busy,
-            onPressed: onTrySample,
-            semanticLabel: busy ? 'サンプルを準備中' : '聴いてみる',
-            child: _ButtonSurface(
-              filled: true,
-              label: busy ? 'サンプルを準備中…' : '聴いてみる',
-            ),
-          ),
-          const SizedBox(height: 12),
-          Pressable(
-            enabled: !busy,
             onPressed: onCreate,
             semanticLabel: '自分の音でつくる',
-            child: const _ButtonSurface(label: '自分の音でつくる'),
+            child: _ButtonSurface(
+              filled: true,
+              label: busy ? '準備中…' : '自分の音でつくる',
+            ),
           ),
           const SizedBox(height: 14),
           const Text(
-            '「聴いてみる」は、アプリ内で作った合成映像・合成音の練習用サンプルです。音は再生ボタンを押すまで鳴りません。',
+            '撮影した動画を3つ選んで、あなただけの音楽をつくろう。',
             textAlign: TextAlign.center,
           ),
           if (error != null) ...[

@@ -201,11 +201,20 @@ final class CreationController extends ChangeNotifier {
       );
       await projects.save(updated, expectedRevision: current.revision);
       if (_disposed) return;
-      _set(_state.copyWith(project: updated, clips: clips));
+      _render.open(updated);
+      _set(
+        _state.copyWith(
+          project: updated,
+          clips: clips,
+          phase: clips.length >= 3
+              ? CreationPhase.readyToCreate
+              : CreationPhase.collecting,
+          clearPreview: true,
+          clearError: true,
+          compareOriginal: false,
+        ),
+      );
       await _loadThumbnails(<ClipAsset>[asset]);
-      if (clips.length >= 3) {
-        _set(_state.copyWith(phase: CreationPhase.readyToCreate));
-      }
     } catch (error) {
       _set(_state.copyWith(phase: CreationPhase.failed, error: error));
     }
@@ -292,6 +301,70 @@ final class CreationController extends ChangeNotifier {
     if (_disposed) return;
     _set(_state.copyWith(project: updated, clips: clips));
     await _requestArrangement(style: _state.style, seed: _state.seed);
+  }
+
+  Future<void> removeClip(String assetId) async {
+    if (_disposed || !_state.clips.any((clip) => clip.id == assetId)) return;
+    final current = _state.project;
+    if (current == null) return;
+    ++_requestVersion;
+    try {
+      final clips = _state.clips
+          .where((clip) => clip.id != assetId)
+          .toList(growable: false);
+      final updated = current.copyWith(
+        revision: current.revision + 1,
+        clipIds: clips.map((clip) => clip.id).toList(),
+        updatedAt: DateTime.now().toUtc(),
+      );
+      await projects.save(updated, expectedRevision: current.revision);
+      if (_disposed) return;
+      _render.open(updated);
+      final thumbnails = Map<String, Uint8List>.of(_state.thumbnails)
+        ..remove(assetId);
+      _set(
+        _state.copyWith(
+          project: updated,
+          clips: clips,
+          thumbnails: thumbnails,
+          phase: clips.length >= 3
+              ? CreationPhase.readyToCreate
+              : CreationPhase.collecting,
+          clearPreview: true,
+          clearError: true,
+          compareOriginal: false,
+        ),
+      );
+    } catch (error) {
+      if (!_disposed) {
+        _set(_state.copyWith(phase: CreationPhase.failed, error: error));
+      }
+    }
+  }
+
+  void editClips() {
+    if (_disposed) return;
+    ++_requestVersion;
+    final project = _state.project;
+    if (project != null) _render.open(project);
+    _set(
+      _state.copyWith(
+        phase: _state.clips.length >= 3
+            ? CreationPhase.readyToCreate
+            : CreationPhase.collecting,
+        clearPreview: true,
+        clearError: true,
+        compareOriginal: false,
+      ),
+    );
+  }
+
+  void startNew() {
+    if (_disposed) return;
+    ++_requestVersion;
+    final project = _state.project;
+    if (project != null) _render.open(project);
+    _set(const CreationState());
   }
 
   Future<void> renameProject(String title) => _applyEdit(RenameProject(title));
@@ -461,7 +534,17 @@ final class CreationController extends ChangeNotifier {
     final captions = previous['captions'];
     final crops = previous['clipCrops'];
     if (captions is List) result['captions'] = _copyJson(captions);
-    if (crops is List) result['clipCrops'] = _copyJson(crops);
+    if (crops is List) {
+      final previousById = <String, Object?>{
+        for (final crop in crops)
+          if (crop is Map && crop['assetId'] is String)
+            crop['assetId'] as String: crop,
+      };
+      result['clipCrops'] = [
+        for (final crop in generated['clipCrops'] as List<Object?>)
+          _copyJson(previousById[(crop as Map)['assetId']] ?? crop),
+      ];
+    }
     return result;
   }
 
