@@ -497,7 +497,7 @@ final class PlaybackPlatformView: NSObject, FlutterPlatformView {
             preferredTrackID: kCMPersistentTrackID_Invalid)
         else { throw CaptureServiceError.invalidMedia }
         let available = try await source.load(.timeRange)
-        let overlap = CMTimeRangeGetIntersection(range, available)
+        let overlap = CMTimeRangeGetIntersection(range, otherRange: available)
         if CMTimeCompare(overlap.duration, .zero) > 0 {
           try destination.insertTimeRange(overlap, of: source,
             at: cursor + (overlap.start - range.start))

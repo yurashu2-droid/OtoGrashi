@@ -464,3 +464,7 @@ Bundle ID/Team ID/配布グループはユーザー既存設定と照合し、�
 ユーザーはLuna/maxとSol/mediumの利用を許可している。並列作業は独立した範囲に絞る。
 音と映像の共通契約は先に確定し、依存する実装を勝手に別々の型で進めない。
 この計画のレビュー後に実装を開始する。将来Androidを見越した過剰な抽象化より、iOSでの正確な媒体処理と使用感を優先する。
+
+## 実機配布方式の変更 — 2026-09-23
+
+ユーザー指定により、現在の配布対象はTestFlightではなく、GitHub Actionsで生成する署名なしRelease IPAです。WindowsのiLoader側で署名してインストールします。Team IDは空欄、仮Bundle IDは `dev.yurashu2.otogurashi`。Apple認証情報をCIへ登録しません。以降のTestFlight・署名Secretsに関する記述は将来案であり、現在の実装対象から除外します。手順は `docs/delivery/unsigned-ipa.md` を正とします。

@@ -525,9 +525,7 @@ struct VideoRenderer {
             )
             throw VideoRenderError.sourceReadFailed
           }
-          if timestamps.last.map({ CMTimeCompare($0, timestamp) < 0 }) ?? true {
-            timestamps.append(timestamp)
-          }
+          timestamps.append(timestamp)
         }
       }
       videoRenderDiagnostic(
@@ -552,7 +550,12 @@ struct VideoRenderer {
       )
       throw VideoRenderError.sourceReadFailed
     }
-    return timestamps
+    // Compressed packets may arrive in decode order (B-frames), not presentation order.
+    return timestamps.sorted { CMTimeCompare($0, $1) < 0 }.reduce(into: [CMTime]()) { result, timestamp in
+      if result.last.map({ CMTimeCompare($0, timestamp) != 0 }) ?? true {
+        result.append(timestamp)
+      }
+    }
   }
 
   private static func expandedSourceRange(_ range: CMTimeRange) -> CMTimeRange {
