@@ -70,8 +70,9 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          if (state.phase == CapturePhase.completed &&
-                              captured != null)
+                          if (captured != null &&
+                              (state.phase == CapturePhase.completed ||
+                                  state.phase == CapturePhase.importing))
                             NativeMovieView(
                               key: ValueKey(captured.relativePath),
                               relativePath: captured.relativePath,

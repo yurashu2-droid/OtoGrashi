@@ -183,6 +183,42 @@ void main() {
     expect(controller.state.capturedMedia, isNull);
   });
 
+  test('cancelled replacement keeps the recorded clip', () async {
+    await controller.prepare();
+    await controller.record();
+    await controller.stop();
+    final original = controller.state.capturedMedia!;
+
+    await controller.chooseAnotherVideo();
+
+    expect(controller.state.phase, CapturePhase.completed);
+    expect(controller.state.capturedMedia, same(original));
+    expect(gateway.discardedPaths, isEmpty);
+  });
+
+  test('successful replacement discards only the previous clip', () async {
+    await controller.prepare();
+    await controller.record();
+    await controller.stop();
+    final original = controller.state.capturedMedia!;
+    gateway.pickAction = (operationId) async => CapturedMedia(
+      operationId: operationId,
+      assetId: 'replacement',
+      relativePath: 'staging/replacement.mov',
+      durationUs: 3000000,
+      audioTrackStartUs: 0,
+      width: 1080,
+      height: 1920,
+      rotation: 0,
+    );
+
+    await controller.chooseAnotherVideo();
+
+    expect(controller.state.phase, CapturePhase.completed);
+    expect(controller.state.capturedMedia!.assetId, 'replacement');
+    expect(gateway.discardedPaths, [original.relativePath]);
+  });
+
   testWidgets('review keeps retake and use visible on a small iPhone', (
     tester,
   ) async {
@@ -265,6 +301,7 @@ final class _FakeMediaGateway implements MediaGateway {
   Object? stopError;
   CapturedMedia? _stopResult;
   CapturedMedia? pickResult;
+  Future<CapturedMedia?> Function(String)? pickAction;
   Completer<void>? startGate;
   int stopCalls = 0;
   int prepareCalls = 0;
@@ -334,7 +371,8 @@ final class _FakeMediaGateway implements MediaGateway {
   }
 
   @override
-  Future<CapturedMedia?> pickVideo(String operationId) async => pickResult;
+  Future<CapturedMedia?> pickVideo(String operationId) async =>
+      pickAction == null ? pickResult : await pickAction!(operationId);
 
   @override
   Future<InspectedMedia> inspectStaged(String path) =>

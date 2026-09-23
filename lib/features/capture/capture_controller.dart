@@ -209,24 +209,66 @@ final class CaptureController extends ChangeNotifier {
   }
 
   Future<void> chooseAnotherVideo() async {
-    final media = _state.capturedMedia;
-    if (_state.phase != CapturePhase.completed || media == null) return;
+    final original = _state.capturedMedia;
+    if (_state.phase != CapturePhase.completed || original == null) return;
+    final previousOperationId = _state.operationId;
+    final id = operationIdFactory();
+    void restore({String? message}) {
+      if (_disposed || _state.operationId != id) return;
+      _set(
+        _state.copyWith(
+          phase: CapturePhase.completed,
+          operationId: previousOperationId,
+          clearOperation: previousOperationId == null,
+          message: message,
+          clearError: message == null,
+        ),
+      );
+    }
+
     _set(
       _state.copyWith(
         phase: CapturePhase.importing,
-        clearResult: true,
-        clearOperation: true,
-        clearHandle: true,
+        operationId: id,
         clearError: true,
-        progress: 0,
       ),
     );
     try {
-      await _gateway.discardStaged(media.relativePath);
-      _set(_state.copyWith(phase: CapturePhase.idle));
-      await importVideo();
+      final replacement = await _gateway.pickVideo(id);
+      if (_disposed || _state.operationId != id) return;
+      if (replacement == null) {
+        restore();
+        return;
+      }
+      if (replacement.operationId != id) {
+        restore(message: '選んだ動画を確認できませんでした。もう一度選んでください。');
+        return;
+      }
+      await _gateway.suspendCaptureForReview();
+      if (_disposed || _state.operationId != id) return;
+      _set(
+        _state.copyWith(
+          phase: CapturePhase.completed,
+          progress: 1,
+          savedAssetId: replacement.assetId,
+          capturedMedia: replacement,
+        ),
+      );
+      if (replacement.relativePath != original.relativePath) {
+        try {
+          await _gateway.discardStaged(original.relativePath);
+        } catch (_) {
+          // A cleanup failure must not discard the newly selected clip.
+        }
+      }
     } on MediaCaptureException catch (error) {
-      _fail(error);
+      restore(
+        message: error.code == MediaCaptureErrorCode.cancelled
+            ? null
+            : error.message,
+      );
+    } catch (_) {
+      restore(message: '動画を選べませんでした。もう一度お試しください。');
     }
   }
 
