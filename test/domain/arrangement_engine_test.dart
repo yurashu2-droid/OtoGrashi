@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:otogurashi/domain/arrangement.dart';
 import 'package:otogurashi/domain/arrangement_engine.dart';
+import 'package:otogurashi/domain/melody_template.dart';
 
 void main() {
   final threeFixtures = <AnalyzedClip>[
@@ -89,28 +90,78 @@ void main() {
     );
   });
 
-  test('melody changes only sustained sounds and survives JSON round trip', () {
+  test('chosen original motifs change only sustained sounds and persist', () {
     for (final style in ArrangementStyle.values) {
-      final arrangement = arrange(clips: threeFixtures, style: style, seed: 7);
-      expect(
-        arrangement.events.any((event) => event.pitchSemitones != 0),
-        isTrue,
-      );
-      expect(
-        arrangement.events
-            .where((event) => event.assetId != 'hum')
-            .every((event) => event.pitchSemitones == 0),
-        isTrue,
-      );
-      expect(
-        arrangement.events.every((event) => event.pitchSemitones.abs() <= 3),
-        isTrue,
-      );
-      expect(
-        Arrangement.fromJson(arrangement.toJson()).toJson(),
-        arrangement.toJson(),
-      );
+      for (final melody in MelodyTemplate.values.skip(1)) {
+        final arrangement = arrange(
+          clips: threeFixtures,
+          style: style,
+          melodyTemplate: melody,
+          seed: 7,
+        );
+        expect(arrangement.melodyTemplate, melody);
+        expect(arrangement.events.length, lessThanOrEqualTo(64));
+        expect(arrangement.videoEvents.length, arrangement.events.length);
+        expect(arrangement.events.every(_fitsDestination), isTrue);
+        expect(
+          arrangement.events.every(
+            (event) => _fitsSource(event, threeFixtures),
+          ),
+          isTrue,
+        );
+        for (var i = 0; i < arrangement.events.length; i++) {
+          expect(
+            arrangement.videoEvents[i].assetId,
+            arrangement.events[i].assetId,
+          );
+          expect(
+            arrangement.videoEvents[i].destinationStartSample,
+            arrangement.events[i].destinationStartSample,
+          );
+        }
+        expect(
+          arrangement.events.any((event) => event.pitchSemitones != 0),
+          isTrue,
+        );
+        expect(
+          arrangement.events
+              .where((event) => event.assetId != 'hum')
+              .every((event) => event.pitchSemitones == 0),
+          isTrue,
+        );
+        expect(
+          arrangement.events.every((event) => event.pitchSemitones.abs() <= 3),
+          isTrue,
+        );
+        expect(
+          Arrangement.fromJson(arrangement.toJson()).toJson(),
+          arrangement.toJson(),
+        );
+      }
     }
+
+    final patterns = MelodyTemplate.values.skip(1).map((melody) {
+      final arranged = arrange(
+        clips: threeFixtures,
+        style: ArrangementStyle.sparse,
+        melodyTemplate: melody,
+        seed: 7,
+      );
+      return arranged.events
+          .where((event) => event.assetId == 'hum' && event.gain == 0.62)
+          .map((event) => [event.destinationStartSample, event.pitchSemitones])
+          .toList()
+          .toString();
+    }).toSet();
+    expect(patterns.length, 3);
+
+    final noMelody = arrange(
+      clips: threeFixtures,
+      style: ArrangementStyle.sparse,
+      seed: 7,
+    );
+    expect(noMelody.melodyTemplate, MelodyTemplate.none);
+    expect(noMelody.events.every((event) => event.pitchSemitones == 0), isTrue);
 
     final oldJson = arrange(
       clips: threeFixtures,
@@ -138,6 +189,25 @@ void main() {
       () => Arrangement.fromJson({...oldJson, 'events': oldEvents}),
       throwsA(isA<MediaContractException>()),
     );
+  });
+
+  test('a motif does not turn short taps or texture into fake notes', () {
+    final onlyShortSounds = [
+      _clip('tap-1', role: SuggestedRole.transient),
+      _clip('tap-2', role: SuggestedRole.transient),
+      _clip('room', role: SuggestedRole.texture),
+    ];
+    final arrangement = arrange(
+      clips: onlyShortSounds,
+      style: ArrangementStyle.lively,
+      melodyTemplate: MelodyTemplate.hop,
+      seed: 7,
+    );
+    expect(
+      arrangement.events.every((event) => event.pitchSemitones == 0),
+      isTrue,
+    );
+    expect(arrangement.events.length, lessThanOrEqualTo(64));
   });
 
   test('persisted arrangement rejects more than six assets or 64 events', () {

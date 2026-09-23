@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:otogurashi/design/tokens.dart';
 import 'package:otogurashi/domain/arrangement.dart';
 import 'package:otogurashi/domain/clip_asset.dart';
+import 'package:otogurashi/domain/melody_template.dart';
 import 'package:otogurashi/domain/project.dart';
 import 'package:otogurashi/features/create/creation_controller.dart';
 import 'package:otogurashi/features/create/creation_flow.dart';
@@ -316,6 +317,37 @@ void main() {
     expect(controller.state.phase, CreationPhase.failed);
     expect(controller.state.preview, isNull);
   });
+
+  test(
+    'melody choice is saved separately from rhythm style and restored',
+    () async {
+      final projects = _MemoryProjects();
+      final controller = CreationController(
+        projects: projects,
+        assets: _UnusedAssets(),
+        media: _FakeMedia(),
+        presentation: _FakePresentation(),
+        demo: _FakeDemo(),
+      );
+      addTearDown(controller.dispose);
+      await controller.startDemo();
+      controller.selectMelody(MelodyTemplate.wink);
+      await controller.createPreview();
+      expect(projects.project!.arrangement['melodyTemplate'], 'wink');
+      expect(projects.project!.arrangement['style'], 'sparse');
+
+      final saved = Project.empty(id: 'saved', title: 'saved').copyWith(
+        arrangement: const {
+          'schemaVersion': 1,
+          'style': 'lively',
+          'melodyTemplate': 'wink',
+        },
+      );
+      await controller.openProject(saved);
+      expect(controller.state.style, ArrangementStyle.lively);
+      expect(controller.state.melody, MelodyTemplate.wink);
+    },
+  );
 
   test(
     'new creation starts empty and removed clips stay out of its recipe',

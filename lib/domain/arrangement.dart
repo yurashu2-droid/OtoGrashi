@@ -1,4 +1,5 @@
 import '../media/media_messages.dart';
+import 'melody_template.dart';
 
 export '../media/media_messages.dart';
 
@@ -182,6 +183,7 @@ final class Arrangement {
     required this.rendererVersion,
     required this.seed,
     required this.style,
+    this.melodyTemplate = MelodyTemplate.none,
     required List<String> sourceAssetIds,
     required List<String> unusableAssetIds,
     required List<SoundEvent> events,
@@ -283,6 +285,9 @@ final class Arrangement {
         rendererVersion: json['rendererVersion'] as int,
         seed: json['seed'] as int,
         style: ArrangementStyle.values.byName(json['style'] as String),
+        melodyTemplate: MelodyTemplate.values.byName(
+          json['melodyTemplate'] as String? ?? MelodyTemplate.none.name,
+        ),
         sourceAssetIds: sourceValues.cast<String>(),
         unusableAssetIds: unusableValues.cast<String>(),
         events: eventValues
@@ -316,6 +321,7 @@ final class Arrangement {
   final int rendererVersion;
   final int seed;
   final ArrangementStyle style;
+  final MelodyTemplate melodyTemplate;
   final List<String> sourceAssetIds;
   final List<String> unusableAssetIds;
   final List<SoundEvent> events;
@@ -331,6 +337,8 @@ final class Arrangement {
     'rendererVersion': rendererVersion,
     'seed': seed,
     'style': style.name,
+    if (melodyTemplate != MelodyTemplate.none)
+      'melodyTemplate': melodyTemplate.name,
     'sourceAssetIds': sourceAssetIds,
     'unusableAssetIds': unusableAssetIds,
     'events': events.map((event) => event.toJson()).toList(),

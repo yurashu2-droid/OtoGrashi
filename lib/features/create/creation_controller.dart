@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 
 import '../../domain/arrangement.dart';
 import '../../domain/arrangement_engine.dart';
+import '../../domain/melody_template.dart';
 import '../../domain/clip_asset.dart';
 import '../../domain/project.dart';
 import '../../domain/project_reducer.dart';
@@ -35,6 +36,7 @@ final class CreationState {
     this.clips = const <ClipAsset>[],
     this.thumbnails = const <String, Uint8List>{},
     this.style = ArrangementStyle.sparse,
+    this.melody = MelodyTemplate.none,
     this.layout = VideoLayout.buildUp,
     this.compareOriginal = false,
     this.seed = 1,
@@ -47,6 +49,7 @@ final class CreationState {
   final List<ClipAsset> clips;
   final Map<String, Uint8List> thumbnails;
   final ArrangementStyle style;
+  final MelodyTemplate melody;
   final VideoLayout layout;
   final bool compareOriginal;
   final int seed;
@@ -59,6 +62,7 @@ final class CreationState {
     List<ClipAsset>? clips,
     Map<String, Uint8List>? thumbnails,
     ArrangementStyle? style,
+    MelodyTemplate? melody,
     VideoLayout? layout,
     bool? compareOriginal,
     int? seed,
@@ -72,6 +76,7 @@ final class CreationState {
     clips: clips ?? this.clips,
     thumbnails: thumbnails ?? this.thumbnails,
     style: style ?? this.style,
+    melody: melody ?? this.melody,
     layout: layout ?? this.layout,
     compareOriginal: compareOriginal ?? this.compareOriginal,
     seed: seed ?? this.seed,
@@ -259,6 +264,10 @@ final class CreationController extends ChangeNotifier {
             (value) => value.name == project.arrangement['style'],
             orElse: () => ArrangementStyle.sparse,
           ),
+          melody: MelodyTemplate.values.firstWhere(
+            (value) => value.name == project.arrangement['melodyTemplate'],
+            orElse: () => MelodyTemplate.none,
+          ),
           layout: VideoLayout.values.firstWhere(
             (value) => value.name == project.videoRecipe['layout'],
             orElse: () => VideoLayout.buildUp,
@@ -329,6 +338,12 @@ final class CreationController extends ChangeNotifier {
     if (_disposed) return;
     _set(_state.copyWith(style: style, compareOriginal: false));
     unawaited(_requestArrangement(style: style, seed: _state.seed));
+  }
+
+  void selectMelody(MelodyTemplate melody) {
+    if (_disposed || melody == _state.melody) return;
+    _set(_state.copyWith(melody: melody, compareOriginal: false));
+    unawaited(_requestArrangement(style: _state.style, seed: _state.seed));
   }
 
   Future<void> createPreview() => _disposed
@@ -532,7 +547,12 @@ final class CreationController extends ChangeNotifier {
         _state.clips.map((clip) => media.analyze(_analysisRequest(clip))),
       );
       if (_disposed || version != _requestVersion) return;
-      final arrangement = arrange(clips: analyses, style: style, seed: seed);
+      final arrangement = arrange(
+        clips: analyses,
+        style: style,
+        seed: seed,
+        melodyTemplate: _state.melody,
+      );
       final arrangementJson = _applyArrangementEdits(
         arrangement.toJson(),
         project.arrangement,

@@ -8,6 +8,7 @@ import '../../design/playback_chrome.dart';
 import '../../design/tokens.dart';
 import '../../domain/arrangement.dart';
 import '../../domain/clip_asset.dart';
+import '../../domain/melody_template.dart';
 import '../../domain/project.dart';
 import '../../domain/video_recipe.dart';
 import '../arrange/adjustments_sheet.dart';
@@ -976,6 +977,34 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               onSelectionChanged: (value) =>
                   widget.controller.selectStyle(value.single),
             ),
+            const SizedBox(height: 16),
+            const Text(
+              'メロディをつける',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final melody in MelodyTemplate.values)
+                  ChoiceChip(
+                    label: Text(melody.label),
+                    selected: state.melody == melody,
+                    onSelected: (_) => widget.controller.selectMelody(melody),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              state.melody.description,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (state.melody != MelodyTemplate.none)
+              Text(
+                '伸びる声や長い音があると、その音で旋律をつくります',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             const SizedBox(height: 12),
             OutlinedButton(
               onPressed: widget.controller.another,
