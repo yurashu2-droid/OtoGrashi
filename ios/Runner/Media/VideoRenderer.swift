@@ -195,6 +195,7 @@ struct VideoRenderer {
     let providers = try await makeProviders(
       assets: assets,
       requiredIds: requiredIds,
+      videoEvents: request.arrangement.videoEvents,
       cancellation: cancellation
     )
     videoRenderDiagnostic("VIDEO_STAGE providers_ready count=\(providers.count)")
@@ -396,10 +397,12 @@ struct VideoRenderer {
   private func makeProviders(
     assets: [String: URL],
     requiredIds: Set<String>,
+    videoEvents: [VideoEventPayload],
     cancellation: CancellationToken
   ) async throws
     -> [String: SourceProvider]
   {
+    let sourceRanges = Self.sourceRangesByAsset(videoEvents: videoEvents)
     var result: [String: SourceProvider] = [:]
     for id in requiredIds {
       guard let url = assets[id] else { throw VideoRenderError.missingAsset }
@@ -420,71 +423,143 @@ struct VideoRenderer {
       let timestamps = try sourceTimestamps(
         asset: asset,
         track: track,
+        timeRanges: sourceRanges[id] ?? [],
         cancellation: cancellation
       )
       result[id] = SourceProvider(
         generator: generator,
         duration: duration,
-        timestamps: timestamps
+        timestamps: timestamps,
+        sourceRanges: sourceRanges[id] ?? []
       )
     }
     return result
   }
 
+  static func sourceRangesByAsset(
+    videoEvents: [VideoEventPayload]
+  ) -> [String: [CMTimeRange]] {
+    var ranges: [String: [CMTimeRange]] = [:]
+    for event in videoEvents {
+      guard event.sourceVideoStartTime.denominator > 0, event.durationSamples > 0 else {
+        continue
+      }
+      let timescale = CMTimeScale(event.sourceVideoStartTime.denominator)
+      let start = CMTime(
+        value: CMTimeValue(event.sourceVideoStartTime.numerator),
+        timescale: timescale
+      )
+      let duration = CMTime(value: CMTimeValue(event.durationSamples), timescale: timescale)
+      guard start.isNumeric, duration.isNumeric, duration > .zero else { continue }
+      ranges[event.assetId, default: []].append(
+        CMTimeRange(start: start, duration: duration)
+      )
+    }
+    return ranges.mapValues { mergeSourceRanges($0) }
+  }
+
+  private static func mergeSourceRanges(_ ranges: [CMTimeRange]) -> [CMTimeRange] {
+    let sorted = ranges.sorted { CMTimeCompare($0.start, $1.start) < 0 }
+    var merged: [CMTimeRange] = []
+    for range in sorted {
+      guard range.isValid, range.duration > .zero else { continue }
+      guard let previous = merged.last else {
+        merged.append(range)
+        continue
+      }
+      let previousEnd = previous.end
+      if CMTimeCompare(range.start, previousEnd) <= 0 {
+        let end = CMTimeCompare(previousEnd, range.end) >= 0 ? previousEnd : range.end
+        merged[merged.count - 1] = CMTimeRange(
+          start: previous.start,
+          end: end
+        )
+      } else {
+        merged.append(range)
+      }
+    }
+    return merged
+  }
+
   func sourceTimestamps(
     asset: AVAsset,
     track: AVAssetTrack,
+    timeRanges: [CMTimeRange] = [],
     cancellation: CancellationToken? = nil
   ) throws -> [CMTime] {
-    let reader = try AVAssetReader(asset: asset)
-    let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
-    output.alwaysCopiesSampleData = false
-    guard reader.canAdd(output) else {
-      videoRenderDiagnostic("VIDEO_STAGE source_pts_reader cannot_add_output")
-      throw VideoRenderError.sourceReadFailed
-    }
-    reader.add(output)
-    guard reader.startReading() else {
-      videoRenderDiagnostic("VIDEO_STAGE source_pts_reader start_failed")
-      throw VideoRenderError.sourceReadFailed
-    }
     var timestamps: [CMTime] = []
     var scannedSamples = 0
-    while let sample = output.copyNextSampleBuffer() {
-      if let cancellation { try checkCancellation(cancellation) }
-      scannedSamples += 1
-      guard scannedSamples <= 2_100 else {
+    let ranges = timeRanges.isEmpty ? [nil] : timeRanges.map(Optional.some)
+    for range in ranges {
+      let reader = try AVAssetReader(asset: asset)
+      let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+      output.alwaysCopiesSampleData = false
+      if let range {
+        reader.timeRange = Self.expandedSourceRange(range)
         videoRenderDiagnostic(
-          "VIDEO_STAGE source_pts_reader scan_cap scanned=\(scannedSamples) frames=\(timestamps.count)"
+          "VIDEO_STAGE source_pts_reader bounded start=\(range.start) duration=\(range.duration)"
         )
+      }
+      guard reader.canAdd(output) else {
+        videoRenderDiagnostic("VIDEO_STAGE source_pts_reader cannot_add_output")
         throw VideoRenderError.sourceReadFailed
       }
-      if let timestamp = try Self.sourceTimestamp(from: sample) {
-        guard timestamps.count < 2_000 else {
+      reader.add(output)
+      guard reader.startReading() else {
+        videoRenderDiagnostic("VIDEO_STAGE source_pts_reader start_failed")
+        throw VideoRenderError.sourceReadFailed
+      }
+      while let sample = output.copyNextSampleBuffer() {
+        if let cancellation { try checkCancellation(cancellation) }
+        scannedSamples += 1
+        guard scannedSamples <= 2_100 else {
           videoRenderDiagnostic(
-            "VIDEO_STAGE source_pts_reader frame_cap count=\(timestamps.count)"
+            "VIDEO_STAGE source_pts_reader scan_cap scanned=\(scannedSamples) frames=\(timestamps.count)"
           )
           throw VideoRenderError.sourceReadFailed
         }
-        timestamps.append(timestamp)
+        if let timestamp = try Self.sourceTimestamp(from: sample) {
+          guard timestamps.count < 2_000 else {
+            videoRenderDiagnostic(
+              "VIDEO_STAGE source_pts_reader frame_cap count=\(timestamps.count)"
+            )
+            throw VideoRenderError.sourceReadFailed
+          }
+          if timestamps.last.map({ CMTimeCompare($0, timestamp) < 0 }) ?? true {
+            timestamps.append(timestamp)
+          }
+        }
+      }
+      videoRenderDiagnostic(
+        "VIDEO_STAGE source_pts_reader status=\(reader.status.rawValue) count=\(timestamps.count) error=\(String(reflecting: reader.error))"
+      )
+      if let error = reader.error {
+        videoRenderDiagnostic(
+          "VIDEO_STAGE source_pts_reader_error reflected=\(String(reflecting: error))"
+        )
+        throw error
+      }
+      guard reader.status == .completed else {
+        videoRenderDiagnostic(
+          "VIDEO_STAGE source_pts_reader incomplete status=\(reader.status.rawValue) count=\(timestamps.count)"
+        )
+        throw VideoRenderError.sourceReadFailed
       }
     }
-    videoRenderDiagnostic(
-      "VIDEO_STAGE source_pts_reader status=\(reader.status.rawValue) count=\(timestamps.count) error=\(String(reflecting: reader.error))"
-    )
-    if let error = reader.error {
+    guard !timestamps.isEmpty else {
       videoRenderDiagnostic(
-        "VIDEO_STAGE source_pts_reader_error reflected=\(String(reflecting: error))"
-      )
-      throw error
-    }
-    guard reader.status == .completed, !timestamps.isEmpty else {
-      videoRenderDiagnostic(
-        "VIDEO_STAGE source_pts_reader incomplete_or_empty status=\(reader.status.rawValue) count=\(timestamps.count)"
+        "VIDEO_STAGE source_pts_reader incomplete_or_empty count=\(timestamps.count)"
       )
       throw VideoRenderError.sourceReadFailed
     }
-    return timestamps.sorted { CMTimeCompare($0, $1) < 0 }
+    return timestamps
+  }
+
+  private static func expandedSourceRange(_ range: CMTimeRange) -> CMTimeRange {
+    let boundary = CMTime(value: 1, timescale: 600)
+    let start = CMTimeMaximum(.zero, range.start - boundary)
+    let end = range.end + boundary
+    return CMTimeRange(start: start, end: end)
   }
 
   static func sourceTimestamp(from sample: CMSampleBuffer) throws -> CMTime? {
@@ -549,7 +624,7 @@ struct VideoRenderer {
       guard let provider = providers[id],
         let crop = request.video.clipCrops.first(where: { $0.assetId == id })?.crop
       else { throw VideoRenderError.missingAsset }
-      let sourceTime = sourceTime(
+      let sourceTime = Self.sourceTime(
         assetId: id,
         sample: sample,
         events: request.arrangement.videoEvents,
@@ -637,7 +712,7 @@ struct VideoRenderer {
     return Array(scene.assetIds.prefix(1))
   }
 
-  private func sourceTime(
+  static func sourceTime(
     assetId: String,
     sample: Int,
     events: [VideoEventPayload],
@@ -646,22 +721,21 @@ struct VideoRenderer {
     guard let event = events.last(where: {
       $0.assetId == assetId && $0.destinationStartSample <= sample
     }) ?? events.first(where: { $0.assetId == assetId }) else { return .zero }
+    let eventDuration = max(1, event.durationSamples)
     let offset = max(0, sample - event.destinationStartSample)
-    var requested = CMTime(
-      value: CMTimeValue(event.sourceVideoStartTime.numerator + offset),
-      timescale: CMTimeScale(event.sourceVideoStartTime.denominator)
-    )
-    if requested >= duration {
-      switch event.loopMode {
-      case .once, .hold:
-        requested = CMTimeMaximum(.zero, duration - CMTime(value: 1, timescale: 600))
-      case .loop:
-        let durationSeconds = CMTimeGetSeconds(duration)
-        let seconds = CMTimeGetSeconds(requested).truncatingRemainder(dividingBy: durationSeconds)
-        requested = CMTime(seconds: seconds, preferredTimescale: 48_000)
-      }
+    let timescale = CMTimeScale(event.sourceVideoStartTime.denominator)
+    let boundedOffset: Int
+    switch event.loopMode {
+    case .once, .hold:
+      boundedOffset = min(eventDuration - 1, offset)
+    case .loop:
+      boundedOffset = offset % eventDuration
     }
-    return requested
+    let sourceSample = event.sourceVideoStartTime.numerator + boundedOffset
+    let requested = CMTime(value: CMTimeValue(sourceSample), timescale: timescale)
+    guard duration.isNumeric, duration > .zero else { return .zero }
+    let lastFrame = CMTimeMaximum(.zero, duration - CMTime(value: 1, timescale: 600))
+    return CMTimeMinimum(lastFrame, CMTimeMaximum(.zero, requested))
   }
 
   private func drawCaptions(
@@ -791,7 +865,7 @@ struct VideoRenderer {
         )
         throw VideoRenderError.writerFailed
       }
-      try await Task.sleep(nanoseconds: 1_000_000)
+      try await Task.sleep(nanoseconds: 10_000_000)
     }
   }
 
@@ -880,14 +954,21 @@ private final class SourceProvider {
   let generator: AVAssetImageGenerator
   let duration: CMTime
   let timestamps: [CMTime]
+  let sourceRanges: [CMTimeRange]
 
   private var cachedFrame: Int?
   private var cachedImage: CGImage?
 
-  init(generator: AVAssetImageGenerator, duration: CMTime, timestamps: [CMTime]) {
+  init(
+    generator: AVAssetImageGenerator,
+    duration: CMTime,
+    timestamps: [CMTime],
+    sourceRanges: [CMTimeRange]
+  ) {
     self.generator = generator
     self.duration = duration
     self.timestamps = timestamps
+    self.sourceRanges = sourceRanges
   }
 
   func cancelImageGeneration() {

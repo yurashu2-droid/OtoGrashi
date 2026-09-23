@@ -206,7 +206,8 @@ final class SqliteAssetRepository implements AssetRepository {
         .select(
           '''
           SELECT project_id FROM project_assets
-          WHERE asset_id = ? ORDER BY project_id
+          INNER JOIN projects ON projects.id = project_assets.project_id
+          WHERE asset_id = ? AND projects.deleted_at IS NULL ORDER BY project_id
           ''',
           <Object?>[assetId],
         )
@@ -220,9 +221,11 @@ final class SqliteAssetRepository implements AssetRepository {
     _database.transaction(() {
       final rows = _database.connection.select(
         '''
-        SELECT relative_path FROM assets
-        WHERE id = ? AND NOT EXISTS (
-          SELECT 1 FROM project_assets WHERE asset_id = ?
+          SELECT relative_path FROM assets
+          WHERE id = ? AND NOT EXISTS (
+          SELECT 1 FROM project_assets
+          INNER JOIN projects ON projects.id = project_assets.project_id
+          WHERE project_assets.asset_id = ? AND projects.deleted_at IS NULL
         )
         ''',
         <Object?>[assetId, assetId],
@@ -235,7 +238,9 @@ final class SqliteAssetRepository implements AssetRepository {
         '''
         DELETE FROM assets
         WHERE id = ? AND NOT EXISTS (
-          SELECT 1 FROM project_assets WHERE asset_id = ?
+          SELECT 1 FROM project_assets
+          INNER JOIN projects ON projects.id = project_assets.project_id
+          WHERE project_assets.asset_id = ? AND projects.deleted_at IS NULL
         )
         ''',
         <Object?>[assetId, assetId],

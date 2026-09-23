@@ -9,7 +9,11 @@ import '../../design/pressable.dart';
 import '../../design/tokens.dart';
 import '../../domain/arrangement.dart';
 import '../../domain/clip_asset.dart';
-import '../../domain/video_recipe.dart';
+import '../../domain/project.dart';
+import '../arrange/adjustments_sheet.dart';
+import '../library/library_screen.dart';
+import '../settings/settings_screen.dart';
+import '../../storage/project_repository.dart';
 import '../../features/capture/capture_controller.dart';
 import '../../features/capture/capture_screen.dart';
 import '../../media/media_gateway.dart';
@@ -34,6 +38,7 @@ class CreationFlow extends StatefulWidget {
 
 class _CreationFlowState extends State<CreationFlow> {
   var _captureOpened = false;
+  var _tabIndex = 0;
 
   @override
   void didChangeDependencies() {
@@ -54,25 +59,100 @@ class _CreationFlowState extends State<CreationFlow> {
     if (captured != null) await widget.controller.addCaptured(captured);
   }
 
+  Future<void> _openProject(Project project) async {
+    await widget.controller.openProject(project);
+    if (mounted) setState(() => _tabIndex = 0);
+  }
+
+  Future<void> _startCaptureFromLibrary() async {
+    if (mounted) setState(() => _tabIndex = 0);
+    await _openCapture();
+  }
+
+  Future<void> _reuseAsset(ClipAsset asset) async {
+    await widget.controller.addExisting(asset);
+    if (mounted) setState(() => _tabIndex = 0);
+  }
+
+  Widget _settings() {
+    final projects = widget.controller.projects;
+    if (projects is! SqliteProjectRepository) {
+      return const Scaffold(body: Center(child: Text('設定を読み込めません')));
+    }
+    return SettingsScreen(
+      usageLoader: projects.storageUsage,
+      clearCache: projects.clearRegenerableCache,
+    );
+  }
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.controller,
     builder: (context, _) {
       final state = widget.controller.state;
-      if (state.phase == CreationPhase.completed) {
-        return _CompletedScreen(controller: widget.controller);
-      }
-      if (state.preview != null ||
-          state.phase == CreationPhase.rendering ||
-          (state.phase == CreationPhase.failed && state.project != null)) {
-        return _ArrangeScreen(controller: widget.controller);
-      }
-      return _CollectScreen(
-        controller: widget.controller,
-        onCapture: _openCapture,
+      final content = switch (_tabIndex) {
+        1 => LibraryScreen(
+          projects: widget.controller.projects,
+          assets: widget.controller.assets,
+          initialTabIndex: 0,
+          onCreate: _startCaptureFromLibrary,
+          onProjectSelected: _openProject,
+          onAssetSelected: _reuseAsset,
+          onSettings: () =>
+              Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => _settings())),
+        ),
+        2 => LibraryScreen(
+          projects: widget.controller.projects,
+          assets: widget.controller.assets,
+          initialTabIndex: 1,
+          onCreate: _startCaptureFromLibrary,
+          onProjectSelected: _openProject,
+          onAssetSelected: _reuseAsset,
+          onSettings: () =>
+              Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => _settings())),
+        ),
+        _ => _creationContent(state),
+      };
+      return Scaffold(
+        body: content,
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _tabIndex,
+          onDestinationSelected: (value) => setState(() => _tabIndex = value),
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.add_circle_outline),
+              label: 'つくる',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.movie_creation_outlined),
+              label: '作品',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.library_music_outlined),
+              label: '音の引き出し',
+            ),
+          ],
+        ),
       );
     },
   );
+
+  Widget _creationContent(CreationState state) {
+    if (state.phase == CreationPhase.completed) {
+      return _CompletedScreen(controller: widget.controller);
+    }
+    if (state.preview != null ||
+        state.phase == CreationPhase.rendering ||
+        (state.phase == CreationPhase.failed && state.project != null)) {
+      return _ArrangeScreen(controller: widget.controller);
+    }
+    return _CollectScreen(
+      controller: widget.controller,
+      onCapture: _openCapture,
+    );
+  }
 }
 
 class _CollectScreen extends StatelessWidget {
@@ -310,27 +390,56 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
   @override
   Widget build(BuildContext context) {
     final state = widget.controller.state;
+    final segments = widget.controller.comparisonSegments;
     final path = state.compareOriginal
         ? state.clips.firstOrNull?.relativePath
         : state.preview?.relativePath;
     return Scaffold(
-      appBar: AppBar(title: const Text('音づくり'), centerTitle: true),
+      appBar: AppBar(
+        title: const Text('音づくり'),
+        centerTitle: true,
+        actions: [
+          Pressable(
+            enabled: state.phase == CreationPhase.ready,
+            onPressed: widget.controller.complete,
+            semanticLabel: 'これで完成',
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text(
+                'これで完成',
+                style: TextStyle(
+                  color: state.phase == CreationPhase.ready
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).disabledColor,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(AppTokens.pagePadding),
           children: [
             PlaybackChrome(
-              child: AspectRatio(
-                aspectRatio: 9 / 16,
-                child: path == null
-                    ? const _PreviewPlaceholder()
-                    : NativeMovieView(
-                        key: ValueKey(path),
-                        relativePath: path,
-                        gateway: widget.controller.presentation,
-                        controller: playback,
-                        fallback: _SyntheticPreview(clips: state.clips),
-                      ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 400),
+                child: AspectRatio(
+                  aspectRatio: 9 / 16,
+                  child: path == null
+                      ? const _PreviewPlaceholder()
+                      : NativeMovieView(
+                          key: ValueKey(
+                            '$path:${state.compareOriginal}:${state.project?.revision}',
+                          ),
+                          relativePath: path,
+                          segments: state.compareOriginal ? segments : const [],
+                          gateway: widget.controller.presentation,
+                          controller: playback,
+                          fallback: _SyntheticPreview(clips: state.clips),
+                        ),
+                ),
               ),
             ),
             const SizedBox(height: 14),
@@ -351,9 +460,11 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
             else
               _PlaybackControls(
                 playback: playback,
-                label: state.compareOriginal ? '素材のまま' : '曲になった音',
+                label: state.compareOriginal
+                    ? '素材のまま・${state.clips.length}素材を続けて再生'
+                    : '曲になった音',
               ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 8),
             SegmentedButton<ArrangementStyle>(
               segments: const [
                 ButtonSegment(
@@ -401,26 +512,6 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               child: const Text('かんたん調整'),
             ),
             const SizedBox(height: 12),
-            Pressable(
-              enabled: state.phase == CreationPhase.ready,
-              onPressed: widget.controller.complete,
-              semanticLabel: 'これで完成',
-              child: Container(
-                alignment: Alignment.center,
-                constraints: const BoxConstraints(minHeight: 56),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary,
-                  borderRadius: BorderRadius.circular(28),
-                ),
-                child: Text(
-                  'これで完成',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onPrimary,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ),
           ],
         ),
       ),
@@ -428,51 +519,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
   }
 
   Future<void> _showAdjustments(BuildContext context) =>
-      showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        showDragHandle: true,
-        builder: (context) => SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('動画の見せ方', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 14),
-                RadioGroup<VideoLayout>(
-                  groupValue: widget.controller.state.layout,
-                  onChanged: (value) {
-                    if (value != null) widget.controller.setLayout(value);
-                  },
-                  child: Column(
-                    children: [
-                      for (final entry in const {
-                        VideoLayout.stacked: '3段で見せる',
-                        VideoLayout.sequentialFocus: '順番に大きく',
-                        VideoLayout.photoDump: 'フォトダンプ',
-                      }.entries)
-                        RadioListTile<VideoLayout>(
-                          value: entry.key,
-                          title: Text(entry.value),
-                        ),
-                    ],
-                  ),
-                ),
-                const Divider(),
-                const ListTile(
-                  title: Text('素材ごとの音量・字幕'),
-                  subtitle: Text('編集履歴と詳細調整は次の編集画面へつなぎます'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('完了'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
+      showAdjustmentsSheet(context, widget.controller);
 }
 
 class _CompletedScreen extends StatefulWidget {

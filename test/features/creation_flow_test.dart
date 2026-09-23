@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -11,6 +12,7 @@ import 'package:otogurashi/domain/clip_asset.dart';
 import 'package:otogurashi/domain/project.dart';
 import 'package:otogurashi/features/create/creation_controller.dart';
 import 'package:otogurashi/features/create/creation_flow.dart';
+import 'package:otogurashi/features/export/media_playback.dart';
 import 'package:otogurashi/features/capture/capture_controller.dart';
 import 'package:otogurashi/features/capture/capture_screen.dart';
 import 'package:otogurashi/media/media_gateway.dart';
@@ -19,6 +21,84 @@ import 'package:otogurashi/storage/asset_repository.dart';
 import 'package:otogurashi/storage/project_repository.dart';
 
 void main() {
+  testWidgets('original comparison visits every selected clip', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(count: 3),
+      renderOperationIds: <String>['comparison-preview'].iterator,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.startDemo();
+    await controller.createPreview();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final compare = find.text('元の音と比べる', skipOffstage: false);
+    await tester.scrollUntilVisible(
+      compare,
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('元の音と比べる'));
+    await tester.pumpAndSettle();
+    expect(find.text('素材のまま・3素材を続けて再生'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byType(NativeMovieView),
+      -250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    final movie = tester.widget<NativeMovieView>(find.byType(NativeMovieView));
+    expect(
+      movie.segments.map((s) => s.relativePath),
+      controller.state.clips.map((clip) => clip.relativePath),
+    );
+    expect(
+      movie.segments.map((s) => s.startUs),
+      controller.state.clips.map((clip) => clip.selectionStartUs),
+    );
+    expect(
+      movie.segments.map((s) => s.durationUs),
+      controller.state.clips.map((clip) => clip.selectionDurationUs),
+    );
+  });
+
+  test(
+    'disposing while demo installation is pending does not write a project',
+    () async {
+      final installed = Completer<List<ClipAsset>>();
+      final projects = _MemoryProjects();
+      final controller = CreationController(
+        projects: projects,
+        assets: _UnusedAssets(),
+        media: _FakeMedia(),
+        presentation: _FakePresentation(),
+        demo: _PendingDemo(installed.future),
+      );
+
+      final operation = controller.startDemo();
+      controller.dispose();
+      installed.complete(await _FakeDemo().install(_UnusedAssets()));
+      await operation;
+
+      expect(projects.createCount, 0);
+      expect(projects.project, isNull);
+    },
+  );
+
   testWidgets('synthetic sample runs through style selection and completion', (
     tester,
   ) async {
@@ -268,15 +348,27 @@ final class _FakeDemo implements DemoAssetSource {
       );
 }
 
-final class _MemoryProjects implements ProjectRepository {
-  Project? project;
+final class _PendingDemo implements DemoAssetSource {
+  const _PendingDemo(this.result);
+  final Future<List<ClipAsset>> result;
 
   @override
-  Future<Project> create(String title) async => project = Project.empty(
-    id: 'project',
-    title: title,
-    now: DateTime.utc(2026, 9, 22),
-  );
+  Future<List<ClipAsset>> install(AssetRepository repository) => result;
+}
+
+final class _MemoryProjects implements ProjectRepository {
+  Project? project;
+  var createCount = 0;
+
+  @override
+  Future<Project> create(String title) async {
+    createCount += 1;
+    return project = Project.empty(
+      id: 'project',
+      title: title,
+      now: DateTime.utc(2026, 9, 22),
+    );
+  }
 
   @override
   Future<void> save(Project project, {required int expectedRevision}) async {

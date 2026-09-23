@@ -328,6 +328,9 @@ final class MediaEventStreamHandler: NSObject, FlutterStreamHandler {
 final class PlaybackRegistry {
   private let audioSession: AudioSessionCoordinator
   private var players: [Int64: AVPlayer] = [:]
+  private var loadingErrors: [Int64: Error] = [:]
+
+  func setLoadingError(viewId: Int64, error: Error) { loadingErrors[viewId] = error }
 
   init(audioSession: AudioSessionCoordinator) {
     self.audioSession = audioSession
@@ -350,10 +353,12 @@ final class PlaybackRegistry {
   func register(viewId: Int64, player: AVPlayer) { players[viewId] = player }
 
   func unregister(viewId: Int64) {
+    loadingErrors.removeValue(forKey: viewId)
     players.removeValue(forKey: viewId)?.pause()
   }
 
   func play(viewId: Int64) throws {
+    if let error = loadingErrors[viewId] { throw error }
     guard let player = players[viewId] else { throw CaptureServiceError.invalidState }
     if player.currentItem?.status == .failed {
       throw player.currentItem?.error ?? CaptureServiceError.invalidMedia
@@ -432,7 +437,10 @@ final class PlaybackViewFactory: NSObject, FlutterPlatformViewFactory {
   ) -> FlutterPlatformView {
     let relativePath = (args as? [String: Any])?["relativePath"] as? String ?? ""
     let url = try? store.resolvePlayable(relativePath: relativePath)
-    return PlaybackPlatformView(frame: frame, viewId: viewId, url: url, registry: registry)
+    let segments = (args as? [String: Any])?["segments"] as? [[String: Any]]
+    return PlaybackPlatformView(frame: frame, viewId: viewId,
+      url: segments == nil ? url : nil, registry: registry,
+      segments: segments, store: store)
   }
 }
 
@@ -440,16 +448,66 @@ final class PlaybackPlatformView: NSObject, FlutterPlatformView {
   private let playerView: PlaybackUIView
   private let viewId: Int64
   private weak var registry: PlaybackRegistry?
+  private var loading: Task<Void, Never>?
 
-  init(frame: CGRect, viewId: Int64, url: URL?, registry: PlaybackRegistry) {
+  init(frame: CGRect, viewId: Int64, url: URL?, registry: PlaybackRegistry,
+    segments: [[String: Any]]? = nil, store: ManagedMediaStore = ManagedMediaStore()) {
     self.viewId = viewId
     self.registry = registry
     self.playerView = PlaybackUIView(frame: frame, url: url)
     super.init()
     registry.register(viewId: viewId, player: playerView.player)
+    if let segments {
+      loading = Task { [weak self] in
+        do {
+          let composition = try await Self.comparison(segments, store: store)
+          guard !Task.isCancelled else { return }
+          let item = AVPlayerItem(asset: composition)
+          item.videoComposition = AVMutableVideoComposition(propertiesOf: composition)
+          await MainActor.run { self?.playerView.player.replaceCurrentItem(with: item) }
+        } catch {
+          await MainActor.run { self?.registry?.setLoadingError(viewId: viewId, error: error) }
+        }
+      }
+    }
   }
 
-  deinit { registry?.unregister(viewId: viewId) }
+  deinit { loading?.cancel(); registry?.unregister(viewId: viewId) }
+
+  static func comparison(_ segments: [[String: Any]], store: ManagedMediaStore) async throws
+    -> AVMutableComposition {
+    guard (1...6).contains(segments.count) else { throw CaptureServiceError.invalidMedia }
+    let composition = AVMutableComposition()
+    var cursor = CMTime.zero
+    for segment in segments {
+      try Task.checkCancellation()
+      guard let path = segment["relativePath"] as? String,
+        let start = (segment["startUs"] as? NSNumber)?.int64Value,
+        let duration = (segment["durationUs"] as? NSNumber)?.int64Value,
+        start >= 0, duration > 0, duration <= 6_000_000
+      else { throw CaptureServiceError.invalidMedia }
+      let asset = AVURLAsset(url: try store.resolvePlayable(relativePath: path))
+      let length = try await asset.load(.duration)
+      let range = CMTimeRange(start: CMTime(value: start, timescale: 1_000_000),
+        duration: CMTime(value: duration, timescale: 1_000_000))
+      guard CMTimeCompare(range.end, length) <= 0 else { throw CaptureServiceError.invalidMedia }
+      for type in [AVMediaType.video, .audio] {
+        guard let source = try await asset.loadTracks(withMediaType: type).first,
+          let destination = composition.addMutableTrack(withMediaType: type,
+            preferredTrackID: kCMPersistentTrackID_Invalid)
+        else { throw CaptureServiceError.invalidMedia }
+        let available = try await source.load(.timeRange)
+        let overlap = CMTimeRangeGetIntersection(range, available)
+        if CMTimeCompare(overlap.duration, .zero) > 0 {
+          try destination.insertTimeRange(overlap, of: source,
+            at: cursor + (overlap.start - range.start))
+        }
+        if type == .video { destination.preferredTransform = try await source.load(.preferredTransform) }
+      }
+      cursor = cursor + range.duration
+    }
+    return composition
+  }
 
   func view() -> UIView { playerView }
 }

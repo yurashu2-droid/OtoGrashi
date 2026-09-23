@@ -1,0 +1,56 @@
+name: iPhone unsigned Release IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'codex/**']
+    paths:
+      - 'lib/**'
+      - 'ios/**'
+      - 'assets/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'scripts/package-unsigned-ipa.sh'
+      - '.github/workflows/unsigned-ipa.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unsigned-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      FLUTTER_VERSION: 3.47.5
+      BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5; same as RakugakiMap
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Archive and package for iLoader
+        run: bash scripts/package-unsigned-ipa.sh
+      - name: Downloadable unsigned IPA
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6; same as RakugakiMap
+        with:
+          name: OtoGrashi-unsigned-ipa
+          path: build/unsigned-ipa-output/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: unsigned-ipa-build-log
+          path: build/unsigned-ipa-log.txt
+          if-no-files-found: ignore
+          retention-days: 7

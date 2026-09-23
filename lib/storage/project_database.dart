@@ -20,10 +20,12 @@ final class ProjectDatabase {
     final analysisCache = Directory(
       p.join(rootDirectory.path, 'analysis-cache'),
     );
+    final renders = Directory(p.join(rootDirectory.path, 'renders'));
     await Future.wait(<Future<Directory>>[
       originals.create(recursive: true),
       staging.create(recursive: true),
       analysisCache.create(recursive: true),
+      renders.create(recursive: true),
     ]);
     final databasePath = p.join(rootDirectory.path, 'projects.sqlite3');
     final connection = sqlite3.open(databasePath);
@@ -96,7 +98,8 @@ final class ProjectDatabase {
           arrangement_json TEXT NOT NULL,
           video_recipe_json TEXT NOT NULL,
           created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
+          updated_at TEXT NOT NULL,
+          deleted_at TEXT
         ) STRICT
       ''')
       ..execute('''
@@ -116,7 +119,54 @@ final class ProjectDatabase {
           relative_path TEXT NOT NULL,
           created_at TEXT NOT NULL
         ) STRICT
+      ''')
+      ..execute('''
+        CREATE TABLE IF NOT EXISTS export_jobs (
+          id TEXT NOT NULL PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          source_revision INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          temporary_relative_path TEXT,
+          updated_at TEXT NOT NULL
+        ) STRICT
+      ''')
+      ..execute('''
+        CREATE TABLE IF NOT EXISTS deleted_projects (
+          id TEXT NOT NULL PRIMARY KEY,
+          title TEXT NOT NULL,
+          revision INTEGER NOT NULL,
+          arrangement_json TEXT NOT NULL,
+          video_recipe_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          deleted_at TEXT NOT NULL
+        ) STRICT
+      ''')
+      ..execute('''
+        CREATE TABLE IF NOT EXISTS deleted_project_assets (
+          project_id TEXT NOT NULL REFERENCES deleted_projects(id) ON DELETE CASCADE,
+          asset_id TEXT NOT NULL,
+          position INTEGER NOT NULL,
+          PRIMARY KEY (project_id, asset_id),
+          UNIQUE (project_id, position)
+        ) STRICT
+      ''')
+      ..execute('''
+        CREATE TABLE IF NOT EXISTS deleted_project_exports (
+          id TEXT NOT NULL PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          source_revision INTEGER NOT NULL,
+          relative_path TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        ) STRICT
       ''');
+    final projectColumns = _connection
+        .select("PRAGMA table_info('projects')")
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (!projectColumns.contains('deleted_at')) {
+      _connection.execute('ALTER TABLE projects ADD COLUMN deleted_at TEXT');
+    }
     final currentVersion = _connection.userVersion;
     final assetColumns = _connection
         .select("PRAGMA table_info('assets')")
@@ -155,5 +205,38 @@ final class ProjectDatabase {
         await entity.delete();
       }
     }
+
+    final unfinishedJobs = _connection.select(
+      "SELECT id, temporary_relative_path FROM export_jobs "
+      "WHERE status != 'completed'",
+    );
+    for (final job in unfinishedJobs) {
+      final relative = job['temporary_relative_path'] as String?;
+      if (relative != null) {
+        final temporary = _safeManagedFile(relative);
+        if (temporary != null && await temporary.exists()) {
+          await temporary.delete();
+        }
+      }
+      _connection.execute(
+        "UPDATE export_jobs SET status = 'recovered', temporary_relative_path = NULL "
+        'WHERE id = ?',
+        <Object?>[job['id']],
+      );
+    }
+  }
+
+  File? _safeManagedFile(String relativePath) {
+    if (relativePath.isEmpty ||
+        p.url.isAbsolute(relativePath) ||
+        relativePath.contains('\\') ||
+        relativePath.split('/').contains('..')) {
+      return null;
+    }
+    final candidate = File(
+      p.normalize(p.joinAll(<String>[rootDirectory.path, ...p.url.split(relativePath)])),
+    );
+    if (!p.isWithin(rootDirectory.path, candidate.path)) return null;
+    return candidate;
   }
 }

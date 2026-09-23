@@ -9,12 +9,14 @@ import '../../domain/arrangement.dart';
 import '../../domain/arrangement_engine.dart';
 import '../../domain/clip_asset.dart';
 import '../../domain/project.dart';
+import '../../domain/project_reducer.dart';
 import '../../domain/video_recipe.dart';
 import '../../features/arrange/render_controller.dart';
 import '../../media/media_gateway.dart';
 import '../../media/media_presentation_gateway.dart';
 import '../../storage/asset_repository.dart';
 import '../../storage/project_repository.dart';
+import '../export/media_playback.dart';
 
 enum CreationPhase {
   collecting,
@@ -133,21 +135,36 @@ final class CreationController extends ChangeNotifier {
   CreationState _state = const CreationState();
   Future<void> _mutationTail = Future<void>.value();
   var _requestVersion = 0;
+  var _disposed = false;
 
   CreationState get state => _state;
 
+  List<PlaybackSegment> get comparisonSegments => _state.clips
+      .map((clip) {
+        final request = _analysisRequest(clip);
+        return PlaybackSegment(
+          relativePath: clip.relativePath,
+          startUs: request.selectionStartUs,
+          durationUs: request.selectionDurationUs,
+        );
+      })
+      .toList(growable: false);
+
   Future<void> startDemo() async {
-    if (_state.phase == CreationPhase.preparing) return;
+    if (_disposed || _state.phase == CreationPhase.preparing) return;
     _set(_state.copyWith(phase: CreationPhase.preparing, clearError: true));
     try {
       final clips = await demo.install(assets);
+      if (_disposed) return;
       var project = await projects.create('合成サンプルの一日');
+      if (_disposed) return;
       project = project.copyWith(
         revision: project.revision + 1,
         clipIds: clips.map((clip) => clip.id).toList(),
         updatedAt: DateTime.now().toUtc(),
       );
       await projects.save(project, expectedRevision: 0);
+      if (_disposed) return;
       _set(_state.copyWith(project: project, clips: clips));
       await _loadThumbnails(clips);
       _set(_state.copyWith(phase: CreationPhase.readyToCreate));
@@ -157,9 +174,25 @@ final class CreationController extends ChangeNotifier {
   }
 
   Future<void> addCaptured(CapturedMedia captured) async {
+    if (_disposed) return;
     try {
       final asset = await assets.importManagedStaging(captured.relativePath);
+      await addExisting(asset);
+    } catch (error) {
+      _set(_state.copyWith(phase: CreationPhase.failed, error: error));
+    }
+  }
+
+  Future<void> addExisting(ClipAsset asset) async {
+    if (_disposed ||
+        _state.clips.length >= 6 ||
+        _state.clips.any((clip) => clip.id == asset.id)) {
+      return;
+    }
+    ++_requestVersion;
+    try {
       final current = _state.project ?? await projects.create('今日の音');
+      if (_disposed) return;
       final clips = <ClipAsset>[..._state.clips, asset];
       final updated = current.copyWith(
         revision: current.revision + 1,
@@ -167,6 +200,7 @@ final class CreationController extends ChangeNotifier {
         updatedAt: DateTime.now().toUtc(),
       );
       await projects.save(updated, expectedRevision: current.revision);
+      if (_disposed) return;
       _set(_state.copyWith(project: updated, clips: clips));
       await _loadThumbnails(<ClipAsset>[asset]);
       if (clips.length >= 3) {
@@ -177,29 +211,73 @@ final class CreationController extends ChangeNotifier {
     }
   }
 
+  Future<void> openProject(Project project) async {
+    if (_disposed) return;
+    final version = ++_requestVersion;
+    try {
+      final loaded = await Future.wait(project.clipIds.map(assets.load));
+      if (_disposed || version != _requestVersion) return;
+      final clips = loaded.whereType<ClipAsset>().toList(growable: false);
+      _render.open(project);
+      _set(
+        _state.copyWith(
+          project: project,
+          clips: clips,
+          phase: clips.length >= 3
+              ? CreationPhase.readyToCreate
+              : CreationPhase.collecting,
+          clearPreview: true,
+          clearError: true,
+          compareOriginal: false,
+          style: ArrangementStyle.values.firstWhere(
+            (value) => value.name == project.arrangement['style'],
+            orElse: () => ArrangementStyle.sparse,
+          ),
+          layout: VideoLayout.values.firstWhere(
+            (value) => value.name == project.videoRecipe['layout'],
+            orElse: () => VideoLayout.stacked,
+          ),
+          seed: project.arrangement['seed'] is int
+              ? project.arrangement['seed']! as int
+              : 1,
+        ),
+      );
+      await _loadThumbnails(clips);
+    } catch (error) {
+      if (!_disposed) {
+        _set(_state.copyWith(phase: CreationPhase.failed, error: error));
+      }
+    }
+  }
+
   void selectStyle(ArrangementStyle style) {
+    if (_disposed) return;
     _set(_state.copyWith(style: style, compareOriginal: false));
     unawaited(_requestArrangement(style: style, seed: _state.seed));
   }
 
-  Future<void> createPreview() =>
-      _requestArrangement(style: _state.style, seed: _state.seed);
+  Future<void> createPreview() => _disposed
+      ? Future<void>.value()
+      : _requestArrangement(style: _state.style, seed: _state.seed);
 
   void another() {
+    if (_disposed) return;
     final seed = _state.seed + 1;
     _set(_state.copyWith(seed: seed, compareOriginal: false));
     unawaited(_requestArrangement(style: _state.style, seed: seed));
   }
 
   void setLayout(VideoLayout layout) {
+    if (_disposed) return;
     _set(_state.copyWith(layout: layout));
     unawaited(_requestArrangement(style: _state.style, seed: _state.seed));
   }
 
   void setCompareOriginal(bool value) =>
-      _set(_state.copyWith(compareOriginal: value));
+      _disposed ? null : _set(_state.copyWith(compareOriginal: value));
 
   Future<void> reorder(int oldIndex, int newIndex) async {
+    if (_disposed) return;
     final clips = [..._state.clips];
     final moved = clips.removeAt(oldIndex);
     clips.insert(newIndex, moved);
@@ -211,12 +289,79 @@ final class CreationController extends ChangeNotifier {
       updatedAt: DateTime.now().toUtc(),
     );
     await projects.save(updated, expectedRevision: current.revision);
+    if (_disposed) return;
     _set(_state.copyWith(project: updated, clips: clips));
     await _requestArrangement(style: _state.style, seed: _state.seed);
   }
 
+  Future<void> renameProject(String title) => _applyEdit(RenameProject(title));
+
+  Future<void> setGain(String assetId, double gain) =>
+      _applyEdit(SetGain(assetId, gain));
+
+  Future<void> setAccompanimentGain(double gain) =>
+      _applyEdit(SetAccompanimentGain(gain));
+
+  Future<void> setCaption(
+    String text, {
+    int index = 0,
+    double x = .5,
+    double y = .9,
+    int destinationStartSample = 0,
+    int durationSamples = 720000,
+  }) => _applyEdit(
+    SetCaption(
+      text,
+      index: index,
+      x: x,
+      y: y,
+      destinationStartSample: destinationStartSample,
+      durationSamples: durationSamples,
+    ),
+  );
+
+  Future<void> removeCaption(int index) => _applyEdit(RemoveCaption(index));
+
+  Future<void> setCrop(String assetId, NormalizedCrop crop) =>
+      _applyEdit(SetCrop(assetId, crop));
+
+  Future<void> setTrim(String assetId, int startUs, int durationUs) =>
+      _applyEdit(SetTrim(assetId, startUs, durationUs));
+
+  Future<Project?> duplicateProject({String? title}) async {
+    final current = _state.project;
+    if (_disposed || current == null) return null;
+    if (projects is! SqliteProjectRepository) return null;
+    return (projects as SqliteProjectRepository).duplicateProject(
+      current.id,
+      title: title,
+    );
+  }
+
+  Future<void> _applyEdit(ProjectEditCommand command) async {
+    if (_disposed) return;
+    ++_requestVersion;
+    final current = _state.project;
+    if (current == null) return;
+    try {
+      final updated = ProjectReducer.reduce(current, command);
+      await projects.save(updated, expectedRevision: current.revision);
+      if (_disposed) return;
+      _set(_state.copyWith(project: updated, clearError: true));
+      if (_state.clips.length >= 3) {
+        await _requestArrangement(style: _state.style, seed: _state.seed);
+      }
+    } catch (error) {
+      if (!_disposed) {
+        _set(_state.copyWith(phase: CreationPhase.failed, error: error));
+      }
+    }
+  }
+
   void complete() {
-    if (_state.phase == CreationPhase.ready && _state.preview != null) {
+    if (!_disposed &&
+        _state.phase == CreationPhase.ready &&
+        _state.preview != null) {
       _set(_state.copyWith(phase: CreationPhase.completed));
     }
   }
@@ -225,6 +370,7 @@ final class CreationController extends ChangeNotifier {
     required ArrangementStyle style,
     required int seed,
   }) {
+    if (_disposed) return Future<void>.value();
     final version = ++_requestVersion;
     final work = _mutationTail.then((_) => _arrange(version, style, seed));
     _mutationTail = work.catchError((Object _) {});
@@ -232,30 +378,36 @@ final class CreationController extends ChangeNotifier {
   }
 
   Future<void> _arrange(int version, ArrangementStyle style, int seed) async {
-    if (version != _requestVersion) return;
+    if (_disposed || version != _requestVersion) return;
     final project = _state.project;
     if (project == null || _state.clips.length < 3) return;
     _set(_state.copyWith(phase: CreationPhase.preparing, clearError: true));
     try {
       final analyses = await Future.wait(
-        _state.clips.map(
-          (clip) => media.analyze(MediaAnalysisRequest.forAsset(clip)),
-        ),
+        _state.clips.map((clip) => media.analyze(_analysisRequest(clip))),
       );
-      if (version != _requestVersion) return;
+      if (_disposed || version != _requestVersion) return;
       final arrangement = arrange(clips: analyses, style: style, seed: seed);
+      final arrangementJson = _applyArrangementEdits(
+        arrangement.toJson(),
+        project.arrangement,
+      );
       final recipe = VideoRecipe.fromArrangement(
         arrangement: arrangement,
         layout: _state.layout,
       );
+      final recipeJson = _preserveRecipeEdits(
+        recipe.toJson(),
+        project.videoRecipe,
+      );
       final updated = project.copyWith(
         revision: project.revision + 1,
-        arrangement: arrangement.toJson(),
-        videoRecipe: recipe.toJson(),
+        arrangement: arrangementJson,
+        videoRecipe: recipeJson,
         updatedAt: DateTime.now().toUtc(),
       );
       await projects.save(updated, expectedRevision: project.revision);
-      if (version != _requestVersion) return;
+      if (_disposed || version != _requestVersion) return;
       _set(
         _state.copyWith(
           phase: CreationPhase.rendering,
@@ -266,13 +418,86 @@ final class CreationController extends ChangeNotifier {
       _render.open(updated);
       _render.generate(RenderQuality.preview);
     } catch (error) {
-      if (version == _requestVersion) {
+      if (!_disposed && version == _requestVersion) {
         _set(_state.copyWith(phase: CreationPhase.failed, error: error));
       }
     }
   }
 
+  Map<String, Object?> _applyArrangementEdits(
+    Map<String, Object?> generated,
+    Map<String, Object?> previous,
+  ) {
+    final result = Map<String, Object?>.of(generated);
+    final previousEdits = previous['edits'];
+    if (previousEdits is Map) result['edits'] = _copyJson(previousEdits);
+    final previousAccompaniment = previous['accompanimentGain'];
+    if (previousAccompaniment is num) {
+      result['accompanimentGain'] = previousAccompaniment.toDouble();
+    }
+    final gains = previousEdits is Map ? previousEdits['gains'] : null;
+    if (gains is Map) {
+      final events = (result['events'] as List<Object?>)
+          .map(
+            (value) => (value as Map).map<String, Object?>(
+              (key, value) => MapEntry('$key', value),
+            ),
+          )
+          .toList(growable: false);
+      for (final event in events) {
+        final gain = gains[event['assetId']];
+        if (gain is num) event['gain'] = gain.toDouble();
+      }
+      result['events'] = events;
+    }
+    return result;
+  }
+
+  Map<String, Object?> _preserveRecipeEdits(
+    Map<String, Object?> generated,
+    Map<String, Object?> previous,
+  ) {
+    final result = Map<String, Object?>.of(generated);
+    final captions = previous['captions'];
+    final crops = previous['clipCrops'];
+    if (captions is List) result['captions'] = _copyJson(captions);
+    if (crops is List) result['clipCrops'] = _copyJson(crops);
+    return result;
+  }
+
+  Object? _copyJson(Object? value) {
+    if (value is Map) {
+      return value.map<String, Object?>(
+        (key, value) => MapEntry('$key', _copyJson(value)),
+      );
+    }
+    if (value is List) return value.map(_copyJson).toList(growable: true);
+    return value;
+  }
+
+  MediaAnalysisRequest _analysisRequest(ClipAsset clip) {
+    final edits = _state.project?.arrangement['edits'];
+    final windows = edits is Map ? edits['sourceWindows'] : null;
+    final value = windows is Map ? windows[clip.id] : null;
+    final window = value is Map ? value : null;
+    final start = window?['startUs'];
+    final duration = window?['durationUs'];
+    if (start is! int || duration is! int || start < 0 || duration <= 0) {
+      return MediaAnalysisRequest.forAsset(clip);
+    }
+    if (start >= clip.durationUs) return MediaAnalysisRequest.forAsset(clip);
+    final boundedDuration = duration.clamp(1, clip.durationUs - start);
+    return MediaAnalysisRequest(
+      assetId: clip.id,
+      relativePath: clip.relativePath,
+      selectionStartUs: start,
+      selectionDurationUs: boundedDuration,
+      audioTrackStartUs: clip.audioTrackStartUs,
+    );
+  }
+
   Future<void> _loadThumbnails(List<ClipAsset> clips) async {
+    if (_disposed) return;
     final thumbnails = Map<String, Uint8List>.of(_state.thumbnails);
     await Future.wait(
       clips.map((clip) async {
@@ -283,10 +508,11 @@ final class CreationController extends ChangeNotifier {
         }
       }),
     );
-    _set(_state.copyWith(thumbnails: thumbnails));
+    if (!_disposed) _set(_state.copyWith(thumbnails: thumbnails));
   }
 
   void _onRenderState() {
+    if (_disposed) return;
     final render = _render.state;
     switch (render.phase) {
       case RenderPhase.ready:
@@ -307,12 +533,15 @@ final class CreationController extends ChangeNotifier {
   }
 
   void _set(CreationState value) {
+    if (_disposed) return;
     _state = value;
     notifyListeners();
   }
 
   @override
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     _render
       ..removeListener(_onRenderState)
       ..dispose();

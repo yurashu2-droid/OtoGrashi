@@ -294,6 +294,42 @@ def render_video_regressions(source: Path) -> tuple[Path, Path]:
     return rotated, hdr
 
 
+def render_long_video_regression(source: Path) -> Path:
+    """Create a long original whose selected six-second window is bounded."""
+    output = NATIVE_TEST_SOURCE / "long-original-tap.mp4"
+    subprocess.run(
+        [
+            str(FFMPEG),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-stream_loop",
+            "79",
+            "-i",
+            str(source),
+            "-t",
+            "72",
+            "-an",
+            "-r",
+            "30",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryslow",
+            "-crf",
+            "35",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(output),
+        ],
+        check=True,
+    )
+    return output
+
+
 def main() -> None:
     if not FFMPEG.is_file():
         raise SystemExit(f"FFmpeg not found: {FFMPEG}")
@@ -321,6 +357,7 @@ def main() -> None:
         )
     regression = render_delayed_aac_regression()
     rotated_vfr, hdr10 = render_video_regressions(SOURCE / "synthetic-tap.mp4")
+    long_original = render_long_video_regression(SOURCE / "synthetic-tap.mp4")
     manifest = {
         "schemaVersion": 1,
         "label": "Synthetic practice fixtures — not real household recordings",
@@ -352,6 +389,12 @@ def main() -> None:
                 "path": "../../test/fixtures/native/hdr10-tap.mp4",
                 "sha256": hashlib.sha256(hdr10.read_bytes()).hexdigest(),
                 "purpose": "PQ/BT.2020 input normalized to SDR BT.709 output",
+            },
+            {
+                "id": "long-original-tap",
+                "path": "../../test/fixtures/native/long-original-tap.mp4",
+                "sha256": hashlib.sha256(long_original.read_bytes()).hexdigest(),
+                "purpose": "long original with a bounded short-selection timestamp window",
             },
         ],
     }

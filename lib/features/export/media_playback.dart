@@ -6,12 +6,31 @@ import 'package:flutter/services.dart';
 
 import '../../media/media_presentation_gateway.dart';
 
+final class PlaybackSegment {
+  const PlaybackSegment({
+    required this.relativePath,
+    required this.startUs,
+    required this.durationUs,
+  });
+
+  final String relativePath;
+  final int startUs;
+  final int durationUs;
+
+  Map<String, Object> toNativeMap() => <String, Object>{
+    'relativePath': relativePath,
+    'startUs': startUs,
+    'durationUs': durationUs,
+  };
+}
+
 final class MediaPlaybackController extends ChangeNotifier {
   MediaPlaybackController(this.gateway);
 
   final MediaPresentationGateway gateway;
   int? _viewId;
   bool _playing = false;
+  bool _ended = false;
   Duration _position = Duration.zero;
   Duration _duration = const Duration(seconds: 15);
   Object? _error;
@@ -20,6 +39,7 @@ final class MediaPlaybackController extends ChangeNotifier {
   Timer? _ticker;
 
   bool get isPlaying => _playing;
+  bool get ended => _ended;
   Duration get position => _position;
   Duration get duration => _duration;
   Object? get error => _error;
@@ -29,6 +49,7 @@ final class MediaPlaybackController extends ChangeNotifier {
     _viewId = viewId;
     _attachmentVersion += 1;
     _playing = false;
+    _ended = false;
     _position = Duration.zero;
     _error = null;
     _ticker?.cancel();
@@ -115,6 +136,7 @@ final class MediaPlaybackController extends ChangeNotifier {
       _position = snapshot.position;
       if (snapshot.duration > Duration.zero) _duration = snapshot.duration;
       _playing = snapshot.isPlaying;
+      _ended = snapshot.ended;
       _error = null;
       if (snapshot.ended || !snapshot.isPlaying) _ticker?.cancel();
       notifyListeners();
@@ -133,6 +155,7 @@ class NativeMovieView extends StatelessWidget {
     required this.relativePath,
     required this.gateway,
     required this.controller,
+    this.segments = const <PlaybackSegment>[],
     this.fallback,
     super.key,
   });
@@ -140,6 +163,7 @@ class NativeMovieView extends StatelessWidget {
   final String relativePath;
   final MediaPresentationGateway gateway;
   final MediaPlaybackController controller;
+  final List<PlaybackSegment> segments;
   final Widget? fallback;
 
   @override
@@ -147,9 +171,14 @@ class NativeMovieView extends StatelessWidget {
     if (defaultTargetPlatform != TargetPlatform.iOS) {
       return fallback ?? const ColoredBox(color: Colors.black);
     }
+    final creationParams = <String, Object?>{
+      'relativePath': relativePath,
+      if (segments.isNotEmpty)
+        'segments': segments.map((segment) => segment.toNativeMap()).toList(),
+    };
     return UiKitView(
       viewType: gateway.playbackViewType,
-      creationParams: <String, Object?>{'relativePath': relativePath},
+      creationParams: creationParams,
       creationParamsCodec: const StandardMessageCodec(),
       onPlatformViewCreated: controller.attach,
     );

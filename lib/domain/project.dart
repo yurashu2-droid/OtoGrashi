@@ -16,6 +16,11 @@ final class Project {
     if (id.isEmpty) {
       throw const ProjectValidationException('Project id cannot be empty.');
     }
+    if (title.length > 80) {
+      throw const ProjectValidationException(
+        'Project title cannot exceed 80 characters.',
+      );
+    }
     if (revision < 0) {
       throw const ProjectValidationException('Revision cannot be negative.');
     }

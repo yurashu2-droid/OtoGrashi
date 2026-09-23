@@ -103,6 +103,38 @@ final class VideoRendererTests: XCTestCase {
     }
   }
 
+  func testLongOriginalShortSelectionUsesBoundedTimestampScan() async throws {
+    let source = nativeFixtureURL("long-original-tap.mp4")
+    let asset = AVURLAsset(url: source)
+    let tracks = try await asset.loadTracks(withMediaType: .video)
+    let track = try XCTUnwrap(tracks.first)
+    let renderer = VideoRenderer()
+
+    XCTAssertThrowsError(
+      try renderer.sourceTimestamps(asset: asset, track: track)
+    )
+
+    let selected = CMTimeRange(
+      start: CMTime(seconds: 45, preferredTimescale: 48_000),
+      duration: CMTime(seconds: 6, preferredTimescale: 48_000)
+    )
+    let timestamps = try renderer.sourceTimestamps(
+      asset: asset,
+      track: track,
+      timeRanges: [selected]
+    )
+    XCTAssertGreaterThan(timestamps.count, 150)
+    XCTAssertLessThan(timestamps.count, 220)
+    XCTAssertGreaterThanOrEqual(
+      CMTimeGetSeconds(timestamps.first!),
+      44.9
+    )
+    XCTAssertLessThanOrEqual(
+      CMTimeGetSeconds(timestamps.last!),
+      51.1
+    )
+  }
+
   func testManagedStoreRejectsMissingAndDuplicateOriginalMatches() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -217,6 +249,47 @@ final class VideoRendererTests: XCTestCase {
     XCTAssertEqual(VideoRenderer.nearestFrame(forSample: 799), 0)
     XCTAssertEqual(VideoRenderer.nearestFrame(forSample: 800), 1)
     XCTAssertEqual(VideoRenderer.nearestFrame(forSample: 12_000), 8)
+  }
+
+  func testTrimmedSourceWindowsBoundReaderRangesAndLoopTime() throws {
+    let first = VideoEventPayload(
+      assetId: "long",
+      destinationStartSample: 0,
+      durationSamples: 288_000,
+      sourceVideoStartTime: RationalTimePayload(numerator: 9_600_000, denominator: 48_000),
+      crop: NormalizedCropPayload(x: 0, y: 0, width: 1, height: 1),
+      loopMode: .hold
+    )
+    let repeated = VideoEventPayload(
+      assetId: "long",
+      destinationStartSample: 288_000,
+      durationSamples: 288_000,
+      sourceVideoStartTime: RationalTimePayload(numerator: 9_600_000, denominator: 48_000),
+      crop: NormalizedCropPayload(x: 0, y: 0, width: 1, height: 1),
+      loopMode: .loop
+    )
+
+    let ranges = VideoRenderer.sourceRangesByAsset(videoEvents: [first, repeated])
+    let range = try XCTUnwrap(ranges["long"]?.first)
+    XCTAssertEqual(CMTimeCompare(range.start, CMTime(seconds: 200, preferredTimescale: 48_000)), 0)
+    XCTAssertEqual(CMTimeGetSeconds(range.duration), 6, accuracy: 0.0001)
+
+    let duration = CMTime(seconds: 600, preferredTimescale: 48_000)
+    let held = VideoRenderer.sourceTime(
+      assetId: "long",
+      sample: 287_999,
+      events: [first],
+      duration: duration
+    )
+    XCTAssertEqual(CMTimeGetSeconds(held), 205.999979, accuracy: 0.001)
+
+    let looped = VideoRenderer.sourceTime(
+      assetId: "long",
+      sample: 288_000 + 168_000,
+      events: [repeated],
+      duration: duration
+    )
+    XCTAssertEqual(CMTimeGetSeconds(looped), 203.5, accuracy: 0.001)
   }
 
   func testStackedAndPhotoDumpKeepFirstRecipeAssetAtTheVisualTop() {
