@@ -23,6 +23,49 @@ import 'package:otogurashi/storage/asset_repository.dart';
 import 'package:otogurashi/storage/project_repository.dart';
 
 void main() {
+  testWidgets('chosen video shows progress until it joins the project', (
+    tester,
+  ) async {
+    final pending = Completer<ClipAsset>();
+    final media = _FakeMedia()
+      ..pickAction = (operationId) async => CapturedMedia(
+        operationId: operationId,
+        assetId: 'chosen',
+        relativePath: 'staging/chosen.mov',
+        durationUs: 3000000,
+        audioTrackStartUs: 0,
+        width: 1080,
+        height: 1920,
+        rotation: 0,
+      );
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _PendingImportAssets(pending.future),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+
+    await tester.tap(find.text('動画を選ぶ'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('この音を使う'));
+    await tester.pump();
+    expect(find.text('音を追加しています'), findsOneWidget);
+    expect(controller.state.clips, isEmpty);
+
+    pending.complete((await _FakeDemo(count: 1).install(_UnusedAssets())).single);
+    await tester.pumpAndSettle();
+    expect(find.text('音を追加しています'), findsNothing);
+    expect(controller.state.clips, hasLength(1));
+  });
+
   testWidgets('camera and Photos start from separate collect actions', (
     tester,
   ) async {
@@ -748,8 +791,20 @@ final class _UnusedAssets implements AssetRepository {
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
+final class _PendingImportAssets implements AssetRepository {
+  _PendingImportAssets(this.result);
+  final Future<ClipAsset> result;
+
+  @override
+  Future<ClipAsset> importManagedStaging(String relativePath) => result;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
 final class _FakeMedia implements MediaGateway {
   CapturedMedia? pickedVideo;
+  Future<CapturedMedia?> Function(String)? pickAction;
   int prepareCalls = 0;
   int pickCalls = 0;
   final renderRequests = <RenderRequest>[];
@@ -810,7 +865,7 @@ final class _FakeMedia implements MediaGateway {
   @override
   Future<CapturedMedia?> pickVideo(String operationId) async {
     pickCalls += 1;
-    return pickedVideo;
+    return pickAction == null ? pickedVideo : await pickAction!(operationId);
   }
 
   @override

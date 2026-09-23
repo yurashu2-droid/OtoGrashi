@@ -46,6 +46,7 @@ class CreationFlow extends StatefulWidget {
 
 class _CreationFlowState extends State<CreationFlow> {
   var _captureOpened = false;
+  var _importingMedia = false;
   late int _tabIndex = widget.startInLibrary ? 1 : 0;
 
   @override
@@ -58,6 +59,7 @@ class _CreationFlowState extends State<CreationFlow> {
   }
 
   Future<void> _openCapture({bool fromPhotos = false}) async {
+    if (_importingMedia) return;
     final captured = await Navigator.of(context).push<CapturedMedia>(
       MaterialPageRoute(
         builder: (_) => _CaptureRoute(
@@ -68,7 +70,17 @@ class _CreationFlowState extends State<CreationFlow> {
         fullscreenDialog: true,
       ),
     );
-    if (captured != null) await widget.controller.addCaptured(captured);
+    if (captured == null || !mounted) return;
+    final previousCount = widget.controller.state.clips.length;
+    setState(() => _importingMedia = true);
+    try {
+      await widget.controller.addCaptured(captured);
+      if (mounted && widget.controller.state.clips.length > previousCount) {
+        unawaited(HapticFeedback.selectionClick());
+      }
+    } finally {
+      if (mounted) setState(() => _importingMedia = false);
+    }
   }
 
   Future<void> _openProject(Project project) async {
@@ -122,12 +134,45 @@ class _CreationFlowState extends State<CreationFlow> {
         _ => _creationContent(state),
       };
       return Scaffold(
-        body: content,
+        body: Stack(
+          children: [
+            content,
+            if (_importingMedia) ...[
+              const ModalBarrier(dismissible: false, color: Color(0x33000000)),
+              Center(
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 18,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2.5),
+                        ),
+                        const SizedBox(width: 14),
+                        Text(
+                          '音を追加しています',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
         bottomNavigationBar: content is _CollectScreen || _tabIndex == 1
             ? NavigationBar(
                 selectedIndex: _tabIndex,
-                onDestinationSelected: (value) =>
-                    setState(() => _tabIndex = value),
+                onDestinationSelected: _importingMedia
+                    ? null
+                    : (value) => setState(() => _tabIndex = value),
                 destinations: const [
                   NavigationDestination(
                     icon: Icon(Icons.add_circle_outline),
