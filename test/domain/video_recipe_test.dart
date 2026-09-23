@@ -41,6 +41,20 @@ void main() {
     }
   });
 
+  test('build-up introduces solo clips before the shared frame', () {
+    final recipe = VideoRecipe.fromArrangement(
+      arrangement: _arrangementWithSourceCount(3),
+      layout: VideoLayout.buildUp,
+    );
+    expect(recipe.events.take(3).map((scene) => scene.assetIds), [
+      ['asset-0'],
+      ['asset-1'],
+      ['asset-2'],
+    ]);
+    expect(recipe.events[3].assetIds, ['asset-0', 'asset-1']);
+    expect(recipe.events[5].assetIds, ['asset-0', 'asset-1', 'asset-2']);
+  });
+
   test(
     'four to six sources switch at the middle boundary and appear by the end',
     () {

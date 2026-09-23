@@ -35,7 +35,7 @@ final class CreationState {
     this.clips = const <ClipAsset>[],
     this.thumbnails = const <String, Uint8List>{},
     this.style = ArrangementStyle.sparse,
-    this.layout = VideoLayout.stacked,
+    this.layout = VideoLayout.buildUp,
     this.compareOriginal = false,
     this.seed = 1,
     this.preview,
@@ -244,7 +244,7 @@ final class CreationController extends ChangeNotifier {
           ),
           layout: VideoLayout.values.firstWhere(
             (value) => value.name == project.videoRecipe['layout'],
-            orElse: () => VideoLayout.stacked,
+            orElse: () => VideoLayout.buildUp,
           ),
           seed: project.arrangement['seed'] is int
               ? project.arrangement['seed']! as int
@@ -257,6 +257,19 @@ final class CreationController extends ChangeNotifier {
         _set(_state.copyWith(phase: CreationPhase.failed, error: error));
       }
     }
+  }
+
+  Future<void> renameClip(String assetId, String label) async {
+    if (_disposed || !_state.clips.any((clip) => clip.id == assetId)) return;
+    final renamed = await assets.rename(assetId, label);
+    if (_disposed) return;
+    _set(
+      _state.copyWith(
+        clips: _state.clips
+            .map((clip) => clip.id == assetId ? renamed : clip)
+            .toList(growable: false),
+      ),
+    );
   }
 
   void selectStyle(ArrangementStyle style) {

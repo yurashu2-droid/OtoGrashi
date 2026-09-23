@@ -18,6 +18,7 @@ enum VideoRenderError: Error, Equatable {
 }
 
 enum VideoLayoutPayload: String, Decodable {
+  case buildUp
   case stacked
   case sequentialFocus
   case photoDump
@@ -631,7 +632,10 @@ struct VideoRenderer {
         assetId: id,
         sample: sample,
         events: request.arrangement.videoEvents,
-        duration: provider.duration
+        duration: provider.duration,
+        repeatFromSample: request.video.layout == .buildUp &&
+          scene.assetIds.count > 1 && index == 0
+          ? 3 * 90_000 : nil
       )
       let image = CIImage(cgImage: try await provider.image(at: sourceTime))
       let sourceCrop = CGRect(
@@ -676,6 +680,22 @@ struct VideoRenderer {
     height: CGFloat
   ) -> [CGRect] {
     switch layout {
+    case .buildUp:
+      switch count {
+      case 1:
+        return [CGRect(x: 0, y: 0, width: width, height: height)]
+      case 2:
+        return [
+          CGRect(x: 0, y: 0, width: width, height: height * 0.45),
+          CGRect(x: 0, y: height * 0.45, width: width, height: height * 0.55),
+        ]
+      default:
+        return [
+          CGRect(x: 0, y: 0, width: width, height: height * 0.45),
+          CGRect(x: 0, y: height * 0.45, width: width / 2, height: height * 0.55),
+          CGRect(x: width / 2, y: height * 0.45, width: width / 2, height: height * 0.55),
+        ]
+      }
     case .stacked:
       let row = height / CGFloat(count)
       return (0..<count).map {
@@ -719,20 +739,28 @@ struct VideoRenderer {
     assetId: String,
     sample: Int,
     events: [VideoEventPayload],
-    duration: CMTime
+    duration: CMTime,
+    repeatFromSample: Int? = nil
   ) -> CMTime {
-    guard let event = events.last(where: {
-      $0.assetId == assetId && $0.destinationStartSample <= sample
-    }) ?? events.first(where: { $0.assetId == assetId }) else { return .zero }
+    let event = repeatFromSample == nil
+      ? (events.last(where: {
+          $0.assetId == assetId && $0.destinationStartSample <= sample
+        }) ?? events.first(where: { $0.assetId == assetId }))
+      : events.first(where: { $0.assetId == assetId })
+    guard let event else { return .zero }
     let eventDuration = max(1, event.durationSamples)
     let offset = max(0, sample - event.destinationStartSample)
     let timescale = CMTimeScale(event.sourceVideoStartTime.denominator)
     let boundedOffset: Int
-    switch event.loopMode {
-    case .once, .hold:
-      boundedOffset = min(eventDuration - 1, offset)
-    case .loop:
-      boundedOffset = offset % eventDuration
+    if let repeatFromSample {
+      boundedOffset = max(0, sample - repeatFromSample) % eventDuration
+    } else {
+      switch event.loopMode {
+      case .once, .hold:
+        boundedOffset = min(eventDuration - 1, offset)
+      case .loop:
+        boundedOffset = offset % eventDuration
+      }
     }
     let sourceSample = event.sourceVideoStartTime.numerator + boundedOffset
     let requested = CMTime(value: CMTimeValue(sourceSample), timescale: timescale)

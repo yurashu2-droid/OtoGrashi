@@ -1,6 +1,6 @@
 import 'arrangement.dart';
 
-enum VideoLayout { stacked, sequentialFocus, photoDump }
+enum VideoLayout { buildUp, stacked, sequentialFocus, photoDump }
 
 final class VideoEffects {
   const VideoEffects._(this.enabled);
@@ -269,6 +269,27 @@ abstract final class ArrangementPayloadClock {
 
 List<VideoSceneEvent> _buildScenes(List<String> ids, VideoLayout layout) {
   switch (layout) {
+    case VideoLayout.buildUp:
+      return List<VideoSceneEvent>.generate(8, (bar) {
+        final visible = switch (bar) {
+          0 || 1 || 2 => <String>[ids[bar]],
+          3 => <String>[ids[0], ids[1]],
+          4 => <String>[ids[0], ids[2]],
+          5 => <String>[ids[0], ids[1], ids[2]],
+          6 => <String>[
+            ids[0],
+            ids.length > 3 ? ids[3] : ids[1],
+            ids.length > 4 ? ids[4] : ids[2],
+          ],
+          _ => <String>[ids[0], ids.length > 5 ? ids[5] : ids[1], ids[2]],
+        };
+        return VideoSceneEvent(
+          destinationStartSample: bar * Arrangement.barSamples,
+          durationSamples: Arrangement.barSamples,
+          assetIds: visible,
+          primaryAssetId: visible.first,
+        );
+      });
     case VideoLayout.stacked:
       if (ids.length == 3) {
         return <VideoSceneEvent>[

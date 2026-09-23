@@ -1,9 +1,15 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
+import '../../design/tokens.dart';
 import '../../domain/clip_asset.dart';
 import '../../domain/project.dart';
+import '../../media/media_delivery_gateway.dart';
+import '../../media/media_presentation_gateway.dart';
 import '../../storage/asset_repository.dart';
 import '../../storage/project_repository.dart';
+import '../export/completed_video_screen.dart';
 
 typedef ProjectSelected = Future<void> Function(Project project);
 
@@ -12,6 +18,8 @@ final class LibraryScreen extends StatefulWidget {
     required this.projects,
     required this.assets,
     required this.onCreate,
+    this.presentation,
+    this.delivery,
     this.onProjectSelected,
     this.onAssetSelected,
     this.initialTabIndex = 0,
@@ -22,6 +30,8 @@ final class LibraryScreen extends StatefulWidget {
   final ProjectRepository projects;
   final AssetRepository assets;
   final VoidCallback onCreate;
+  final MediaPresentationGateway? presentation;
+  final MediaDeliveryGateway? delivery;
   final ProjectSelected? onProjectSelected;
   final ValueChanged<ClipAsset>? onAssetSelected;
   final int initialTabIndex;
@@ -137,6 +147,26 @@ class _LibraryScreenState extends State<LibraryScreen>
               completed: _exports
                   .where((item) => item.projectId == project.id)
                   .toList(growable: false),
+              presentation: widget.presentation,
+              onView: widget.presentation == null || widget.delivery == null
+                  ? null
+                  : () {
+                      final exports = _exports
+                          .where((item) => item.projectId == project.id)
+                          .toList(growable: false);
+                      if (exports.isEmpty) return;
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => CompletedVideoScreen(
+                            project: project,
+                            export: exports.first,
+                            versions: exports,
+                            presentation: widget.presentation!,
+                            delivery: widget.delivery!,
+                          ),
+                        ),
+                      );
+                    },
               onOpen: widget.onProjectSelected == null
                   ? null
                   : () => widget.onProjectSelected!(project),
@@ -165,7 +195,9 @@ class _LibraryScreenState extends State<LibraryScreen>
           final asset = _assets[index];
           return _AssetCard(
             asset: asset,
+            index: index,
             projects: widget.assets.referencingProjectIds(asset.id),
+            onRename: () => _renameAsset(context, asset, index),
             onTap: widget.onAssetSelected == null
                 ? null
                 : () => widget.onAssetSelected!(asset),
@@ -173,6 +205,48 @@ class _LibraryScreenState extends State<LibraryScreen>
         },
       ),
     );
+  }
+
+  Future<void> _renameAsset(
+    BuildContext context,
+    ClipAsset asset,
+    int index,
+  ) async {
+    var name = _soundName(asset, index);
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('この音に名前をつける'),
+        content: TextFormField(
+          initialValue: name,
+          autofocus: true,
+          maxLength: 40,
+          decoration: const InputDecoration(hintText: '例：コップを置く音'),
+          onChanged: (value) => name = value,
+          onFieldSubmitted: (_) => Navigator.pop(dialogContext, name),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, name),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (chosen == null || chosen.trim().isEmpty || !context.mounted) return;
+    try {
+      await widget.assets.rename(asset.id, chosen);
+      await _reload();
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('名前を保存できませんでした')));
+      }
+    }
   }
 
   Future<void> _deleteProject(BuildContext context, Project project) async {
@@ -220,12 +294,16 @@ final class _ProjectCard extends StatelessWidget {
   const _ProjectCard({
     required this.project,
     required this.completed,
+    required this.presentation,
+    required this.onView,
     required this.onOpen,
     required this.onDelete,
   });
 
   final Project project;
   final List<CompletedExport> completed;
+  final MediaPresentationGateway? presentation;
+  final VoidCallback? onView;
   final VoidCallback? onOpen;
   final VoidCallback onDelete;
 
@@ -255,6 +333,30 @@ final class _ProjectCard extends StatelessWidget {
               ),
             ],
           ),
+          if (completed.isNotEmpty && presentation != null) ...[
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: SizedBox(
+                height: 174,
+                child: FutureBuilder<Uint8List>(
+                  future: presentation!.thumbnail(completed.first.relativePath),
+                  builder: (context, snapshot) => snapshot.hasData
+                      ? Image.memory(
+                          snapshot.data!,
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                        )
+                      : const ColoredBox(
+                          color: AppTokens.paper,
+                          child: Center(
+                            child: Icon(Icons.movie_outlined, size: 38),
+                          ),
+                        ),
+                ),
+              ),
+            ),
+          ],
           Text('${project.clipIds.length}素材・編集 ${project.revision}回目'),
           if (completed.isNotEmpty)
             Padding(
@@ -262,6 +364,14 @@ final class _ProjectCard extends StatelessWidget {
               child: Text('完成版 ${completed.length}件を保存中'),
             ),
           const SizedBox(height: 10),
+          if (completed.isNotEmpty && onView != null) ...[
+            FilledButton.icon(
+              onPressed: onView,
+              icon: const Icon(Icons.play_arrow_rounded),
+              label: const Text('完成動画を見る'),
+            ),
+            const SizedBox(height: 8),
+          ],
           OutlinedButton.icon(
             onPressed: onOpen,
             icon: const Icon(Icons.tune),
@@ -276,20 +386,24 @@ final class _ProjectCard extends StatelessWidget {
 final class _AssetCard extends StatelessWidget {
   const _AssetCard({
     required this.asset,
+    required this.index,
     required this.projects,
     required this.onTap,
+    required this.onRename,
   });
 
   final ClipAsset asset;
+  final int index;
   final Future<List<String>> projects;
   final VoidCallback? onTap;
+  final VoidCallback onRename;
 
   @override
   Widget build(BuildContext context) => Card(
     child: ListTile(
       onTap: onTap,
       leading: const CircleAvatar(child: Icon(Icons.graphic_eq)),
-      title: Text(asset.label.isEmpty ? '名前のない素材' : asset.label),
+      title: Text(_soundName(asset, index)),
       subtitle: FutureBuilder<List<String>>(
         future: projects,
         builder: (context, snapshot) => Text(
@@ -297,9 +411,21 @@ final class _AssetCard extends StatelessWidget {
           '${snapshot.data?.length ?? 0}作品で使用中',
         ),
       ),
-      trailing: const Icon(Icons.chevron_right),
+      trailing: IconButton(
+        onPressed: onRename,
+        tooltip: '音の名前を変更',
+        icon: const Icon(Icons.edit_outlined),
+      ),
     ),
   );
+}
+
+String _soundName(ClipAsset asset, int index) {
+  final generatedName = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$')
+      .hasMatch(asset.label);
+  return generatedName || asset.label.isEmpty
+      ? '録った音 ${index + 1}'
+      : asset.label;
 }
 
 final class _EmptyState extends StatelessWidget {

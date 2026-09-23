@@ -100,6 +100,8 @@ class _CreationFlowState extends State<CreationFlow> {
         1 => LibraryScreen(
           projects: widget.controller.projects,
           assets: widget.controller.assets,
+          presentation: widget.controller.presentation,
+          delivery: widget.delivery ?? PlatformMediaDeliveryGateway(),
           initialTabIndex: 0,
           onCreate: _startCaptureFromLibrary,
           onProjectSelected: _openProject,
@@ -157,6 +159,50 @@ class _CollectScreen extends StatelessWidget {
   const _CollectScreen({required this.controller, required this.onCapture});
   final CreationController controller;
   final VoidCallback onCapture;
+
+  Future<void> _renameClip(
+    BuildContext context,
+    ClipAsset clip,
+    int index,
+  ) async {
+    final generatedName = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$')
+        .hasMatch(clip.label);
+    var name = generatedName ? '録った音 ${index + 1}' : clip.label;
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('この音に名前をつける'),
+        content: TextFormField(
+          initialValue: name,
+          autofocus: true,
+          maxLength: 40,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(hintText: '例：コップを置く音'),
+          onChanged: (value) => name = value,
+          onFieldSubmitted: (_) => Navigator.pop(dialogContext, name),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, name),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (chosen == null || chosen.trim().isEmpty || !context.mounted) return;
+    try {
+      await controller.renameClip(clip.id, chosen);
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('名前を保存できませんでした')));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -277,6 +323,8 @@ class _CollectScreen extends StatelessWidget {
                   clip: state.clips[index],
                   index: index,
                   thumbnail: state.thumbnails[state.clips[index].id],
+                  onRename: () =>
+                      _renameClip(context, state.clips[index], index),
                   onRemove: () =>
                       unawaited(controller.removeClip(state.clips[index].id)),
                   onMove: (offset) {
@@ -349,6 +397,7 @@ class _ClipCard extends StatelessWidget {
     required this.clip,
     required this.index,
     required this.thumbnail,
+    required this.onRename,
     required this.onMove,
     required this.onRemove,
     super.key,
@@ -356,6 +405,7 @@ class _ClipCard extends StatelessWidget {
   final ClipAsset clip;
   final int index;
   final dynamic thumbnail;
+  final VoidCallback onRename;
   final ValueChanged<int> onMove;
   final VoidCallback onRemove;
 
@@ -410,11 +460,22 @@ class _ClipCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium,
+                      InkWell(
+                        onTap: onRename,
+                        child: Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                            ),
+                            const SizedBox(width: 3),
+                            const Icon(Icons.edit_outlined, size: 15),
+                          ],
+                        ),
                       ),
                       const SizedBox(height: 2),
                       Text(
@@ -535,7 +596,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
             ),
             const SizedBox(height: 7),
             Text(
-              'いつもの音が、\n15秒の曲に。',
+              'さっきの場面が、\n曲になっていく。',
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 18),
@@ -810,7 +871,7 @@ class _CompletedScreenState extends State<_CompletedScreen> {
             ),
             const SizedBox(height: 7),
             Text(
-              'いつもの音が、\nちょっと特別に。',
+              'あの瞬間が、\nみんなの曲に。',
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 7),

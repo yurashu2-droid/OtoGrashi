@@ -24,4 +24,18 @@ final class ClipAsset {
   final int rotation;
   final String sha256;
   final String label;
+
+  ClipAsset withLabel(String value) => ClipAsset(
+    id: id,
+    relativePath: relativePath,
+    durationUs: durationUs,
+    audioTrackStartUs: audioTrackStartUs,
+    selectionStartUs: selectionStartUs,
+    selectionDurationUs: selectionDurationUs,
+    width: width,
+    height: height,
+    rotation: rotation,
+    sha256: sha256,
+    label: value,
+  );
 }

@@ -2,7 +2,7 @@
 
 ## 核
 
-**家の中で撮った3つの音が、元の音だと分かるまま15秒の曲と動画に変わる驚き。**
+**友達のリアクションや生活音を撮ると、見慣れた場面が少しずつ重なり、気づけば笑える15秒の曲とMAD的な動画になる驚き。**
 
 最初の成功は「3素材を集める」だけではない。自分の音を聴き比べ、完成動画を端末へ保存するか人に渡せた時点。制作の専門知識より、身近な物をもう一つ撮りたくなる好奇心を優先する。
 
@@ -39,3 +39,17 @@
 5. 現実の3本を使った実機確認で「最初の完成動画を持ち帰れるか」を評価し、次の修正を選ぶ。
 
 追加エフェクト、マスコット、公開フィード、リミックスの拡張は、この一周の実機評価後に判断する。サウンド／ビデオが同期するエフェクトは既定どおり後続機能。
+
+## 第2回：曲に「なっていく」映像
+
+ユーザーが重視するのは日常風景を常時3段で並べた動画ではなく、友達の反応、タイピング、コップなどの断片が音とともに展開する意外性。目標を「制作できる」から「一緒に見て笑え、SNSへ渡したくなる」に具体化する。
+
+参照画像: [映像のビルドアップ](remix-build-up-storyboard-v1.png)。ImageGenの `ui-mockup` で作成した4コマの方向確認。プロンプトは、同じ3本の実写素材をフル画面の単独映像から2本、3本の画面へ増やし、手書きの擬音と淡いコーラル／紫を拍のアクセントとして添える、setlog／短尺MAD風の縦動画。これはタイミングと構図の参照であり、生成画像を動画素材として埋め込むものではない。
+
+使用プロンプト（built-in ImageGen）:
+
+> ui-mockup. Create one horizontal design-reference image showing FOUR successive frames of a 15-second vertical social video inside four separate true 9:16 smartphone-screen rectangles, laid out left to right as a storyboard. This is for a Japanese casual music-making app called オトグラシ. Candid real-life source footage: a friend’s spontaneous surprised 'わぁ!' reaction, hands typing on a laptop, and a ceramic cup set on a table. Beat 1: friend reaction fills the entire vertical video. Beat 2: typing fills the video. Beat 3: two videos appear at once, with the friend in the larger upper lane and the cup as a repeating rhythm strip below. Beat 4: three videos form a lively but readable composition, friend reaction and typing in top half side by side, cup as bass loop across bottom half. Brief doodled handwritten Japanese onomatopoeia and tiny coral/lavender rhythmic accent marks, scrapbook/setlog/TikTok edit energy, warm real footage, clearly still practical in-app vertical video frames. Keep the video itself the hero. NO actual app chrome, buttons, status bars, phone bezel, permanent decorative cup frame, slick futuristic neon, generic gradient, stock-photo polish, or mascot. Each frame should feel like the same 3 videos re-edited as the music builds. High-resolution concept storyboard, legible visual structure; text accuracy not essential.
+
+標準の動画レイアウトを `buildUp` にする。最初の3小節で各素材を全画面で見せ、4〜5小節で2本、6小節目以降で3本を同時に見せる。先頭素材を下段の大きめの帯で短くループさせ、別の素材が上に増える。既存の「3段」「順番に大きく」「フォトダンプ」は選択肢として維持する。作品一覧から完成動画を再生・保存・再共有できるようにし、素材には名前を付けられるようにする。
+
+次に検証する仮説は、拍に合わせた一部映像の複製・反転、声や短い音のピッチを安全な範囲で変えること、MIDI的な旋律テンプレートに音を当てること。音の元が認識できる楽しさや書き出しの安定性を実機で確かめてから、どれが本当に共有したくなる変化を作るか選ぶ。ピッチ／MIDIを必須要件とはしない。

@@ -18,6 +18,7 @@ abstract interface class AssetRepository {
   Future<ClipAsset> importManagedStaging(String relativePath);
   Future<ClipAsset?> load(String id);
   Future<List<ClipAsset>> list();
+  Future<ClipAsset> rename(String assetId, String label);
   Future<String> resolvePath(String assetId);
   Future<List<String>> referencingProjectIds(String assetId);
   Future<void> deleteUnreferenced(String assetId);
@@ -182,6 +183,21 @@ final class SqliteAssetRepository implements AssetRepository {
         .select('SELECT * FROM assets ORDER BY label COLLATE NOCASE, id')
         .map(_decodeAsset)
         .toList(growable: false);
+  }
+
+  @override
+  Future<ClipAsset> rename(String assetId, String label) async {
+    final value = label.trim();
+    if (value.isEmpty || value.runes.length > 40) {
+      throw const InvalidAsset('音の名前は1〜40文字で入力してください。');
+    }
+    final current = await load(assetId);
+    if (current == null) throw AssetNotFound(assetId);
+    _database.connection.execute(
+      'UPDATE assets SET label = ? WHERE id = ?',
+      <Object?>[value, assetId],
+    );
+    return current.withLabel(value);
   }
 
   @override

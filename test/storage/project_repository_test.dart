@@ -35,6 +35,19 @@ void main() {
       await root.delete(recursive: true);
     });
 
+    test('renamed sound stays named after reopening storage', () async {
+      final asset = await assets.importFile(fixture.path);
+      await assets.rename(asset.id, 'コップを置く音');
+      database.close();
+      database = await ProjectDatabase.open(root);
+      assets = SqliteAssetRepository(
+        database,
+        inspector: const _FixtureInspector(),
+      );
+      expect((await assets.load(asset.id))?.label, 'コップを置く音');
+      expect((await assets.list()).single.label, 'コップを置く音');
+    });
+
     test('deleting one project keeps a shared original', () async {
       final asset = await assets.importFile(fixture.path);
       final first = await _createProjectWith(projects, asset.id, 'first');

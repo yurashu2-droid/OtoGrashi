@@ -305,6 +305,41 @@ final class VideoRendererTests: XCTestCase {
     }
   }
 
+  func testBuildUpGrowsFromFullFrameToBassLaneAndTwoUpperClips() {
+    let solo = VideoRenderer.targetRects(count: 1, layout: .buildUp, width: 360, height: 640)
+    let duo = VideoRenderer.targetRects(count: 2, layout: .buildUp, width: 360, height: 640)
+    let trio = VideoRenderer.targetRects(count: 3, layout: .buildUp, width: 360, height: 640)
+    XCTAssertEqual(solo.count, 1)
+    XCTAssertEqual(solo[0].height, 640)
+    XCTAssertEqual(duo.count, 2)
+    XCTAssertLessThan(duo[0].midY, duo[1].midY)
+    XCTAssertEqual(trio.count, 3)
+    XCTAssertEqual(trio[0].width, 360)
+    XCTAssertEqual(trio[1].width, 180)
+    XCTAssertEqual(trio[2].width, 180)
+  }
+
+  func testBuildUpRepeatsTheFirstSourceEvenWhenItsNormalModeHolds() {
+    let event = VideoEventPayload(
+      assetId: "bass",
+      destinationStartSample: 0,
+      durationSamples: 12_000,
+      sourceVideoStartTime: RationalTimePayload(numerator: 48_000, denominator: 48_000),
+      crop: NormalizedCropPayload(x: 0, y: 0, width: 1, height: 1),
+      loopMode: .hold
+    )
+    let duration = CMTime(seconds: 3, preferredTimescale: 48_000)
+    let first = VideoRenderer.sourceTime(
+      assetId: "bass", sample: 270_000 + 3_000,
+      events: [event], duration: duration, repeatFromSample: 270_000
+    )
+    let repeated = VideoRenderer.sourceTime(
+      assetId: "bass", sample: 270_000 + 15_000,
+      events: [event], duration: duration, repeatFromSample: 270_000
+    )
+    XCTAssertEqual(CMTimeCompare(first, repeated), 0)
+  }
+
   func testSequentialFocusUsesPrimaryAssetWhenSceneContainsMultipleSources() {
     let scene = VideoSceneEventPayload(
       destinationStartSample: 0,
