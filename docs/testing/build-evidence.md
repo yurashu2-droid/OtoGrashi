@@ -28,3 +28,17 @@
 - AACの圧縮パケット境界は固定の正解値にせず、元動画の時刻と既知の音の位置で検証。正確なPTS配置は別の合成PCMテストでも検証。
 - 素材は自作の合成テスト動画。実際の生活音30種類の聴き心地、iPhoneの録音・Bluetooth・触覚・映像同期、TestFlight配布は未確認。
 - 動画合成と全画面フローは引き続き実装中。この成功はアプリ全体の完成を意味しない。
+
+## iLoader向け署名なしRelease IPA — 2026-09-23
+
+- 対象commit: `c03e1eeba2274fe68d5540522acc6f13c977e1fa`。
+- [IPA生成ジョブ](https://github.com/yurashu2-droid/OtoGrashi/actions/runs/35805467269): success。
+- [Artifacts: OtoGrashi-unsigned-ipa](https://github.com/yurashu2-droid/OtoGrashi/actions/runs/35805467269/artifacts/10727307429)（約47.4MB、保持期限2026-10-07 UTC）。
+- `xcodebuild archive` / Release / generic iOS device / arm64 が成功。`CODE_SIGNING_ALLOWED=NO`、空のTeam ID・署名Identityで実行。
+- 仮Bundle ID `dev.yurashu2.otogurashi`、iPhoneOS、arm64、アプリ本体の `_CodeSignature` と `embedded.mobileprovision` の不在をスクリプトで確認。
+- `Payload/Runner.app` を `OtoGrashi-unsigned.ipa` に梱包し、`unzip -tq`成功。IPAのSHA256、commit、build情報、dSYMをArtifactsに同梱。
+- Apple ID・証明書・秘密鍵・Provisioning Profile・App Store Connect認証情報を登録・使用していない。TestFlightへのアップロードは行わない。
+- Flutter側は今回の機能変更時点で静的解析成功、75テスト成功（任意の画像取得テスト1件skip）。Swift修正後はCIでReleaseコンパイルを確認。
+- 初回は比較再生のSwift引数ラベル、次回は梱包前のlipo引数順で停止。上記成功commitで両方を解消。
+- これは途中版の実機テスト用IPA。iLoader署名・インストール、iPhone録音・音質・触覚は未確認。共有・リミックスは未完成。HDR合成fixtureのSimulator読み込み失敗は別の未解決項目として残る。
+- 同一アプリコードのSimulator検証は[別ジョブ](https://github.com/yurashu2-droid/OtoGrashi/actions/runs/35805210387)で実行中。IPA生成成功を全ネイティブテストの成功とは扱わない。
