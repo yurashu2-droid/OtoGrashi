@@ -5,6 +5,10 @@ import 'package:otogurashi/app/otogurashi_app.dart';
 
 void main() {
   testWidgets('first launch starts with personal recording', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const OtogurashiApp());
 
     expect(find.text('聴いてみる'), findsNothing);

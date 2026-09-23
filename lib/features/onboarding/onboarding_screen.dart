@@ -22,29 +22,25 @@ class OnboardingScreen extends StatelessWidget {
         padding: const EdgeInsets.all(AppTokens.pagePadding),
         children: [
           const SizedBox(height: 64),
-          Container(
-            height: 220,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFE6DC),
-              borderRadius: BorderRadius.circular(36),
-            ),
-            child: const Stack(
-              children: [
-                Positioned(left: 32, top: 36, child: _SoundDot(size: 48)),
-                Positioned(right: 44, top: 68, child: _SoundDot(size: 72)),
-                Positioned(left: 96, bottom: 28, child: _SoundDot(size: 88)),
-                Center(child: Icon(Icons.graphic_eq_rounded, size: 82)),
-              ],
+          AspectRatio(
+            aspectRatio: 1.54,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(24),
+              child: Image.asset(
+                'assets/art/onboarding-moments-v1.webp',
+                fit: BoxFit.cover,
+                semanticLabel: '友達の笑顔、キーボード、コップの動画が重なるイメージ',
+              ),
             ),
           ),
           const SizedBox(height: 38),
           Text(
-            '暮らしの音が、\n15秒の音楽になる。',
+            'いつもの一瞬が、\n曲になる。',
             style: Theme.of(context).textTheme.displaySmall,
           ),
           const SizedBox(height: 14),
           Text(
-            'コップ、蛇口、キーボード。3つの短い動画から、音と映像をつなぎます。',
+            '友達の「わっ！」も、タイピングの音も。3つの短い動画が重なって、15秒の曲になります。',
             style: Theme.of(context).textTheme.bodyLarge,
           ),
           const SizedBox(height: 32),
@@ -59,7 +55,7 @@ class OnboardingScreen extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           const Text(
-            '撮影した動画を3つ選んで、あなただけの音楽をつくろう。',
+            '今撮っても、写真から選んでもOK。',
             textAlign: TextAlign.center,
           ),
           if (error != null) ...[
@@ -100,21 +96,6 @@ class _ButtonSurface extends StatelessWidget {
             : Theme.of(context).colorScheme.primary,
         fontWeight: FontWeight.w700,
       ),
-    ),
-  );
-}
-
-class _SoundDot extends StatelessWidget {
-  const _SoundDot({required this.size});
-  final double size;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    decoration: BoxDecoration(
-      color: size > 80 ? const Color(0xFFB9A0FF) : const Color(0xFFFF8C7E),
-      shape: BoxShape.circle,
     ),
   );
 }

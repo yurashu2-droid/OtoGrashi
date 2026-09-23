@@ -67,3 +67,9 @@ iOS CIの診断では、54件中52件が通過した。長尺元動画の短い�
 ## 第3回：音の位置が見える短いアクセント
 
 映像が1本から複数本へ増えるだけでは、どの断片が今の音か瞬時に伝わりにくい。標準の `buildUp` 書き出しに限り、実際の音イベントの開始から0.2秒、該当素材の映像内に小さな3本の線を描く。白い縁で実写上の視認性を保ち、コーラルと薄紫を交互に使う。映像を覆う枠や常時表示の装飾は増やさない。これは編集表現であり、後続のユーザー選択式サウンド／ビデオエフェクトとは別に扱う。
+
+初回画面も抽象的な丸では撮る対象や完成物が伝わらなかったため、ImageGenで[日常の3場面を切り貼りした画像](../../assets/art/onboarding-moments-v1.webp)を作成し、友達の「わっ！」・タイピング・コップの例を文言にした。[390×844の描画確認](iteration-3-onboarding.png)では画像・説明・主ボタンが一画面に収まる。この画像は体験を示す挿絵で、ユーザー素材や完成動画のサンプルではない。
+
+使用プロンプト（built-in ImageGen、`photorealistic-natural`）:
+
+> Create a single landscape 3:2 image for the first screen of a Japanese iPhone app that turns everyday videos into a 15-second rhythm video. Three candid moments: an adult friend reacting with an open-mouthed delighted laugh, hands typing on a laptop, and a ceramic cup being set on a home table. Make a cohesive collage of three readable uneven film frames; the friend is largest. Warm natural light, believable handheld smartphone footage, lived-in Japanese apartment, cream paper gaps, subtle coral and lavender hand-drawn beat marks. Compose for a rounded 1.55:1 crop. No words, logos, watermarks, UI buttons, phone bezel, gradients, neon, mascot, or cup-shaped border.
