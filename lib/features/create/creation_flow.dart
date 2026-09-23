@@ -19,6 +19,7 @@ import '../../features/capture/capture_screen.dart';
 import '../../media/media_gateway.dart';
 import '../../media/media_presentation_gateway.dart';
 import '../../media/media_delivery_gateway.dart';
+import '../export/comparison_player.dart';
 import '../export/media_playback.dart';
 import 'creation_controller.dart';
 
@@ -725,13 +726,28 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
     super.dispose();
   }
 
+  Future<void> _openComparison() async {
+    final state = widget.controller.state;
+    final songPath = state.preview?.relativePath;
+    if (songPath == null) return;
+    await playback.pause();
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ComparisonPlayer(
+          songPath: songPath,
+          originalSegments: widget.controller.comparisonSegments,
+          presentation: widget.controller.presentation,
+          fallback: _SyntheticPreview(clips: state.clips),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = widget.controller.state;
-    final segments = widget.controller.comparisonSegments;
-    final path = state.compareOriginal
-        ? state.clips.firstOrNull?.relativePath
-        : state.preview?.relativePath;
+    final path = state.preview?.relativePath;
     return Scaffold(
       appBar: AppBar(
         title: const Text('音づくり'),
@@ -761,23 +777,36 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 18),
-            PlaybackChrome(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 400),
-                child: AspectRatio(
-                  aspectRatio: 9 / 16,
-                  child: path == null
-                      ? const _PreviewPlaceholder()
-                      : NativeMovieView(
-                          key: ValueKey(
-                            '$path:${state.compareOriginal}:${state.project?.revision}',
+            Center(
+              child: PlaybackChrome(
+                child: SizedBox(
+                  width: 225,
+                  child: Stack(
+                    children: [
+                      AspectRatio(
+                        aspectRatio: 9 / 16,
+                        child: path == null
+                            ? const _PreviewPlaceholder()
+                            : NativeMovieView(
+                                key: ValueKey(
+                                  '$path:${state.project?.revision}',
+                                ),
+                                relativePath: path,
+                                gateway: widget.controller.presentation,
+                                controller: playback,
+                                fallback: _SyntheticPreview(clips: state.clips),
+                              ),
+                      ),
+                      if (path != null)
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: _CompareVideoButton(
+                            onPressed: _openComparison,
                           ),
-                          relativePath: path,
-                          segments: state.compareOriginal ? segments : const [],
-                          gateway: widget.controller.presentation,
-                          controller: playback,
-                          fallback: _SyntheticPreview(clips: state.clips),
                         ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -797,31 +826,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               )
             else
-              _PlaybackControls(
-                playback: playback,
-                label: state.compareOriginal
-                    ? '素材のまま・${state.clips.length}素材を続けて再生'
-                    : '曲になった音',
-              ),
-            const SizedBox(height: 20),
-            const Text(
-              '聴き比べる',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
-            ),
-            const SizedBox(height: 8),
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: true, label: Text('元の音')),
-                ButtonSegment(value: false, label: Text('できた曲')),
-              ],
-              selected: {state.compareOriginal},
-              onSelectionChanged: state.preview == null
-                  ? null
-                  : (value) async {
-                      await playback.pause();
-                      widget.controller.setCompareOriginal(value.single);
-                    },
-            ),
+              _PlaybackControls(playback: playback, label: '曲になった音'),
             const SizedBox(height: 20),
             const Text(
               '曲の雰囲気',
@@ -916,6 +921,22 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   bool _busy = false;
   bool _saved = false;
   String? _message;
+
+  Future<void> _openComparison() async {
+    await playback.pause();
+    if (!mounted) return;
+    final state = widget.controller.state;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ComparisonPlayer(
+          songPath: state.preview!.relativePath,
+          originalSegments: widget.controller.comparisonSegments,
+          presentation: widget.controller.presentation,
+          fallback: _SyntheticPreview(clips: state.clips),
+        ),
+      ),
+    );
+  }
 
   Future<RenderedMedia> _ensureFullVideo() async {
     final project = widget.controller.state.project!;
@@ -1045,14 +1066,23 @@ class _CompletedScreenState extends State<_CompletedScreen> {
               child: SizedBox(
                 width: 300,
                 child: PlaybackChrome(
-                  child: AspectRatio(
-                    aspectRatio: 9 / 16,
-                    child: NativeMovieView(
-                      relativePath: state.preview!.relativePath,
-                      gateway: widget.controller.presentation,
-                      controller: playback,
-                      fallback: _SyntheticPreview(clips: state.clips),
-                    ),
+                  child: Stack(
+                    children: [
+                      AspectRatio(
+                        aspectRatio: 9 / 16,
+                        child: NativeMovieView(
+                          relativePath: state.preview!.relativePath,
+                          gateway: widget.controller.presentation,
+                          controller: playback,
+                          fallback: _SyntheticPreview(clips: state.clips),
+                        ),
+                      ),
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: _CompareVideoButton(onPressed: _openComparison),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -1124,6 +1154,25 @@ class _CompletedScreenState extends State<_CompletedScreen> {
       ),
     );
   }
+}
+
+class _CompareVideoButton extends StatelessWidget {
+  const _CompareVideoButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => FilledButton.tonalIcon(
+    onPressed: onPressed,
+    style: FilledButton.styleFrom(
+      minimumSize: const Size(44, 44),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      backgroundColor: AppTokens.paper,
+      foregroundColor: AppTokens.ink,
+    ),
+    icon: const Icon(Icons.open_in_full_rounded, size: 18),
+    label: const Text('見くらべる'),
+  );
 }
 
 class _PlaybackControls extends StatelessWidget {

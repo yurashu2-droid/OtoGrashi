@@ -187,7 +187,9 @@ void main() {
     );
   });
 
-  testWidgets('original comparison visits every selected clip', (tester) async {
+  testWidgets('full-screen comparison visits every selected clip', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -213,20 +215,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final compare = find.text('元の音', skipOffstage: false);
-    await tester.scrollUntilVisible(
-      compare,
-      180,
-      scrollable: find.byType(Scrollable).first,
-    );
+    await tester.tap(find.text('見くらべる'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('元の音'));
     await tester.pumpAndSettle();
-    expect(find.text('素材のまま・3素材を続けて再生'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.byType(NativeMovieView),
-      -250,
-      scrollable: find.byType(Scrollable).first,
-    );
+    expect(find.text('いつもの音 → できた曲'), findsOneWidget);
     final movie = tester.widget<NativeMovieView>(find.byType(NativeMovieView));
     expect(
       movie.segments.map((s) => s.relativePath),
@@ -473,6 +466,22 @@ void main() {
       boundaryKey,
       File('${output.path}/arrange.png'),
     );
+    await tester.tap(find.text('見くらべる'));
+    await tester.pumpAndSettle();
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/comparison-song.png'),
+    );
+    await tester.tap(find.text('元の音'));
+    await tester.pumpAndSettle();
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/comparison-original.png'),
+    );
+    await tester.tap(find.byTooltip('閉じる'));
+    await tester.pumpAndSettle();
     completeController.complete();
     await tester.pumpAndSettle();
     await _captureScreen(
