@@ -175,13 +175,21 @@ final class VideoRecipe {
         'Video recipes require 3 to 6 sources.',
       );
     }
+    final visibleIds = ids
+        .where((id) => !arrangement.unusableAssetIds.contains(id))
+        .toList(growable: false);
+    if (visibleIds.length < 3) {
+      throw const MediaContractException(
+        'Video recipes require 3 usable sources.',
+      );
+    }
     return VideoRecipe(
       layout: layout,
       clipCrops: ids
           .map((id) => ClipCrop(assetId: id, crop: NormalizedCrop.fullFrame))
           .toList(),
       captions: const <VideoCaption>[],
-      events: _buildScenes(ids, layout, arrangement.events),
+      events: _buildScenes(visibleIds, layout, arrangement.events),
     );
   }
 

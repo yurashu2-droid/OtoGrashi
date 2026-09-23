@@ -197,6 +197,8 @@ struct VideoRenderer {
       assets: assets,
       requiredIds: requiredIds,
       videoEvents: request.arrangement.videoEvents,
+      scenes: request.video.events,
+      layout: request.video.layout,
       cancellation: cancellation
     )
     videoRenderDiagnostic("VIDEO_STAGE providers_ready count=\(providers.count)")
@@ -399,11 +401,27 @@ struct VideoRenderer {
     assets: [String: URL],
     requiredIds: Set<String>,
     videoEvents: [VideoEventPayload],
+    scenes: [VideoSceneEventPayload],
+    layout: VideoLayoutPayload,
     cancellation: CancellationToken
   ) async throws
     -> [String: SourceProvider]
   {
-    let sourceRanges = Self.sourceRangesByAsset(videoEvents: videoEvents)
+    var sourceRanges = Self.sourceRangesByAsset(videoEvents: videoEvents)
+    if layout == .buildUp {
+      for scene in scenes.prefix(3) where scene.assetIds.count == 1 {
+        let id = scene.assetIds[0]
+        guard let anchor = videoEvents.first(where: { $0.assetId == id }) else { continue }
+        let timescale = CMTimeScale(anchor.sourceVideoStartTime.denominator)
+        let start = CMTime(
+          value: CMTimeValue(anchor.sourceVideoStartTime.numerator),
+          timescale: timescale
+        )
+        let duration = CMTime(value: 90_000, timescale: 48_000)
+        sourceRanges[id, default: []].append(CMTimeRange(start: start, duration: duration))
+      }
+      sourceRanges = sourceRanges.mapValues(Self.mergeSourceRanges)
+    }
     var result: [String: SourceProvider] = [:]
     for id in requiredIds {
       guard let url = assets[id] else { throw VideoRenderError.missingAsset }
@@ -640,6 +658,8 @@ struct VideoRenderer {
         sample: sample,
         events: request.arrangement.videoEvents,
         duration: provider.duration,
+        continuousFromSample: request.video.layout == .buildUp &&
+          scene.assetIds.count == 1 ? scene.destinationStartSample : nil,
         repeatFromSample: request.video.layout == .buildUp &&
           scene.assetIds.count > 1 && index == 0
           ? 3 * 90_000 : nil
@@ -747,9 +767,10 @@ struct VideoRenderer {
     sample: Int,
     events: [VideoEventPayload],
     duration: CMTime,
+    continuousFromSample: Int? = nil,
     repeatFromSample: Int? = nil
   ) -> CMTime {
-    let event = repeatFromSample == nil
+    let event = repeatFromSample == nil && continuousFromSample == nil
       ? (events.last(where: {
           $0.assetId == assetId && $0.destinationStartSample <= sample
         }) ?? events.first(where: { $0.assetId == assetId }))
@@ -759,7 +780,9 @@ struct VideoRenderer {
     let offset = max(0, sample - event.destinationStartSample)
     let timescale = CMTimeScale(event.sourceVideoStartTime.denominator)
     let boundedOffset: Int
-    if let repeatFromSample {
+    if let continuousFromSample {
+      boundedOffset = max(0, sample - continuousFromSample)
+    } else if let repeatFromSample {
       boundedOffset = max(0, sample - repeatFromSample) % eventDuration
     } else {
       switch event.loopMode {

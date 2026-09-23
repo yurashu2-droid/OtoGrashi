@@ -75,6 +75,25 @@ void main() {
     expect(recipe.events[3].assetIds, ['asset-0', 'asset-2']);
   });
 
+  test('silent rejected source does not take an intro video slot', () {
+    final recipe = VideoRecipe.fromArrangement(
+      arrangement: _arrangementWithSourceCount(
+        4,
+        unusableAssetIds: const ['asset-0'],
+      ),
+      layout: VideoLayout.buildUp,
+    );
+    expect(recipe.events.take(3).map((scene) => scene.assetIds.single), [
+      'asset-1',
+      'asset-2',
+      'asset-3',
+    ]);
+    expect(
+      recipe.events.expand((scene) => scene.assetIds),
+      isNot(contains('asset-0')),
+    );
+  });
+
   test(
     'four to six sources switch at the middle boundary and appear by the end',
     () {
@@ -140,6 +159,7 @@ Arrangement _arrangement() => Arrangement(
 Arrangement _arrangementWithSourceCount(
   int count, {
   List<SoundEvent> events = const <SoundEvent>[],
+  List<String> unusableAssetIds = const <String>[],
 }) => Arrangement(
   templateId: 'fixture',
   templateVersion: 1,
@@ -148,7 +168,7 @@ Arrangement _arrangementWithSourceCount(
   seed: 42,
   style: ArrangementStyle.sparse,
   sourceAssetIds: List<String>.generate(count, (index) => 'asset-$index'),
-  unusableAssetIds: const <String>[],
+  unusableAssetIds: unusableAssetIds,
   events: events,
   videoEvents: events
       .map(

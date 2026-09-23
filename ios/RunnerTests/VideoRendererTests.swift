@@ -340,6 +340,23 @@ final class VideoRendererTests: XCTestCase {
     XCTAssertEqual(CMTimeCompare(first, repeated), 0)
   }
 
+  func testBuildUpIntroKeepsPlayingPastTheShortSoundEvent() {
+    let event = VideoEventPayload(
+      assetId: "reaction",
+      destinationStartSample: 0,
+      durationSamples: 9_000,
+      sourceVideoStartTime: RationalTimePayload(numerator: 48_000, denominator: 48_000),
+      crop: NormalizedCropPayload(x: 0, y: 0, width: 1, height: 1),
+      loopMode: .once
+    )
+    let time = VideoRenderer.sourceTime(
+      assetId: "reaction", sample: 45_000,
+      events: [event], duration: CMTime(seconds: 3, preferredTimescale: 48_000),
+      continuousFromSample: 0
+    )
+    XCTAssertEqual(CMTimeGetSeconds(time), 1.9375, accuracy: 0.001)
+  }
+
   func testSequentialFocusUsesPrimaryAssetWhenSceneContainsMultipleSources() {
     let scene = VideoSceneEventPayload(
       destinationStartSample: 0,
@@ -371,7 +388,7 @@ final class VideoRendererTests: XCTestCase {
   }
 
   func testAllLayoutsDecodeWithBarBoundaryScenesAndEverySource() throws {
-    for layout in ["stacked", "sequentialFocus", "photoDump"] {
+    for layout in ["buildUp", "stacked", "sequentialFocus", "photoDump"] {
       let request = try decodeRequest(quality: "preview", layout: layout)
       XCTAssertTrue(
         request.video.events.allSatisfy {
@@ -389,7 +406,11 @@ final class VideoRendererTests: XCTestCase {
   func testPreviewAndFullWriteDecoded450Frame15SecondMovies() async throws {
     let sourceURL = fixtureURL("synthetic-tap.mp4")
     XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
-    let assets = ["tap": sourceURL, "sustain": sourceURL, "texture": sourceURL]
+    let assets = [
+      "tap": sourceURL,
+      "sustain": fixtureURL("synthetic-sustain.mp4"),
+      "texture": fixtureURL("synthetic-texture.mp4"),
+    ]
     let renderer = VideoRenderer(
       audioRenderer: AudioRenderer(accompanimentGain: 0)
     )
@@ -404,7 +425,10 @@ final class VideoRendererTests: XCTestCase {
 
     for quality in ["preview", "full"] {
       print("VIDEO_RENDER_START quality=\(quality) time=\(Date().timeIntervalSince1970)")
-      let request = try decodeRequest(quality: quality, layout: "stacked")
+      let request = try decodeRequest(
+        quality: quality,
+        layout: quality == "preview" ? "buildUp" : "stacked"
+      )
       let output = temporaryURL("\(quality).mp4")
       outputs.append(output)
       let report: VideoRenderReport
@@ -535,6 +559,20 @@ final class VideoRendererTests: XCTestCase {
       "assetIds": ids,
       "primaryAssetId": NSNull(),
     ]
+    let buildUpGroups = [
+      [ids[0]], [ids[1]], [ids[2]], [ids[0], ids[1]],
+      [ids[0], ids[2]], ids, ids, ids,
+    ]
+    let scenes: [[String: Any]] = layout == "buildUp"
+      ? buildUpGroups.enumerated().map { bar, group in
+          [
+            "destinationStartSample": bar * 90_000,
+            "durationSamples": 90_000,
+            "assetIds": group,
+            "primaryAssetId": group[0],
+          ]
+        }
+      : [scene]
     let video: [String: Any] = [
       "schemaVersion": 1,
       "layout": layout,
@@ -545,7 +583,7 @@ final class VideoRendererTests: XCTestCase {
         ]
       },
       "captions": [],
-      "events": [scene],
+      "events": scenes,
       "effects": ["enabled": []],
     ]
     let json: [String: Any] = [
