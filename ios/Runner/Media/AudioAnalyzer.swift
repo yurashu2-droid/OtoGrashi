@@ -271,6 +271,14 @@ struct AudioAnalyzer {
       }
     }
 
+    // A voice or room sound may have no sharp attack. Give the arranger an
+    // audible anchor instead of letting it pick a random point in the clip.
+    if onsets.isEmpty, rms >= 0.001,
+      let loudestFrame = frameRMS.indices.max(by: { frameRMS[$0] < frameRMS[$1] }),
+      frameRMS[loudestFrame] >= max(0.005, rms * 0.5) {
+      onsets.append(max(0, loudestFrame * Self.frameSamples - 2_400))
+    }
+
     let role: SuggestedRole
     if peak < 0.001 && rms < 0.0001 {
       role = .texture

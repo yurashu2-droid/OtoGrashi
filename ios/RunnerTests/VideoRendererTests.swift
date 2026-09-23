@@ -321,7 +321,7 @@ final class VideoRendererTests: XCTestCase {
       SoundEventPayload(
         assetId: "typing",
         sourceStartSample: 0,
-        destinationStartSample: 312_000 + index * 12_000,
+        destinationStartSample: 312_000 + index * 3_000,
         durationSamples: 12_000,
         gain: 0.6,
         fades: EventFadesPayload(fadeInSamples: 0, fadeOutSamples: 120),
@@ -329,8 +329,9 @@ final class VideoRendererTests: XCTestCase {
       )
     }
     XCTAssertEqual(VideoRenderer.buildUpTileCount(assetId: "typing", sample: 312_000, events: cues), 1)
-    XCTAssertEqual(VideoRenderer.buildUpTileCount(assetId: "typing", sample: 324_000, events: cues), 2)
-    XCTAssertEqual(VideoRenderer.buildUpTileCount(assetId: "typing", sample: 348_000, events: cues), 4)
+    XCTAssertEqual(VideoRenderer.buildUpTileCount(assetId: "typing", sample: 315_000, events: cues), 2)
+    XCTAssertEqual(VideoRenderer.buildUpTileCount(assetId: "typing", sample: 321_000, events: cues), 4)
+    XCTAssertEqual(VideoRenderer.buildUpTileCount(assetId: "typing", sample: 333_000, events: cues), 1)
     XCTAssertEqual(VideoRenderer.tileRects(in: duo[1], count: 4).count, 4)
   }
 
@@ -350,8 +351,8 @@ final class VideoRendererTests: XCTestCase {
     }
   }
 
-  func testBuildUpRepeatsTheFirstSourceEvenWhenItsNormalModeHolds() {
-    let event = VideoEventPayload(
+  func testVideoUsesTheCurrentlySoundingSourceEvent() {
+    let firstEvent = VideoEventPayload(
       assetId: "bass",
       destinationStartSample: 0,
       durationSamples: 12_000,
@@ -359,19 +360,23 @@ final class VideoRendererTests: XCTestCase {
       crop: NormalizedCropPayload(x: 0, y: 0, width: 1, height: 1),
       loopMode: .hold
     )
+    let nextEvent = VideoEventPayload(
+      assetId: "bass",
+      destinationStartSample: 270_000,
+      durationSamples: 12_000,
+      sourceVideoStartTime: RationalTimePayload(numerator: 96_000, denominator: 48_000),
+      crop: NormalizedCropPayload(x: 0, y: 0, width: 1, height: 1),
+      loopMode: .hold
+    )
     let duration = CMTime(seconds: 3, preferredTimescale: 48_000)
-    let first = VideoRenderer.sourceTime(
+    let time = VideoRenderer.sourceTime(
       assetId: "bass", sample: 270_000 + 3_000,
-      events: [event], duration: duration, repeatFromSample: 270_000
+      events: [firstEvent, nextEvent], duration: duration
     )
-    let repeated = VideoRenderer.sourceTime(
-      assetId: "bass", sample: 270_000 + 15_000,
-      events: [event], duration: duration, repeatFromSample: 270_000
-    )
-    XCTAssertEqual(CMTimeCompare(first, repeated), 0)
+    XCTAssertEqual(CMTimeGetSeconds(time), 2.0625, accuracy: 0.001)
   }
 
-  func testBuildUpIntroKeepsPlayingPastTheShortSoundEvent() {
+  func testVideoHoldsTheLastFrameWhenSoundStops() {
     let event = VideoEventPayload(
       assetId: "reaction",
       destinationStartSample: 0,
@@ -382,10 +387,9 @@ final class VideoRendererTests: XCTestCase {
     )
     let time = VideoRenderer.sourceTime(
       assetId: "reaction", sample: 45_000,
-      events: [event], duration: CMTime(seconds: 3, preferredTimescale: 48_000),
-      continuousFromSample: 0
+      events: [event], duration: CMTime(seconds: 3, preferredTimescale: 48_000)
     )
-    XCTAssertEqual(CMTimeGetSeconds(time), 1.9375, accuracy: 0.001)
+    XCTAssertEqual(CMTimeGetSeconds(time), 1.18748, accuracy: 0.001)
   }
 
   func testSequentialFocusUsesPrimaryAssetWhenSceneContainsMultipleSources() {

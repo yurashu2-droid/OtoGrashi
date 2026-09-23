@@ -195,7 +195,17 @@ void main() {
             )
             .map((event) => event.assetId)
             .toList(),
-        ['clip-0', 'clip-1', 'clip-2'],
+        [
+          'clip-0',
+          'clip-0',
+          'clip-1',
+          'clip-1',
+          'clip-1',
+          'clip-2',
+          'clip-2',
+          'clip-2',
+          'clip-2',
+        ],
       );
     },
   );

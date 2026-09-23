@@ -67,6 +67,16 @@ final class AudioAnalyzerTests: XCTestCase {
     XCTAssertEqual(result.suggestedRole, .sustain)
   }
 
+  func testSoftSoundAfterSilenceProvidesAnAudibleAnchor() throws {
+    let samples = Array(repeating: Float(0), count: 24_000)
+      + Array(repeating: Float(0.08), count: 24_000)
+    let metrics = try analyzer.measure(samples: samples)
+
+    XCTAssertEqual(metrics.suggestedRole, .sustain)
+    XCTAssertFalse(metrics.onsetSamples.isEmpty)
+    XCTAssertGreaterThanOrEqual(metrics.onsetSamples[0], 21_600)
+  }
+
   func testAVFoundationDownmixUsesRightOnlyStereoAndProducesMono48k() throws {
     let url = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString)

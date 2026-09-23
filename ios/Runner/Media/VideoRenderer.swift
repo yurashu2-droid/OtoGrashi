@@ -414,21 +414,7 @@ struct VideoRenderer {
   ) async throws
     -> [String: SourceProvider]
   {
-    var sourceRanges = Self.sourceRangesByAsset(videoEvents: videoEvents)
-    if layout == .buildUp {
-      for scene in scenes.prefix(3) where scene.assetIds.count == 1 {
-        let id = scene.assetIds[0]
-        guard let anchor = videoEvents.first(where: { $0.assetId == id }) else { continue }
-        let timescale = CMTimeScale(anchor.sourceVideoStartTime.denominator)
-        let start = CMTime(
-          value: CMTimeValue(anchor.sourceVideoStartTime.numerator),
-          timescale: timescale
-        )
-        let duration = CMTime(value: 90_000, timescale: 48_000)
-        sourceRanges[id, default: []].append(CMTimeRange(start: start, duration: duration))
-      }
-      sourceRanges = sourceRanges.mapValues(Self.mergeSourceRanges)
-    }
+    let sourceRanges = Self.sourceRangesByAsset(videoEvents: videoEvents)
     var result: [String: SourceProvider] = [:]
     for id in requiredIds {
       guard let url = assets[id] else { throw VideoRenderError.missingAsset }
@@ -661,35 +647,33 @@ struct VideoRenderer {
       guard let provider = providers[id],
         let crop = request.video.clipCrops.first(where: { $0.assetId == id })?.crop
       else { throw VideoRenderError.missingAsset }
-      let sourceTime = Self.sourceTime(
-        assetId: id,
-        sample: sample,
-        events: request.arrangement.videoEvents,
-        duration: provider.duration,
-        continuousFromSample: request.video.layout == .buildUp &&
-          scene.assetIds.count == 1 ? scene.destinationStartSample : nil,
-        repeatFromSample: request.video.layout == .buildUp &&
-          scene.assetIds.count > 1 && index == 0
-          ? 3 * 90_000 : nil
-      )
-      let image = CIImage(cgImage: try await provider.image(at: sourceTime))
-      let sourceCrop = CGRect(
-        x: image.extent.minX + CGFloat(crop.x) * image.extent.width,
-        y: image.extent.minY + CGFloat(1 - crop.y - crop.height) * image.extent.height,
-        width: CGFloat(crop.width) * image.extent.width,
-        height: CGFloat(crop.height) * image.extent.height
-      )
-      let cropped = image.cropped(to: sourceCrop)
       let target = targets[index]
       let tileCount = request.video.layout == .buildUp && scene.assetIds.count > 1 && index > 0
         ? Self.buildUpTileCount(assetId: id, sample: sample, events: request.arrangement.events)
         : 1
-      let melodyFlip = request.arrangement.events.contains { event in
-        let elapsed = sample - event.destinationStartSample
-        return event.assetId == id && event.effectivePitchSemitones != 0 &&
-          elapsed >= 0 && elapsed < 9_600
+      let activeVideoEvents = request.arrangement.videoEvents.filter { event in
+        event.assetId == id && sample >= event.destinationStartSample &&
+          sample < event.destinationStartSample + event.durationSamples
       }
       for (tileIndex, tile) in Self.tileRects(in: target, count: tileCount).enumerated() {
+        let matchingEvents = activeVideoEvents.isEmpty
+          ? request.arrangement.videoEvents
+          : [activeVideoEvents[activeVideoEvents.count - 1
+              - min(tileIndex, activeVideoEvents.count - 1)]]
+        let sourceTime = Self.sourceTime(
+          assetId: id,
+          sample: sample,
+          events: matchingEvents,
+          duration: provider.duration
+        )
+        let image = CIImage(cgImage: try await provider.image(at: sourceTime))
+        let sourceCrop = CGRect(
+          x: image.extent.minX + CGFloat(crop.x) * image.extent.width,
+          y: image.extent.minY + CGFloat(1 - crop.y - crop.height) * image.extent.height,
+          width: CGFloat(crop.width) * image.extent.width,
+          height: CGFloat(crop.height) * image.extent.height
+        )
+        let cropped = image.cropped(to: sourceCrop)
         let scale = max(tile.width / cropped.extent.width, tile.height / cropped.extent.height)
         let scaled = cropped.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         let translated = scaled.transformed(
@@ -698,14 +682,7 @@ struct VideoRenderer {
             y: tile.midY - scaled.extent.midY
           )
         ).cropped(to: tile)
-        let mirror = request.video.layout == .buildUp && index > 0 &&
-          ((tileIndex % 2 == 1) != melodyFlip)
-        let image = mirror
-          ? translated.transformed(
-            by: CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: tile.minX + tile.maxX, ty: 0)
-          ).cropped(to: tile)
-          : translated
-        canvas = image.composited(over: canvas)
+        canvas = translated.composited(over: canvas)
       }
     }
     context.render(
@@ -793,12 +770,11 @@ struct VideoRenderer {
     sample: Int,
     events: [SoundEventPayload]
   ) -> Int {
-    let hits = events.filter {
-      $0.assetId == assetId &&
-        $0.destinationStartSample >= 3 * 90_000 &&
-        $0.destinationStartSample <= sample
+    let voices = events.filter {
+      $0.assetId == assetId && sample >= $0.destinationStartSample &&
+        sample < $0.destinationStartSample + $0.durationSamples
     }.count
-    return hits >= 4 ? 4 : (hits >= 2 ? 2 : 1)
+    return voices >= 4 ? 4 : (voices >= 2 ? 2 : 1)
   }
 
   static func tileRects(in target: CGRect, count: Int) -> [CGRect] {
@@ -843,31 +819,24 @@ struct VideoRenderer {
     assetId: String,
     sample: Int,
     events: [VideoEventPayload],
-    duration: CMTime,
-    continuousFromSample: Int? = nil,
-    repeatFromSample: Int? = nil
+    duration: CMTime
   ) -> CMTime {
-    let event = repeatFromSample == nil && continuousFromSample == nil
-      ? (events.last(where: {
-          $0.assetId == assetId && $0.destinationStartSample <= sample
-        }) ?? events.first(where: { $0.assetId == assetId }))
-      : events.first(where: { $0.assetId == assetId })
+    let event = events.last(where: {
+      $0.assetId == assetId && sample >= $0.destinationStartSample &&
+        sample < $0.destinationStartSample + $0.durationSamples
+    }) ?? events.last(where: {
+      $0.assetId == assetId && $0.destinationStartSample <= sample
+    }) ?? events.first(where: { $0.assetId == assetId })
     guard let event else { return .zero }
     let eventDuration = max(1, event.durationSamples)
     let offset = max(0, sample - event.destinationStartSample)
     let timescale = CMTimeScale(event.sourceVideoStartTime.denominator)
     let boundedOffset: Int
-    if let continuousFromSample {
-      boundedOffset = max(0, sample - continuousFromSample)
-    } else if let repeatFromSample {
-      boundedOffset = max(0, sample - repeatFromSample) % eventDuration
-    } else {
-      switch event.loopMode {
-      case .once, .hold:
-        boundedOffset = min(eventDuration - 1, offset)
-      case .loop:
-        boundedOffset = offset % eventDuration
-      }
+    switch event.loopMode {
+    case .once, .hold:
+      boundedOffset = min(eventDuration - 1, offset)
+    case .loop:
+      boundedOffset = offset % eventDuration
     }
     let sourceSample = event.sourceVideoStartTime.numerator + boundedOffset
     let requested = CMTime(value: CMTimeValue(sourceSample), timescale: timescale)

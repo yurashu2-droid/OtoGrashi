@@ -40,19 +40,21 @@ Arrangement arrange({
   final random = _XorShift32(seed);
   final events = <SoundEvent>[];
 
-  // Bars 1–3 introduce one primary source each, without layering.
+  // Introduce each sound alone, then let its own rhythm build within the bar.
   for (var bar = 0; bar < 3; bar++) {
     final clip = usable[bar % usable.length];
-    events.add(
-      _event(
-        clip,
-        bar * Arrangement.barSamples,
-        template,
-        random,
-        melodyStep: bar,
-        intro: true,
-      ),
-    );
+    for (var beat = 0; beat < bar + 2; beat++) {
+      events.add(
+        _event(
+          clip,
+          bar * Arrangement.barSamples + beat * Arrangement.beatSamples,
+          template,
+          random,
+          melodyStep: bar + beat,
+          intro: true,
+        ),
+      );
+    }
   }
 
   final secondary = usable.length > 3
@@ -61,6 +63,18 @@ Arrangement arrange({
   var mixIndex = 0;
   // Bars 4–7 combine sources using the style's explicit density and swing.
   for (var bar = 3; bar < 7; bar++) {
+    // The bottom lane is a real repeating sound, rather than silent motion.
+    for (final beat in const [0, 2]) {
+      events.add(
+        _event(
+          usable.first,
+          bar * Arrangement.barSamples + beat * Arrangement.beatSamples,
+          template,
+          random,
+          melodyStep: bar + beat,
+        ),
+      );
+    }
     for (var step = 0; step < template.mixOffsets.length; step++) {
       final clip = mixIndex < secondary.length
           ? secondary[mixIndex]
@@ -150,15 +164,18 @@ SoundEvent _event(
   final candidates = clip.onsetSamples
       .where(
         (sample) =>
-            sample >= clip.sourceStartSample && sample <= maxSourceStart,
+            sample >= clip.sourceStartSample &&
+            sample < clip.sourceStartSample + clip.durationSamples,
       )
+      .map((sample) => _min(sample, maxSourceStart))
+      .toSet()
       .toList();
+  // Analysis supplies a loud-window fallback when it finds no sharp onset.
+  // Older analyses may lack that anchor; the selection start is safer than a
+  // random point that can land in a quiet tail.
   final sourceStart = candidates.isNotEmpty
       ? candidates[random.nextInt(candidates.length)]
-      : (maxSourceStart == clip.sourceStartSample
-            ? clip.sourceStartSample
-            : clip.sourceStartSample +
-                  random.nextInt(maxSourceStart - clip.sourceStartSample + 1));
+      : clip.sourceStartSample;
   final fade = switch (clip.suggestedRole) {
     SuggestedRole.transient => 240,
     SuggestedRole.sustain => 1200,

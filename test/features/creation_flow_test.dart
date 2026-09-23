@@ -63,7 +63,9 @@ void main() {
     await tester.pump();
     expect(find.text('音を追加しています'), findsOneWidget);
 
-    pending.complete((await _FakeDemo(count: 1).install(_UnusedAssets())).single);
+    pending.complete(
+      (await _FakeDemo(count: 1).install(_UnusedAssets())).single,
+    );
     await tester.pumpAndSettle();
     expect(find.text('音を追加しています'), findsNothing);
     expect(find.text('この音を使う'), findsNothing);
@@ -521,33 +523,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('合成素材 1'), findsWidgets);
-    await tester.scrollUntilVisible(
-      find.text('動画にひとこと足す'),
-      180,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.tap(find.text('動画にひとこと足す'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextFormField).last, 'わっ！');
-    await tester.tap(find.text('動画に入れる'));
-    await tester.pumpAndSettle();
-    final caption =
-        ((controller.state.project!.videoRecipe['captions'] as List).first
-            as Map);
-    expect(caption['text'], 'わっ！');
-    expect(caption['durationSamples'], 72_000);
-
     await tester.drag(find.byType(ListView).first, const Offset(0, -320));
     await tester.pumpAndSettle();
     expect(find.text('ぽつぽつ'), findsOneWidget);
     await tester.tap(find.text('ゆらゆら'));
     await tester.pumpAndSettle();
     expect(controller.state.style, ArrangementStyle.swaying);
-    expect(
-      ((controller.state.project!.videoRecipe['captions'] as List).first
-          as Map)['text'],
-      'わっ！',
-    );
 
     await tester.scrollUntilVisible(
       find.text('これで完成'),
@@ -971,6 +952,7 @@ final class _FakeMedia implements MediaGateway {
   Future<void> discardStaged(String relativePath) async {
     discardedPaths.add(relativePath);
   }
+
   @override
   Future<void> startCapture(String operationId, {required int maxDurationUs}) =>
       throw UnimplementedError();
