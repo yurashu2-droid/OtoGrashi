@@ -79,7 +79,12 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                               controller: _playback,
                               fallback: const ColoredBox(
                                 color: Color(0xFF252126),
-                                child: Center(child: Text('撮った動画のプレビュー')),
+                                child: Center(
+                                  child: Text(
+                                    '撮った動画のプレビュー',
+                                    style: TextStyle(color: Colors.white70),
+                                  ),
+                                ),
                               ),
                             )
                           else
@@ -204,19 +209,32 @@ final class _CaptureScreenState extends State<CaptureScreen> {
     builder: (context, _) => Stack(
       children: [
         Center(
-          child: FilledButton.tonalIcon(
-            onPressed: _playback.isReady ? _playback.toggle : null,
-            icon: Icon(
-              _playback.isPlaying
-                  ? Icons.pause_rounded
-                  : Icons.play_arrow_rounded,
-            ),
-            label: Text(
-              _playback.isLoading
-                  ? '読み込み中'
-                  : _playback.isPlaying
-                  ? '一時停止'
-                  : '再生して確認',
+          child: SizedBox(
+            width: MediaQuery.textScalerOf(context)
+                .scale(220)
+                .clamp(220.0, 300.0),
+            child: FilledButton.tonalIcon(
+              onPressed: _playback.isReady ? _playback.toggle : null,
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTokens.paper,
+                foregroundColor: AppTokens.ink,
+                disabledBackgroundColor: AppTokens.paper,
+                disabledForegroundColor: AppTokens.mutedInk,
+              ),
+              icon: Icon(
+                _playback.isPlaying
+                    ? Icons.pause_rounded
+                    : Icons.play_arrow_rounded,
+              ),
+              label: Text(
+                _playback.error != null
+                    ? '再生できません'
+                    : !_playback.isReady
+                    ? '再生を準備中'
+                    : _playback.isPlaying
+                    ? '一時停止'
+                    : '再生して確認',
+              ),
             ),
           ),
         ),
@@ -266,6 +284,10 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                 Expanded(
                   child: FilledButton(
                     onPressed: widget.onMediaReady,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppTokens.coral,
+                      foregroundColor: AppTokens.ink,
+                    ),
                     child: const Text('この音を使う'),
                   ),
                 ),

@@ -204,7 +204,7 @@ void main() {
       ),
     );
 
-    expect(find.text('再生して確認'), findsOneWidget);
+    expect(find.text('再生を準備中'), findsOneWidget);
     expect(find.text('撮り直す'), findsOneWidget);
     expect(find.text('この音を使う'), findsOneWidget);
     expect(tester.getBottomRight(find.text('撮り直す')).dy, lessThan(667));

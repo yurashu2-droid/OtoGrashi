@@ -453,7 +453,11 @@ void main() {
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
           theme: theme,
-          home: CaptureScreen(controller: capture, testFixture: true),
+          home: CaptureScreen(
+            controller: capture,
+            testFixture: true,
+            onMediaReady: () {},
+          ),
         ),
       ),
     );
@@ -469,6 +473,23 @@ void main() {
       tester,
       boundaryKey,
       File('${output.path}/capture-ready.png'),
+    );
+    captureMedia.pickedVideo = CapturedMedia(
+      operationId: 'visual-capture',
+      assetId: 'visual-clip',
+      relativePath: 'staging/visual-clip.mov',
+      durationUs: 3000000,
+      audioTrackStartUs: 0,
+      width: 1080,
+      height: 1920,
+      rotation: 0,
+    );
+    await capture.importVideo();
+    await tester.pump(const Duration(milliseconds: 100));
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/capture-review.png'),
     );
     await tester.runAsync(capture.releaseCapture);
     capture.dispose();
@@ -682,6 +703,7 @@ final class _UnusedAssets implements AssetRepository {
 }
 
 final class _FakeMedia implements MediaGateway {
+  CapturedMedia? pickedVideo;
   final renderRequests = <RenderRequest>[];
   bool failAnalysis = false;
   @override
@@ -735,8 +757,7 @@ final class _FakeMedia implements MediaGateway {
   Future<CapturedMedia> stopCapture(String operationId) =>
       throw UnimplementedError();
   @override
-  Future<CapturedMedia?> pickVideo(String operationId) =>
-      throw UnimplementedError();
+  Future<CapturedMedia?> pickVideo(String operationId) async => pickedVideo;
   @override
   Future<InspectedMedia> inspectStaged(String path) =>
       throw UnimplementedError();
