@@ -16,6 +16,7 @@ import 'package:otogurashi/features/export/media_playback.dart';
 import 'package:otogurashi/features/capture/capture_controller.dart';
 import 'package:otogurashi/features/capture/capture_screen.dart';
 import 'package:otogurashi/media/media_gateway.dart';
+import 'package:otogurashi/media/media_delivery_gateway.dart';
 import 'package:otogurashi/media/media_presentation_gateway.dart';
 import 'package:otogurashi/storage/asset_repository.dart';
 import 'package:otogurashi/storage/project_repository.dart';
@@ -109,10 +110,12 @@ void main() {
     );
     addTearDown(controller.dispose);
     await controller.startDemo();
-    await tester.pumpWidget(MaterialApp(
-      theme: buildOtogurashiTheme(),
-      home: CreationFlow(controller: controller, media: media),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.byTooltip('合成素材 1を作品から外す'));
@@ -123,6 +126,57 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.state.clips, isEmpty);
     expect(find.text('家の中の短い音を、まず3つ。'), findsOneWidget);
+  });
+
+  testWidgets('completed video exports once for save and share', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final media = _FakeMedia();
+    final delivery = _FakeDelivery();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    await controller.createPreview();
+    await tester.pump();
+    expect(controller.state.phase, CreationPhase.ready);
+    controller.complete();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(
+          controller: controller,
+          media: media,
+          delivery: delivery,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(ListView).first, const Offset(0, -300));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('保存する'));
+    await tester.pumpAndSettle();
+    expect(delivery.saved, hasLength(1));
+    expect(find.text('写真に保存しました'), findsOneWidget);
+    await tester.tap(find.text('シェアする'));
+    await tester.pumpAndSettle();
+    expect(delivery.shared, delivery.saved);
+    expect(
+      media.renderRequests.where(
+        (request) => request.quality == RenderQuality.full,
+      ),
+      hasLength(1),
+    );
   });
 
   testWidgets('original comparison visits every selected clip', (tester) async {
@@ -151,13 +205,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final compare = find.text('元の音と比べる', skipOffstage: false);
+    final compare = find.text('元の音', skipOffstage: false);
     await tester.scrollUntilVisible(
       compare,
       180,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.tap(find.text('元の音と比べる'));
+    await tester.tap(find.text('元の音'));
     await tester.pumpAndSettle();
     expect(find.text('素材のまま・3素材を続けて再生'), findsOneWidget);
     await tester.scrollUntilVisible(
@@ -232,6 +286,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('合成素材 1'), findsWidgets);
+    await tester.drag(find.byType(ListView).first, const Offset(0, -320));
+    await tester.pumpAndSettle();
     expect(find.text('ぽつぽつ'), findsOneWidget);
     await tester.tap(find.text('ゆらゆら'));
     await tester.pumpAndSettle();
@@ -244,7 +300,7 @@ void main() {
     );
     await tester.tap(find.text('これで完成'));
     await tester.pumpAndSettle();
-    expect(find.text('つくれたよ'), findsOneWidget);
+    expect(find.text('できあがり'), findsOneWidget);
     expect(find.textContaining('保存'), findsWidgets);
     expect(find.textContaining('シェア'), findsWidgets);
   });
@@ -280,12 +336,12 @@ void main() {
 
     expect(find.byType(Scrollable), findsWidgets);
     await tester.scrollUntilVisible(
-      find.text('もうひとつ'),
+      find.text('同じ音でもうひとつ作る'),
       180,
       scrollable: find.byType(Scrollable).first,
     );
     final button = find.ancestor(
-      of: find.text('もうひとつ'),
+      of: find.text('同じ音でもうひとつ作る'),
       matching: find.byType(OutlinedButton),
     );
     expect(tester.getSize(button).height, greaterThanOrEqualTo(44));
@@ -404,6 +460,11 @@ void main() {
     );
     await completeController.createPreview();
     await tester.pumpAndSettle();
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/arrange.png'),
+    );
     completeController.complete();
     await tester.pumpAndSettle();
     await _captureScreen(
@@ -494,6 +555,7 @@ final class _UnusedAssets implements AssetRepository {
 }
 
 final class _FakeMedia implements MediaGateway {
+  final renderRequests = <RenderRequest>[];
   @override
   Stream<MediaEvent> get events => const Stream.empty();
 
@@ -510,15 +572,18 @@ final class _FakeMedia implements MediaGateway {
       );
 
   @override
-  Future<RenderedMedia> render(RenderRequest request) async => RenderedMedia(
-    operationId: request.operationId,
-    projectId: request.projectId,
-    revision: request.revision,
-    relativePath: 'renders/project/${request.revision}/preview.mp4',
-    durationUs: 15000000,
-    width: 360,
-    height: 640,
-  );
+  Future<RenderedMedia> render(RenderRequest request) async {
+    renderRequests.add(request);
+    return RenderedMedia(
+      operationId: request.operationId,
+      projectId: request.projectId,
+      revision: request.revision,
+      relativePath: 'renders/project/${request.revision}/preview.mp4',
+      durationUs: 15000000,
+      width: 360,
+      height: 640,
+    );
+  }
 
   @override
   Future<void> cancel(String operationId) async {}
@@ -539,6 +604,21 @@ final class _FakeMedia implements MediaGateway {
   @override
   Future<InspectedMedia> inspectStaged(String path) =>
       throw UnimplementedError();
+}
+
+final class _FakeDelivery implements MediaDeliveryGateway {
+  final saved = <String>[];
+  final shared = <String>[];
+
+  @override
+  Future<void> saveToPhotos(String relativePath) async =>
+      saved.add(relativePath);
+
+  @override
+  Future<bool> share(String relativePath) async {
+    shared.add(relativePath);
+    return true;
+  }
 }
 
 final class _FakePresentation implements MediaPresentationGateway {

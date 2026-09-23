@@ -7,9 +7,13 @@ abstract final class AppTokens {
   static const controlGap = 12.0;
   static const smallGap = 16.0;
 
-  static const seedColor = Color(0xFF8F68DF);
-  static const surfaceColor = Color(0xFFFFFBF4);
-  static const coral = Color(0xFFFF776D);
+  static const seedColor = Color(0xFFEF716C);
+  static const surfaceColor = Color(0xFFFFFBF7);
+  static const coral = Color(0xFFEF716C);
+  static const ink = Color(0xFF211C1A);
+  static const mutedInk = Color(0xFF736B68);
+  static const lavender = Color(0xFFB9A0FF);
+  static const paper = Color(0xFFFFF4E7);
 }
 
 ThemeData buildOtogurashiTheme() {
@@ -22,11 +26,25 @@ ThemeData buildOtogurashiTheme() {
   return ThemeData(
     useMaterial3: true,
     colorScheme: colorScheme,
-    scaffoldBackgroundColor: colorScheme.surface,
+    scaffoldBackgroundColor: AppTokens.surfaceColor,
+    cardColor: Colors.white,
     textTheme: const TextTheme(
-      displaySmall: TextStyle(fontWeight: FontWeight.w700, height: 1.25),
-      headlineSmall: TextStyle(fontWeight: FontWeight.w700, height: 1.25),
-      titleMedium: TextStyle(fontWeight: FontWeight.w700, height: 1.35),
+      displaySmall: TextStyle(
+        color: AppTokens.ink,
+        fontWeight: FontWeight.w800,
+        height: 1.18,
+        letterSpacing: -0.8,
+      ),
+      headlineSmall: TextStyle(
+        color: AppTokens.ink,
+        fontWeight: FontWeight.w800,
+        height: 1.2,
+      ),
+      titleMedium: TextStyle(
+        color: AppTokens.ink,
+        fontWeight: FontWeight.w700,
+        height: 1.35,
+      ),
       bodyLarge: TextStyle(height: 1.6),
       bodySmall: TextStyle(height: 1.5),
     ),

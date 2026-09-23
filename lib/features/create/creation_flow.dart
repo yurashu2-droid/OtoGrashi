@@ -2,14 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 
-import '../../design/clipboard_chrome.dart';
 import '../../design/playback_chrome.dart';
-import '../../design/pressable.dart';
 import '../../design/tokens.dart';
 import '../../domain/arrangement.dart';
 import '../../domain/clip_asset.dart';
 import '../../domain/project.dart';
+import '../../domain/video_recipe.dart';
 import '../arrange/adjustments_sheet.dart';
 import '../library/library_screen.dart';
 import '../settings/settings_screen.dart';
@@ -17,6 +17,7 @@ import '../../storage/project_repository.dart';
 import '../../features/capture/capture_controller.dart';
 import '../../features/capture/capture_screen.dart';
 import '../../media/media_gateway.dart';
+import '../../media/media_delivery_gateway.dart';
 import '../export/media_playback.dart';
 import 'creation_controller.dart';
 
@@ -24,12 +25,14 @@ class CreationFlow extends StatefulWidget {
   const CreationFlow({
     required this.controller,
     required this.media,
+    this.delivery,
     this.startWithCapture = false,
     super.key,
   });
 
   final CreationController controller;
   final MediaGateway media;
+  final MediaDeliveryGateway? delivery;
   final bool startWithCapture;
 
   @override
@@ -66,6 +69,9 @@ class _CreationFlowState extends State<CreationFlow> {
 
   Future<void> _startCaptureFromLibrary() async {
     if (mounted) setState(() => _tabIndex = 0);
+    if (widget.controller.state.phase == CreationPhase.completed) {
+      widget.controller.startNew();
+    }
     await _openCapture();
   }
 
@@ -102,46 +108,38 @@ class _CreationFlowState extends State<CreationFlow> {
               Navigator.of(context)
                   .push(MaterialPageRoute(builder: (_) => _settings())),
         ),
-        2 => LibraryScreen(
-          projects: widget.controller.projects,
-          assets: widget.controller.assets,
-          initialTabIndex: 1,
-          onCreate: _startCaptureFromLibrary,
-          onProjectSelected: _openProject,
-          onAssetSelected: _reuseAsset,
-          onSettings: () =>
-              Navigator.of(context)
-                  .push(MaterialPageRoute(builder: (_) => _settings())),
-        ),
         _ => _creationContent(state),
       };
       return Scaffold(
         body: content,
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _tabIndex,
-          onDestinationSelected: (value) => setState(() => _tabIndex = value),
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.add_circle_outline),
-              label: 'つくる',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.movie_creation_outlined),
-              label: '作品',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.library_music_outlined),
-              label: '音の引き出し',
-            ),
-          ],
-        ),
+        bottomNavigationBar: content is _CollectScreen || _tabIndex == 1
+            ? NavigationBar(
+                selectedIndex: _tabIndex,
+                onDestinationSelected: (value) =>
+                    setState(() => _tabIndex = value),
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.add_circle_outline),
+                    label: 'つくる',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.video_library_outlined),
+                    label: 'ライブラリ',
+                  ),
+                ],
+              )
+            : null,
       );
     },
   );
 
   Widget _creationContent(CreationState state) {
     if (state.phase == CreationPhase.completed) {
-      return _CompletedScreen(controller: widget.controller);
+      return _CompletedScreen(
+        controller: widget.controller,
+        delivery: widget.delivery,
+        onOpenLibrary: () => setState(() => _tabIndex = 1),
+      );
     }
     if (state.preview != null ||
         state.phase == CreationPhase.rendering ||
@@ -165,8 +163,10 @@ class _CollectScreen extends StatelessWidget {
     final state = controller.state;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('今日のクリップ'),
-        centerTitle: true,
+        title: const Text(
+          'オトグラシ',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
         actions: [
           if (state.clips.isNotEmpty)
             TextButton(
@@ -177,87 +177,142 @@ class _CollectScreen extends StatelessWidget {
       ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.all(AppTokens.pagePadding),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
           children: [
-            ClipboardChrome(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (state.clips.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 48),
-                      child: Text(
-                        '家の中の短い音を、まず3つ。',
-                        textAlign: TextAlign.center,
-                      ),
-                    )
-                  else
-                    ReorderableListView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: state.clips.length,
-                      onReorderItem: controller.reorder,
-                      itemBuilder: (context, index) => _ClipCard(
-                        key: ValueKey(state.clips[index].id),
-                        clip: state.clips[index],
-                        index: index,
-                        thumbnail: state.thumbnails[state.clips[index].id],
-                        onRemove: () => unawaited(
-                          controller.removeClip(state.clips[index].id),
-                        ),
-                        onMove: (offset) {
-                          final target = (index + offset).clamp(
-                            0,
-                            state.clips.length - 1,
-                          );
-                          if (target != index) {
-                            unawaited(controller.reorder(index, target));
-                          }
-                        },
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-                  OutlinedButton(
-                    onPressed: onCapture,
-                    child: const Text('＋  撮影・写真から取り込む'),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Transform.rotate(
+                angle: -0.035,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
                   ),
-                ],
+                  color: AppTokens.paper,
+                  child: const Text(
+                    'STEP 1  /  音の採集ノート',
+                    style: TextStyle(
+                      color: AppTokens.ink,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.1,
+                    ),
+                  ),
+                ),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 18),
+            Text(
+              state.clips.isEmpty
+                  ? 'いつもの音を、\n3つ集めよう。'
+                  : '${state.clips.length}つの音が\n集まりました。',
+              style: Theme.of(context).textTheme.displaySmall,
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'コップ、蛇口、キーボード。身のまわりの音が15秒の動画になります。',
+              style: TextStyle(color: AppTokens.mutedInk, height: 1.5),
+            ),
+            const SizedBox(height: 22),
+            Row(
+              children: [
+                for (var index = 0; index < 3; index++) ...[
+                  Expanded(
+                    child: Container(
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: index < state.clips.length
+                            ? AppTokens.coral
+                            : const Color(0xFFE9E1DA),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                  ),
+                  if (index < 2) const SizedBox(width: 7),
+                ],
+                const SizedBox(width: 12),
+                Text(
+                  '${state.clips.length}/3',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+            const SizedBox(height: 22),
+            if (state.clips.isEmpty)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  vertical: 38,
+                  horizontal: 22,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFE9E1DA)),
+                ),
+                child: const Column(
+                  children: [
+                    Icon(
+                      Icons.graphic_eq_rounded,
+                      color: AppTokens.coral,
+                      size: 42,
+                    ),
+                    SizedBox(height: 12),
+                    Text(
+                      '家の中の短い音を、まず3つ。',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    SizedBox(height: 5),
+                    Text('同じ場所の音でも大丈夫。', textAlign: TextAlign.center),
+                  ],
+                ),
+              )
+            else
+              ReorderableListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: state.clips.length,
+                onReorderItem: controller.reorder,
+                itemBuilder: (context, index) => _ClipCard(
+                  key: ValueKey(state.clips[index].id),
+                  clip: state.clips[index],
+                  index: index,
+                  thumbnail: state.thumbnails[state.clips[index].id],
+                  onRemove: () =>
+                      unawaited(controller.removeClip(state.clips[index].id)),
+                  onMove: (offset) {
+                    final target = (index + offset).clamp(
+                      0,
+                      state.clips.length - 1,
+                    );
+                    if (target != index) {
+                      unawaited(controller.reorder(index, target));
+                    }
+                  },
+                ),
+              ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: state.clips.length >= 6 ? null : onCapture,
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('音を録る・動画を選ぶ'),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTokens.coral,
+                foregroundColor: AppTokens.ink,
+              ),
+            ),
+            const SizedBox(height: 8),
             Text(
               state.clips.length < 3
                   ? 'あと${3 - state.clips.length}つで音楽にできます'
-                  : '${state.clips.length}つの音がそろいました',
+                  : '${state.clips.length}つの音で音楽をつくれます',
               textAlign: TextAlign.center,
+              style: const TextStyle(color: AppTokens.mutedInk),
             ),
             if (state.phase == CreationPhase.preparing) ...[
               const SizedBox(height: 16),
               const LinearProgressIndicator(),
               const SizedBox(height: 8),
               const Text('音を確かめています', textAlign: TextAlign.center),
-            ],
-            if (state.phase == CreationPhase.readyToCreate) ...[
-              const SizedBox(height: 16),
-              Pressable(
-                onPressed: controller.createPreview,
-                semanticLabel: 'この音でつくる',
-                child: Container(
-                  height: 56,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.primary,
-                    borderRadius: BorderRadius.circular(28),
-                  ),
-                  child: Text(
-                    'この音でつくる',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onPrimary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
             ],
             if (state.error != null) ...[
               const SizedBox(height: 12),
@@ -269,6 +324,22 @@ class _CollectScreen extends StatelessWidget {
           ],
         ),
       ),
+      bottomNavigationBar: state.phase == CreationPhase.readyToCreate
+          ? SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                child: FilledButton(
+                  onPressed: controller.createPreview,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppTokens.ink,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('この音で15秒をつくる  ↗'),
+                ),
+              ),
+            )
+          : null,
     );
   }
 }
@@ -289,75 +360,96 @@ class _ClipCard extends StatelessWidget {
   final VoidCallback onRemove;
 
   @override
-  Widget build(BuildContext context) => Semantics(
-    sortKey: OrdinalSortKey(index.toDouble()),
-    label:
-        '${clip.label}、${(clip.selectionDurationUs / 1000000).toStringAsFixed(1)}秒、${index + 1}番目',
-    child: Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      clipBehavior: Clip.antiAlias,
-      child: SizedBox(
-        height: 104,
-        child: Row(
-          children: [
-            SizedBox(
-              width: 132,
-              child: thumbnail != null
-                  ? Image.memory(thumbnail, fit: BoxFit.cover)
-                  : _ThumbnailFallback(
-                      index: index,
-                      synthetic:
-                          clip.label.startsWith('synthetic-') ||
-                          clip.label.startsWith('合成素材'),
-                    ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      clip.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    Text(
-                      '${(clip.selectionDurationUs / 1000000).toStringAsFixed(1)}秒',
-                    ),
-                  ],
+  Widget build(BuildContext context) {
+    final generatedName = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$')
+        .hasMatch(clip.label);
+    final title = generatedName ? '録った音 ${index + 1}' : clip.label;
+    return Semantics(
+      sortKey: OrdinalSortKey(index.toDouble()),
+      label:
+          '$title、${(clip.selectionDurationUs / 1000000).toStringAsFixed(1)}秒、${index + 1}番目',
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        elevation: 0,
+        color: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: Color(0xFFEAE3DD)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          height: 112,
+          child: Row(
+            children: [
+              SizedBox(
+                width: 102,
+                height: 112,
+                child: thumbnail != null
+                    ? Image.memory(thumbnail, fit: BoxFit.cover)
+                    : _ThumbnailFallback(
+                        index: index,
+                        synthetic:
+                            clip.label.startsWith('synthetic-') ||
+                            clip.label.startsWith('合成素材'),
+                      ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        'SOUND ${(index + 1).toString().padLeft(2, '0')}',
+                        style: const TextStyle(
+                          color: AppTokens.coral,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${(clip.selectionDurationUs / 1000000).toStringAsFixed(1)}秒の動画',
+                        style: const TextStyle(
+                          color: AppTokens.mutedInk,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            PopupMenuButton<int>(
-              tooltip: '順番を変更',
-              onSelected: onMove,
-              itemBuilder: (_) => [
-                if (index > 0)
-                  const PopupMenuItem(value: -1, child: Text('ひとつ上へ')),
-                const PopupMenuItem(value: 1, child: Text('ひとつ下へ')),
-              ],
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 14),
-                child: Text(
-                  '順番',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
+              PopupMenuButton<int>(
+                tooltip: '順番を変更',
+                onSelected: onMove,
+                itemBuilder: (_) => [
+                  if (index > 0)
+                    const PopupMenuItem(value: -1, child: Text('ひとつ上へ')),
+                  const PopupMenuItem(value: 1, child: Text('ひとつ下へ')),
+                ],
+                icon: const Icon(Icons.swap_vert_rounded, size: 21),
               ),
-            ),
-            IconButton(
-              onPressed: onRemove,
-              tooltip: '${clip.label}を作品から外す',
-              icon: const Icon(Icons.close_rounded),
-            ),
-            const SizedBox(width: 4),
-          ],
+              IconButton(
+                onPressed: onRemove,
+                tooltip: '$titleを作品から外す',
+                icon: const Icon(Icons.close_rounded),
+              ),
+              const SizedBox(width: 4),
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _ThumbnailFallback extends StatelessWidget {
@@ -396,12 +488,16 @@ class _ArrangeScreen extends StatefulWidget {
 }
 
 class _ArrangeScreenState extends State<_ArrangeScreen> {
+  final ScrollController _scrollController = ScrollController(
+    keepScrollOffset: false,
+  );
   late final MediaPlaybackController playback = MediaPlaybackController(
     widget.controller.presentation,
   );
 
   @override
   void dispose() {
+    _scrollController.dispose();
     unawaited(playback.pause());
     playback.dispose();
     super.dispose();
@@ -418,35 +514,31 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
       appBar: AppBar(
         title: const Text('音づくり'),
         centerTitle: true,
-        actions: [
-          IconButton(
-            onPressed: widget.controller.editClips,
-            tooltip: '素材を編集',
-            icon: const Icon(Icons.edit_outlined),
-          ),
-          Pressable(
-            enabled: state.phase == CreationPhase.ready,
-            onPressed: widget.controller.complete,
-            semanticLabel: 'これで完成',
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Text(
-                'これで完成',
-                style: TextStyle(
-                  color: state.phase == CreationPhase.ready
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).disabledColor,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ),
-        ],
+        leading: IconButton(
+          onPressed: widget.controller.editClips,
+          tooltip: '素材に戻る',
+          icon: const Icon(Icons.arrow_back_rounded),
+        ),
       ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.all(AppTokens.pagePadding),
+          controller: _scrollController,
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 30),
           children: [
+            const Text(
+              'STEP 2  /  音の変化を聴く',
+              style: TextStyle(
+                color: AppTokens.coral,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.1,
+              ),
+            ),
+            const SizedBox(height: 7),
+            Text(
+              'いつもの音が、\n15秒の曲に。',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 18),
             PlaybackChrome(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 400),
@@ -489,6 +581,30 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
                     ? '素材のまま・${state.clips.length}素材を続けて再生'
                     : '曲になった音',
               ),
+            const SizedBox(height: 20),
+            const Text(
+              '聴き比べる',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: true, label: Text('元の音')),
+                ButtonSegment(value: false, label: Text('できた曲')),
+              ],
+              selected: {state.compareOriginal},
+              onSelectionChanged: state.preview == null
+                  ? null
+                  : (value) async {
+                      await playback.pause();
+                      widget.controller.setCompareOriginal(value.single);
+                    },
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              '曲の雰囲気',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+            ),
             const SizedBox(height: 8),
             SegmentedButton<ArrangementStyle>(
               segments: const [
@@ -510,34 +626,39 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
                   widget.controller.selectStyle(value.single),
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: state.preview == null
-                        ? null
-                        : () => widget.controller.setCompareOriginal(
-                            !state.compareOriginal,
-                          ),
-                    child: Text(state.compareOriginal ? '曲に戻す' : '元の音と比べる'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: widget.controller.another,
-                    child: const Text('もうひとつ'),
-                  ),
-                ),
-              ],
+            OutlinedButton(
+              onPressed: widget.controller.another,
+              child: const Text('同じ音でもうひとつ作る'),
             ),
             const SizedBox(height: 10),
             OutlinedButton(
               onPressed: () => _showAdjustments(context),
               child: const Text('かんたん調整'),
             ),
-            const SizedBox(height: 12),
+            if (state.phase == CreationPhase.failed) ...[
+              const SizedBox(height: 10),
+              TextButton(
+                onPressed: widget.controller.createPreview,
+                child: const Text('プレビューを作り直す'),
+              ),
+            ],
           ],
+        ),
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+          child: FilledButton(
+            onPressed: state.phase == CreationPhase.ready
+                ? widget.controller.complete
+                : null,
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTokens.coral,
+              foregroundColor: AppTokens.ink,
+            ),
+            child: const Text('これで完成'),
+          ),
         ),
       ),
     );
@@ -548,8 +669,14 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
 }
 
 class _CompletedScreen extends StatefulWidget {
-  const _CompletedScreen({required this.controller});
+  const _CompletedScreen({
+    required this.controller,
+    required this.delivery,
+    required this.onOpenLibrary,
+  });
   final CreationController controller;
+  final MediaDeliveryGateway? delivery;
+  final VoidCallback onOpenLibrary;
 
   @override
   State<_CompletedScreen> createState() => _CompletedScreenState();
@@ -559,9 +686,100 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   late final MediaPlaybackController playback = MediaPlaybackController(
     widget.controller.presentation,
   );
+  late final MediaDeliveryGateway delivery =
+      widget.delivery ?? PlatformMediaDeliveryGateway();
+  RenderedMedia? _fullVideo;
+  String? _exportOperationId;
+  bool _exportRecorded = false;
+  bool _busy = false;
+  bool _saved = false;
+  String? _message;
+
+  Future<RenderedMedia> _ensureFullVideo() async {
+    final project = widget.controller.state.project!;
+    var video = _fullVideo;
+    if (video == null || video.revision != project.revision) {
+      final operationId = 'export-${DateTime.now().microsecondsSinceEpoch}';
+      _exportOperationId = operationId;
+      try {
+        video = await widget.controller.media.render(
+          RenderRequest(
+            operationId: operationId,
+            projectId: project.id,
+            revision: project.revision,
+            arrangement: Arrangement.fromJson(project.arrangement),
+            video: VideoRecipe.fromJson(project.videoRecipe),
+            quality: RenderQuality.full,
+          ),
+        );
+      } finally {
+        if (_exportOperationId == operationId) _exportOperationId = null;
+      }
+      _fullVideo = video;
+      _exportRecorded = false;
+    }
+    final projects = widget.controller.projects;
+    if (!_exportRecorded && projects is SqliteProjectRepository) {
+      await projects.recordCompletedExport(
+        projectId: project.id,
+        sourceRevision: project.revision,
+        relativePath: video.relativePath,
+      );
+      _exportRecorded = true;
+    }
+    return video;
+  }
+
+  Future<void> _save() async {
+    if (_busy || _saved) return;
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+    try {
+      final video = await _ensureFullVideo();
+      await delivery.saveToPhotos(video.relativePath);
+      if (mounted) {
+        setState(() {
+          _saved = true;
+          _message = '写真に保存しました';
+        });
+      }
+    } on PlatformException catch (error) {
+      if (mounted) {
+        setState(
+          () => _message = error.code == 'photos_permission_denied'
+              ? '写真への追加を許可してください。iPhoneの設定から変更できます。'
+              : '保存できませんでした。もう一度お試しください。',
+        );
+      }
+    } catch (_) {
+      if (mounted) setState(() => _message = '保存できませんでした。もう一度お試しください。');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _share() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+    try {
+      final video = await _ensureFullVideo();
+      await delivery.share(video.relativePath);
+    } catch (_) {
+      if (mounted) setState(() => _message = '共有できませんでした。もう一度お試しください。');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   void dispose() {
+    final exportId = _exportOperationId;
+    if (exportId != null) unawaited(widget.controller.media.cancel(exportId));
     unawaited(playback.pause());
     playback.dispose();
     super.dispose();
@@ -571,26 +789,39 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   Widget build(BuildContext context) {
     final state = widget.controller.state;
     return Scaffold(
-      backgroundColor: const Color(0xFF17161B),
+      backgroundColor: AppTokens.surfaceColor,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        title: const Text('つくれたよ'),
+        foregroundColor: AppTokens.ink,
+        title: const Text('できあがり'),
         centerTitle: true,
       ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.all(18),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
           children: [
+            const Text(
+              'STEP 3  /  今日の音、完成！',
+              style: TextStyle(
+                color: AppTokens.coral,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.1,
+              ),
+            ),
+            const SizedBox(height: 7),
+            Text(
+              'いつもの音が、\nちょっと特別に。',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 7),
             Text(
               state.project?.title ?? '今日の音',
-              style: Theme.of(context).textTheme.headlineSmall
-                  ?.copyWith(color: Colors.white),
+              style: const TextStyle(color: AppTokens.mutedInk),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 16),
             Center(
               child: SizedBox(
-                width: 286,
+                width: 300,
                 child: PlaybackChrome(
                   child: AspectRatio(
                     aspectRatio: 9 / 16,
@@ -605,41 +836,68 @@ class _CompletedScreenState extends State<_CompletedScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            _PlaybackControls(playback: playback, label: '完成した15秒', dark: true),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: Semantics(
-                    button: true,
-                    enabled: false,
-                    label: '保存、書き出し後に利用できます',
-                    child: const _PendingExportButton(label: '↓  保存'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Semantics(
-                    button: true,
-                    enabled: false,
-                    label: 'シェア、書き出し後に利用できます',
-                    child: const _PendingExportButton(label: '↑  シェア'),
-                  ),
-                ),
-              ],
-            ),
+            _PlaybackControls(playback: playback, label: '完成した15秒'),
             const SizedBox(height: 8),
             const Text(
               '映り込みや会話がないか、最後に確認してください。',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Color(0xFFCBC7D2)),
+              style: TextStyle(color: AppTokens.mutedInk),
             ),
             const SizedBox(height: 12),
             OutlinedButton(
               onPressed: widget.controller.startNew,
               child: const Text('新しくつくる'),
             ),
+            TextButton(
+              onPressed: widget.onOpenLibrary,
+              child: const Text('作品を見る'),
+            ),
           ],
+        ),
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_busy) ...[
+                const LinearProgressIndicator(),
+                const SizedBox(height: 7),
+                const Text('動画を準備しています'),
+              ],
+              if (_message != null) ...[
+                Text(_message!, textAlign: TextAlign.center),
+                const SizedBox(height: 7),
+              ],
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _busy || _saved ? null : _save,
+                      icon: Icon(
+                        _saved ? Icons.check_rounded : Icons.download_rounded,
+                      ),
+                      label: Text(_saved ? '保存済み' : '保存する'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _busy ? null : _share,
+                      icon: const Icon(Icons.ios_share_rounded),
+                      label: const Text('シェアする'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppTokens.coral,
+                        foregroundColor: AppTokens.ink,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -647,15 +905,10 @@ class _CompletedScreenState extends State<_CompletedScreen> {
 }
 
 class _PlaybackControls extends StatelessWidget {
-  const _PlaybackControls({
-    required this.playback,
-    required this.label,
-    this.dark = false,
-  });
+  const _PlaybackControls({required this.playback, required this.label});
 
   final MediaPlaybackController playback;
   final String label;
-  final bool dark;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -663,7 +916,6 @@ class _PlaybackControls extends StatelessWidget {
     builder: (context, _) {
       final durationUs = playback.duration.inMicroseconds.clamp(1, 1 << 53);
       final positionUs = playback.position.inMicroseconds.clamp(0, durationUs);
-      final foreground = dark ? Colors.white : null;
       return Column(
         children: [
           Row(
@@ -677,12 +929,9 @@ class _PlaybackControls extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 10),
-              Expanded(
-                child: Text(label, style: TextStyle(color: foreground)),
-              ),
+              Expanded(child: Text(label)),
               Text(
                 '${_seconds(playback.position)} / ${_seconds(playback.duration)}',
-                style: TextStyle(color: foreground),
               ),
             ],
           ),
@@ -700,11 +949,7 @@ class _PlaybackControls extends StatelessWidget {
           if (playback.error != null)
             Text(
               '再生できませんでした。もう一度お試しください。',
-              style: TextStyle(
-                color: dark
-                    ? const Color(0xFFFFA8A2)
-                    : Theme.of(context).colorScheme.error,
-              ),
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
         ],
       );
@@ -713,26 +958,6 @@ class _PlaybackControls extends StatelessWidget {
 
   static String _seconds(Duration value) =>
       '${value.inSeconds.toString().padLeft(2, '0')}秒';
-}
-
-class _PendingExportButton extends StatelessWidget {
-  const _PendingExportButton({required this.label});
-  final String label;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    height: 52,
-    alignment: Alignment.center,
-    decoration: BoxDecoration(
-      color: const Color(0xFF302E35),
-      border: Border.all(color: const Color(0xFF74717B)),
-      borderRadius: BorderRadius.circular(26),
-    ),
-    child: Text(
-      label,
-      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-    ),
-  );
 }
 
 class _PreviewPlaceholder extends StatelessWidget {

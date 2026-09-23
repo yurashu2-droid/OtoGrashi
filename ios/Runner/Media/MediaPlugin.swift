@@ -1,7 +1,20 @@
 import Flutter
 import AVFoundation
 import Foundation
+import Photos
 import UIKit
+
+private enum MediaDeliveryError: Error {
+  case permissionDenied
+  case unavailable
+
+  var flutterCode: String {
+    switch self {
+    case .permissionDenied: "photos_permission_denied"
+    case .unavailable: "media_delivery_unavailable"
+    }
+  }
+}
 
 final class MediaPlugin: NSObject, FlutterPlugin {
   static let channelName = "dev.otogurashi/media"
@@ -239,6 +252,52 @@ final class MediaPlugin: NSObject, FlutterPlugin {
         await jobs.cancelAndWait(operationId: operationId)
         succeed(result, value: nil)
       }
+    case "saveRendered":
+      do {
+        guard let arguments = call.arguments as? [String: Any],
+          let path = arguments["relativePath"] as? String,
+          path.hasPrefix("renders/")
+        else { throw VideoRenderError.unsupportedContract }
+        let url = try store.resolvePlayable(relativePath: path)
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [self] status in
+          guard status == .authorized || status == .limited else {
+            fail(result, error: MediaDeliveryError.permissionDenied)
+            return
+          }
+          PHPhotoLibrary.shared().performChanges {
+            let request = PHAssetCreationRequest.forAsset()
+            request.addResource(with: .video, fileURL: url, options: nil)
+          } completionHandler: { [self] saved, error in
+            if saved {
+              succeed(result, value: nil)
+            } else {
+              fail(result, error: error ?? MediaDeliveryError.unavailable)
+            }
+          }
+        }
+      } catch { fail(result, error: error) }
+    case "shareRendered":
+      do {
+        guard let arguments = call.arguments as? [String: Any],
+          let path = arguments["relativePath"] as? String,
+          path.hasPrefix("renders/"),
+          let presenter = Self.topViewController()
+        else { throw MediaDeliveryError.unavailable }
+        let url = try store.resolvePlayable(relativePath: path)
+        let activity = UIActivityViewController(
+          activityItems: [url], applicationActivities: nil
+        )
+        activity.popoverPresentationController?.sourceView = presenter.view
+        activity.popoverPresentationController?.sourceRect = CGRect(
+          x: presenter.view.bounds.midX, y: presenter.view.bounds.maxY - 40,
+          width: 1, height: 1
+        )
+        activity.completionWithItemsHandler = { [self] _, completed, _, error in
+          if let error { fail(result, error: error) }
+          else { succeed(result, value: completed) }
+        }
+        presenter.present(activity, animated: true)
+      } catch { fail(result, error: error) }
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -285,7 +344,8 @@ final class MediaPlugin: NSObject, FlutterPlugin {
     DispatchQueue.main.async {
       result(
         FlutterError(
-          code: (error as? CaptureServiceError)?.flutterCode ?? "media_error",
+          code: (error as? MediaDeliveryError)?.flutterCode
+            ?? (error as? CaptureServiceError)?.flutterCode ?? "media_error",
           message: String(describing: error),
           details: nil
         )

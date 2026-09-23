@@ -109,7 +109,7 @@ void main() {
     expect(find.text('素材はまだありません'), findsOneWidget);
   });
 
-  testWidgets('library does not auto play a project preview', (tester) async {
+  testWidgets('library shows an honest project action', (tester) async {
     final projects = _LibraryProjects()..project = _project();
     await tester.pumpWidget(
       MaterialApp(
@@ -122,8 +122,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('再生'), findsOneWidget);
-    expect(find.text('一時停止'), findsNothing);
+    expect(find.text('再生'), findsNothing);
+    expect(find.text('再編集'), findsOneWidget);
   });
 }
 

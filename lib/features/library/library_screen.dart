@@ -131,16 +131,17 @@ class _LibraryScreenState extends State<LibraryScreen>
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
         children: [
-          for (final project in _projects) _ProjectCard(
-            project: project,
-            completed: _exports
-                .where((item) => item.projectId == project.id)
-                .toList(growable: false),
-            onOpen: widget.onProjectSelected == null
-                ? null
-                : () => widget.onProjectSelected!(project),
-            onDelete: () => _deleteProject(context, project),
-          ),
+          for (final project in _projects)
+            _ProjectCard(
+              project: project,
+              completed: _exports
+                  .where((item) => item.projectId == project.id)
+                  .toList(growable: false),
+              onOpen: widget.onProjectSelected == null
+                  ? null
+                  : () => widget.onProjectSelected!(project),
+              onDelete: () => _deleteProject(context, project),
+            ),
         ],
       ),
     );
@@ -215,7 +216,7 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 }
 
-final class _ProjectCard extends StatefulWidget {
+final class _ProjectCard extends StatelessWidget {
   const _ProjectCard({
     required this.project,
     required this.completed,
@@ -229,13 +230,6 @@ final class _ProjectCard extends StatefulWidget {
   final VoidCallback onDelete;
 
   @override
-  State<_ProjectCard> createState() => _ProjectCardState();
-}
-
-final class _ProjectCardState extends State<_ProjectCard> {
-  var _playing = false;
-
-  @override
   Widget build(BuildContext context) => Card(
     child: Padding(
       padding: const EdgeInsets.all(14),
@@ -246,19 +240,14 @@ final class _ProjectCardState extends State<_ProjectCard> {
             children: [
               Expanded(
                 child: Text(
-                  widget.project.title.isEmpty ? '無題の作品' : widget.project.title,
+                  project.title.isEmpty ? '無題の作品' : project.title,
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
-              ),
-              TextButton.icon(
-                onPressed: () => setState(() => _playing = !_playing),
-                icon: Icon(_playing ? Icons.stop : Icons.play_arrow),
-                label: Text(_playing ? '停止' : '再生'),
               ),
               PopupMenuButton<String>(
                 tooltip: '作品の操作',
                 onSelected: (value) {
-                  if (value == 'delete') widget.onDelete();
+                  if (value == 'delete') onDelete();
                 },
                 itemBuilder: (_) => const [
                   PopupMenuItem(value: 'delete', child: Text('削除')),
@@ -266,15 +255,15 @@ final class _ProjectCardState extends State<_ProjectCard> {
               ),
             ],
           ),
-          Text('${widget.project.clipIds.length}素材・編集 ${widget.project.revision}回目'),
-          if (widget.completed.isNotEmpty)
+          Text('${project.clipIds.length}素材・編集 ${project.revision}回目'),
+          if (completed.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text('完成版 ${widget.completed.length}件を保存中'),
+              child: Text('完成版 ${completed.length}件を保存中'),
             ),
           const SizedBox(height: 10),
           OutlinedButton.icon(
-            onPressed: widget.onOpen,
+            onPressed: onOpen,
             icon: const Icon(Icons.tune),
             label: const Text('再編集'),
           ),
