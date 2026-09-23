@@ -163,6 +163,16 @@ final class MediaPlugin: NSObject, FlutterPlugin {
           succeed(result, value: FlutterStandardTypedData(bytes: data))
         } catch { fail(result, error: error) }
       }
+    case "waveform":
+      Task.detached { [self] in
+        do {
+          guard let arguments = call.arguments as? [String: Any],
+            let relativePath = arguments["relativePath"] as? String
+          else { throw CaptureServiceError.invalidMedia }
+          let url = try store.resolve(relativePath: relativePath)
+          succeed(result, value: try AudioWaveformSampler().sample(url: url))
+        } catch { fail(result, error: error) }
+      }
     case "playbackPlay", "playbackPause", "playbackSeek", "playbackPosition",
       "playbackState":
       guard let arguments = call.arguments as? [String: Any],

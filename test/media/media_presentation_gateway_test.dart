@@ -18,6 +18,10 @@ void main() {
           calls.add(call);
           return switch (call.method) {
             'thumbnail' => Uint8List.fromList(<int>[1, 2, 3]),
+            'waveform' => <String, Object?>{
+              'durationUs': 4000000,
+              'levels': <double>[0, 0, 0.8, 1, 0, 0, 0, 0],
+            },
             'playbackPosition' => 1250000,
             'playbackState' => <String, Object?>{
               'positionUs': 1250000,
@@ -28,6 +32,24 @@ void main() {
             _ => null,
           };
         });
+  });
+
+  test('waveform locates a loud moment in the source video', () async {
+    final gateway = PlatformMediaPresentationGateway(channel: channel);
+    final waveform = await gateway.waveform('originals/clip.mp4');
+
+    expect(waveform.levels.length, 8);
+    expect(waveform.strongestWindowStart(1000000), 1000000);
+    expect(calls.single.method, 'waveform');
+    expect(calls.single.arguments, {'relativePath': 'originals/clip.mp4'});
+  });
+
+  test('waveform does not suggest a region in flat audio', () {
+    final waveform = AudioWaveform(
+      durationUs: 3000000,
+      levels: List<double>.filled(96, 0.4),
+    );
+    expect(waveform.strongestWindowStart(1000000), isNull);
   });
 
   tearDown(() {
@@ -118,6 +140,9 @@ void main() {
 }
 
 final class _DeferredPresentation implements MediaPresentationGateway {
+  @override
+  Future<AudioWaveform> waveform(String relativePath) async =>
+      AudioWaveform(durationUs: 3000000, levels: List<double>.filled(96, 0.4));
   final playCompletion = Completer<void>();
   int? playedViewId;
 
@@ -148,6 +173,9 @@ final class _DeferredPresentation implements MediaPresentationGateway {
 }
 
 final class _ReplayPresentation implements MediaPresentationGateway {
+  @override
+  Future<AudioWaveform> waveform(String relativePath) async =>
+      AudioWaveform(durationUs: 3000000, levels: List<double>.filled(96, 0.4));
   var playCount = 0;
 
   @override
@@ -182,6 +210,9 @@ final class _ReplayPresentation implements MediaPresentationGateway {
 }
 
 final class _StaleViewPresentation implements MediaPresentationGateway {
+  @override
+  Future<AudioWaveform> waveform(String relativePath) async =>
+      AudioWaveform(durationUs: 3000000, levels: List<double>.filled(96, 0.4));
   final first = Completer<PlaybackSnapshot>();
 
   @override

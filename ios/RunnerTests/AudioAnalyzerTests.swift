@@ -251,6 +251,23 @@ final class AudioAnalyzerTests: XCTestCase {
     XCTAssertTrue(result.onsetSamples.allSatisfy { (12_000..<16_800).contains($0) })
   }
 
+  func testWaveformSamplesTheRealAudioOfASyntheticVideo() throws {
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let url = repository.appendingPathComponent(
+      "assets/demo/source/synthetic-tap.mp4"
+    )
+
+    let payload = try AudioWaveformSampler().sample(url: url)
+    let levels = try XCTUnwrap(payload["levels"] as? [Double])
+    XCTAssertEqual(levels.count, AudioWaveformSampler.barCount)
+    XCTAssertTrue(levels.allSatisfy { $0.isFinite && (0...1).contains($0) })
+    XCTAssertGreaterThan(levels.max() ?? 0, 0.9)
+    XCTAssertGreaterThan(payload["durationUs"] as? Int64 ?? 0, 2_900_000)
+  }
+
   func testDelayed44100AACMapsImpulseFromActualPTSIntoAbsoluteTimeline() throws {
     let repository = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()

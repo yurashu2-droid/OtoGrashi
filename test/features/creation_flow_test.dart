@@ -629,6 +629,9 @@ final class _FakeDelivery implements MediaDeliveryGateway {
 
 final class _FakePresentation implements MediaPresentationGateway {
   @override
+  Future<AudioWaveform> waveform(String relativePath) async =>
+      AudioWaveform(durationUs: 3000000, levels: List<double>.filled(96, 0.4));
+  @override
   String get playbackViewType => 'fake-playback';
   @override
   Future<Uint8List> thumbnail(String relativePath) =>

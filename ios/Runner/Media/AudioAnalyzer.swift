@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Foundation
 
 enum AudioAnalysisError: Error, Equatable {
@@ -308,5 +309,77 @@ struct AudioAnalyzer {
     )
     guard !additionOverflow else { throw AudioAnalysisError.timestampOutOfRange }
     return samples
+  }
+}
+
+struct AudioWaveformSampler {
+  static let barCount = 96
+
+  func sample(url: URL) throws -> [String: Any] {
+    let asset = AVURLAsset(url: url)
+    let duration = asset.duration
+    let seconds = CMTimeGetSeconds(duration)
+    guard duration.isNumeric, seconds.isFinite, seconds > 0,
+      seconds < Double(Int.max / (NativePCMReader.sampleRate * Self.barCount)),
+      seconds < Double(Int64.max) / 1_000_000
+    else { throw AudioAnalysisError.unsupportedContract }
+    let totalSamples = Int((seconds * Double(NativePCMReader.sampleRate)).rounded())
+    guard totalSamples > 0,
+      let track = asset.tracks(withMediaType: .audio).first
+    else { throw AudioAnalysisError.emptyAudio }
+    let reader = try AVAssetReader(asset: asset)
+    let settings: [String: Any] = [
+      AVFormatIDKey: kAudioFormatLinearPCM,
+      AVSampleRateKey: NativePCMReader.sampleRate,
+      AVNumberOfChannelsKey: 1,
+      AVLinearPCMBitDepthKey: 32,
+      AVLinearPCMIsFloatKey: true,
+      AVLinearPCMIsBigEndianKey: false,
+      AVLinearPCMIsNonInterleaved: false,
+    ]
+    let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+    output.alwaysCopiesSampleData = false
+    guard reader.canAdd(output) else { throw AudioAnalysisError.conversionFailed }
+    reader.add(output)
+    guard reader.startReading() else { throw AudioAnalysisError.conversionFailed }
+    var peaks = [Double](repeating: 0, count: Self.barCount)
+    while let buffer = output.copyNextSampleBuffer() {
+      guard let block = CMSampleBufferGetDataBuffer(buffer) else { continue }
+      let count = min(CMSampleBufferGetNumSamples(buffer),
+        CMBlockBufferGetDataLength(block) / MemoryLayout<Float>.size)
+      guard count > 0 else { continue }
+      var values = [Float](repeating: 0, count: count)
+      let status = values.withUnsafeMutableBytes { storage in
+        CMBlockBufferCopyDataBytes(block, atOffset: 0,
+          dataLength: count * MemoryLayout<Float>.size,
+          destination: storage.baseAddress!)
+      }
+      guard status == kCMBlockBufferNoErr else {
+        reader.cancelReading()
+        throw AudioAnalysisError.conversionFailed
+      }
+      let timestamp = CMSampleBufferGetPresentationTimeStamp(buffer)
+      let startSeconds = CMTimeGetSeconds(timestamp)
+      guard timestamp.isNumeric, startSeconds.isFinite,
+        startSeconds >= 0,
+        startSeconds < Double(Int.max / NativePCMReader.sampleRate)
+      else { continue }
+      let startSample = Int((startSeconds * Double(NativePCMReader.sampleRate)).rounded())
+      for index in values.indices {
+        let sample = startSample + index
+        guard sample >= 0, sample < totalSamples else { continue }
+        let amplitude = Double(abs(values[index]))
+        guard amplitude.isFinite else { continue }
+        let bar = min(Self.barCount - 1, sample * Self.barCount / totalSamples)
+        peaks[bar] = max(peaks[bar], min(1, amplitude))
+      }
+    }
+    guard reader.status != .failed else { throw AudioAnalysisError.conversionFailed }
+    let maximum = peaks.max() ?? 0
+    let levels = maximum > 0 ? peaks.map { sqrt($0 / maximum) } : peaks
+    return [
+      "durationUs": Int64((seconds * 1_000_000).rounded()),
+      "levels": levels,
+    ]
   }
 }

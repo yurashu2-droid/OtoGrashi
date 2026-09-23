@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import '../../domain/arrangement.dart';
 import '../../domain/clip_asset.dart';
 import '../../domain/video_recipe.dart';
+import '../../media/media_presentation_gateway.dart';
 import '../create/creation_controller.dart';
+import '../export/media_playback.dart';
 
 Future<void> showAdjustmentsSheet(
   BuildContext context,
@@ -32,8 +34,9 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
     text: _existingCaption,
   );
   final _captionIndex = 0;
-  var _trimStartUs = 0;
-  late int _trimDurationUs = _selectedClip?.selectionDurationUs ?? 1;
+  late int _trimStartUs = _selectedSegment?.startUs ?? 0;
+  late int _trimDurationUs = _selectedSegment?.durationUs ?? 1;
+  final _waveforms = <String, Future<AudioWaveform>>{};
   var _cropWidth = 1.0;
   double? _pendingGain;
   double? _pendingAccompaniment;
@@ -41,6 +44,14 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
   ClipAsset? get _selectedClip => widget.controller.state.clips
       .where((clip) => clip.id == _assetId)
       .firstOrNull;
+
+  PlaybackSegment? get _selectedSegment {
+    final index = widget.controller.state.clips.indexWhere(
+      (clip) => clip.id == _assetId,
+    );
+    if (index < 0) return null;
+    return widget.controller.comparisonSegments[index];
+  }
 
   String get _existingCaption {
     final value = widget.controller.state.project?.videoRecipe['captions'];
@@ -175,14 +186,17 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
             ),
             FilledButton(
               onPressed: () {
-                unawaited(
-                  _caption.text.trim().isEmpty
-                      ? widget.controller.removeCaption(_captionIndex)
-                      : widget.controller.setCaption(
-                          _caption.text,
-                          index: _captionIndex,
-                        ),
-                );
+                final caption = _caption.text.trim();
+                if (caption != _existingCaption) {
+                  unawaited(
+                    caption.isEmpty
+                        ? widget.controller.removeCaption(_captionIndex)
+                        : widget.controller.setCaption(
+                            caption,
+                            index: _captionIndex,
+                          ),
+                  );
+                }
                 Navigator.pop(context);
               },
               child: const Text('調整を保存'),
@@ -228,6 +242,71 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
     final endUs = (_trimStartUs + _trimDurationUs).clamp(1, maxUs);
     return Column(
       children: [
+        FutureBuilder<AudioWaveform>(
+          future: _waveforms.putIfAbsent(
+            clip.id,
+            () => widget.controller.presentation.waveform(clip.relativePath),
+          ),
+          builder: (context, snapshot) {
+            final waveform = snapshot.data;
+            if (waveform == null) {
+              return SizedBox(
+                height: 84,
+                child: Center(
+                  child: Text(
+                    snapshot.hasError ? '波形を表示できません' : '波形を読み込んでいます…',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              );
+            }
+            final suggestedStart = waveform.strongestWindowStart(
+              _trimDurationUs,
+            );
+            return Column(
+              children: [
+                Container(
+                  height: 72,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF4EEF9),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: CustomPaint(
+                    painter: _WaveformPainter(
+                      waveform: waveform,
+                      selectionStartUs: _trimStartUs,
+                      selectionEndUs: endUs,
+                    ),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+                if (suggestedStart != null && suggestedStart != _trimStartUs)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () {
+                        final start = suggestedStart.clamp(
+                          0,
+                          (maxUs - _trimDurationUs).clamp(0, maxUs),
+                        );
+                        setState(() => _trimStartUs = start);
+                        unawaited(
+                          widget.controller.setTrim(
+                            clip.id,
+                            start,
+                            _trimDurationUs,
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+                      label: const Text('大きい音へ移動'),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
         RangeSlider(
           values: RangeValues(
             _trimStartUs.toDouble().clamp(0, maxUs.toDouble()),
@@ -244,7 +323,7 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
             _trimStartUs = _trimStartUs.clamp(0, maxUs - 1);
             _trimDurationUs = (value.end - value.start).round().clamp(
               1,
-              6000000,
+              (maxUs - _trimStartUs).clamp(1, 6000000),
             );
           }),
           onChangeEnd: (_) {
@@ -263,4 +342,49 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
       ],
     );
   }
+}
+
+final class _WaveformPainter extends CustomPainter {
+  const _WaveformPainter({
+    required this.waveform,
+    required this.selectionStartUs,
+    required this.selectionEndUs,
+  });
+
+  final AudioWaveform waveform;
+  final int selectionStartUs;
+  final int selectionEndUs;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final width = size.width / waveform.levels.length;
+    for (var index = 0; index < waveform.levels.length; index++) {
+      final centerUs =
+          ((index + 0.5) * waveform.durationUs / waveform.levels.length);
+      final selected =
+          centerUs >= selectionStartUs && centerUs <= selectionEndUs;
+      final height = (waveform.levels[index] * (size.height - 12)).clamp(
+        3.0,
+        size.height - 8,
+      );
+      final rect = Rect.fromCenter(
+        center: Offset((index + 0.5) * width, size.height / 2),
+        width: (width * 0.7).clamp(1.0, 4.0),
+        height: height,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(3)),
+        Paint()
+          ..color = selected
+              ? const Color(0xFFEA696B)
+              : const Color(0xFF9B82BC),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _WaveformPainter oldDelegate) =>
+      oldDelegate.waveform != waveform ||
+      oldDelegate.selectionStartUs != selectionStartUs ||
+      oldDelegate.selectionEndUs != selectionEndUs;
 }
