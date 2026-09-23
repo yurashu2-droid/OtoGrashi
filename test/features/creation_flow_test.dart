@@ -412,7 +412,7 @@ void main() {
     final media = _FakeMedia();
     final controller = CreationController(
       projects: projects,
-      assets: _UnusedAssets(),
+      assets: _RenamableAssets(),
       media: media,
       presentation: _FakePresentation(),
       demo: _FakeDemo(),
@@ -433,9 +433,23 @@ void main() {
     await tester.tap(find.byTooltip('閉じる'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('合成素材 1のメニュー'));
+    await tester.tap(find.text('合成素材 1'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('作品から外す').last);
+    expect(find.text('この音に名前をつける'), findsOneWidget);
+    await tester.enterText(find.byType(TextFormField), 'コップ');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(find.text('コップ'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('コップを作品から外す'));
+    await tester.pumpAndSettle();
+    expect(find.text('この音を作品から外しますか？'), findsOneWidget);
+    await tester.tap(find.text('キャンセル'));
+    await tester.pumpAndSettle();
+    expect(controller.state.clips, hasLength(3));
+    await tester.tap(find.byTooltip('コップを作品から外す'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('外す'));
     await tester.pumpAndSettle();
     expect(controller.state.clips, hasLength(2));
     expect(projects.project!.clipIds, ['clip-1', 'clip-2']);
@@ -443,6 +457,37 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.state.clips, isEmpty);
     expect(find.text('家の中の短い音を、まず3つ。'), findsOneWidget);
+  });
+
+  testWidgets('six sounds stay scrollable on a narrow phone', (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(count: 6),
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('合成素材 6'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('合成素材 6'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('completed video exports once for save and share', (

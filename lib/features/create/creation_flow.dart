@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 
 import '../../design/playback_chrome.dart';
@@ -24,6 +23,8 @@ import '../../media/media_delivery_gateway.dart';
 import '../export/comparison_player.dart';
 import '../export/media_playback.dart';
 import 'beat_building_preview.dart';
+import 'clip_card.dart';
+import 'melody_template_card.dart';
 import 'creation_controller.dart';
 
 class CreationFlow extends StatefulWidget {
@@ -296,6 +297,35 @@ class _CollectScreen extends StatelessWidget {
     }
   }
 
+  Future<void> _removeClip(
+    BuildContext context,
+    ClipAsset clip,
+    int index,
+  ) async {
+    final generatedName = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$')
+        .hasMatch(clip.label);
+    final title = generatedName ? '録った音 ${index + 1}' : clip.label;
+    final remove = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('この音を作品から外しますか？'),
+        content: Text('「$title」を音の並びから外します。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('キャンセル'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('外す'),
+          ),
+        ],
+      ),
+    );
+    if (remove != true || !context.mounted) return;
+    await controller.removeClip(clip.id);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = controller.state;
@@ -408,9 +438,10 @@ class _CollectScreen extends StatelessWidget {
               ReorderableListView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
+                buildDefaultDragHandles: false,
                 itemCount: state.clips.length,
                 onReorderItem: controller.reorder,
-                itemBuilder: (context, index) => _ClipCard(
+                itemBuilder: (context, index) => ClipCard(
                   key: ValueKey(state.clips[index].id),
                   clip: state.clips[index],
                   index: index,
@@ -420,7 +451,7 @@ class _CollectScreen extends StatelessWidget {
                   onRename: () =>
                       _renameClip(context, state.clips[index], index),
                   onRemove: () =>
-                      unawaited(controller.removeClip(state.clips[index].id)),
+                      _removeClip(context, state.clips[index], index),
                   canMoveDown: index < state.clips.length - 1,
                   onMove: (offset) {
                     final target = (index + offset).clamp(
@@ -506,187 +537,6 @@ class _CollectScreen extends StatelessWidget {
   }
 }
 
-enum _ClipAction { rename, moveUp, moveDown, remove }
-
-class _ClipCard extends StatelessWidget {
-  const _ClipCard({
-    required this.clip,
-    required this.index,
-    required this.thumbnail,
-    required this.onPreview,
-    required this.onRename,
-    required this.onMove,
-    required this.onRemove,
-    required this.canMoveDown,
-    super.key,
-  });
-  final ClipAsset clip;
-  final int index;
-  final Uint8List? thumbnail;
-  final VoidCallback onPreview;
-  final VoidCallback onRename;
-  final ValueChanged<int> onMove;
-  final VoidCallback onRemove;
-  final bool canMoveDown;
-
-  @override
-  Widget build(BuildContext context) {
-    final generatedName = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$')
-        .hasMatch(clip.label);
-    final title = generatedName ? '録った音 ${index + 1}' : clip.label;
-    final duration =
-        '${(clip.selectionDurationUs / 1000000).toStringAsFixed(1)}秒';
-    return Semantics(
-      sortKey: OrdinalSortKey(index.toDouble()),
-      label: '$title、$duration、${index + 1}番目。タップして音を確認',
-      child: Card(
-        margin: const EdgeInsets.only(bottom: 12),
-        elevation: 2,
-        shadowColor: const Color(0x334F332B),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: Color(0xFFE9DDD4)),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: SizedBox(
-          height: 112,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              thumbnail != null
-                  ? Image.memory(thumbnail!, fit: BoxFit.cover)
-                  : _ThumbnailFallback(
-                      index: index,
-                      synthetic:
-                          clip.label.startsWith('synthetic-') ||
-                          clip.label.startsWith('合成素材'),
-                    ),
-              const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Color(0x44000000),
-                      Color(0x11000000),
-                      Color(0xCC1C171B),
-                    ],
-                  ),
-                ),
-              ),
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: onPreview,
-                  child: const SizedBox.expand(),
-                ),
-              ),
-              Positioned(
-                left: 14,
-                top: 12,
-                child: Transform.rotate(
-                  angle: -0.035,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 9,
-                      vertical: 5,
-                    ),
-                    color: AppTokens.paper,
-                    child: Text(
-                      '音 ${(index + 1).toString().padLeft(2, '0')}',
-                      style: const TextStyle(
-                        color: AppTokens.ink,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.8,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Positioned(
-                right: 8,
-                top: 6,
-                child: Material(
-                  color: const Color(0xDDFFF8F1),
-                  shape: const CircleBorder(),
-                  child: PopupMenuButton<_ClipAction>(
-                    tooltip: '$titleのメニュー',
-                    icon: const Icon(Icons.more_horiz_rounded),
-                    onSelected: (action) => switch (action) {
-                      _ClipAction.rename => onRename(),
-                      _ClipAction.moveUp => onMove(-1),
-                      _ClipAction.moveDown => onMove(1),
-                      _ClipAction.remove => onRemove(),
-                    },
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(
-                        value: _ClipAction.rename,
-                        child: Text('名前を変える'),
-                      ),
-                      if (index > 0)
-                        const PopupMenuItem(
-                          value: _ClipAction.moveUp,
-                          child: Text('ひとつ前へ'),
-                        ),
-                      if (canMoveDown)
-                        const PopupMenuItem(
-                          value: _ClipAction.moveDown,
-                          child: Text('ひとつ後ろへ'),
-                        ),
-                      const PopupMenuItem(
-                        value: _ClipAction.remove,
-                        child: Text('作品から外す'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Positioned(
-                left: 16,
-                right: 16,
-                bottom: 13,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: onPreview,
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.play_circle_fill_rounded,
-                        color: Colors.white,
-                        size: 32,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                      Text(
-                        duration,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _ClipPreviewSheet extends StatefulWidget {
   const _ClipPreviewSheet({
     required this.clip,
@@ -767,30 +617,6 @@ class _ClipPreviewSheetState extends State<_ClipPreviewSheet> {
             _PlaybackControls(playback: playback, label: '元の音'),
           ],
         ),
-      ),
-    ),
-  );
-}
-
-class _ThumbnailFallback extends StatelessWidget {
-  const _ThumbnailFallback({required this.index, required this.synthetic});
-  final int index;
-  final bool synthetic;
-
-  @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        colors: index.isEven
-            ? const [Color(0xFF9A83C4), Color(0xFF6E5A94)]
-            : const [Color(0xFFE89586), Color(0xFFB86562)],
-      ),
-    ),
-    child: Center(
-      child: Icon(
-        synthetic ? Icons.graphic_eq_rounded : Icons.broken_image_outlined,
-        size: 40,
-        color: Colors.white70,
       ),
     ),
   );
@@ -1042,22 +868,22 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
             ),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final melody in MelodyTemplate.values)
-                  ChoiceChip(
-                    label: Text(melody.label),
-                    selected: state.melody == melody,
-                    onSelected: (_) => widget.controller.selectMelody(melody),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              state.melody.description,
-              style: Theme.of(context).textTheme.bodySmall,
+            LayoutBuilder(
+              builder: (context, constraints) => Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final melody in MelodyTemplate.values)
+                    SizedBox(
+                      width: (constraints.maxWidth - 8) / 2,
+                      child: MelodyTemplateCard(
+                        melody: melody,
+                        selected: state.melody == melody,
+                        onTap: () => widget.controller.selectMelody(melody),
+                      ),
+                    ),
+                ],
+              ),
             ),
             if (state.melody != MelodyTemplate.none)
               _SongRoleSummary(state: state),
