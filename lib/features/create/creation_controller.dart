@@ -36,7 +36,7 @@ final class CreationState {
     this.clips = const <ClipAsset>[],
     this.thumbnails = const <String, Uint8List>{},
     this.style = ArrangementStyle.sparse,
-    this.melody = MelodyTemplate.none,
+    this.melody = MelodyTemplate.hop,
     this.layout = VideoLayout.buildUp,
     this.compareOriginal = false,
     this.seed = 1,

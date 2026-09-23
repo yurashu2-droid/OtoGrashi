@@ -6,7 +6,7 @@ enum MelodyTemplate { none, hop, wink, answer }
 
 extension MelodyTemplateDetails on MelodyTemplate {
   String get label => switch (this) {
-    MelodyTemplate.none => 'おまかせ',
+    MelodyTemplate.none => 'リズムだけ',
     MelodyTemplate.hop => 'はねる',
     MelodyTemplate.wink => 'スキップ',
     MelodyTemplate.answer => 'かけあい',

@@ -183,7 +183,7 @@ _SongEvents _buildSongEvents(
     usable.where(
       (clip) =>
           clip.suggestedRole == SuggestedRole.sustain &&
-          clip.durationSamples >= 18000 &&
+          _hasAudibleSpan(clip, 18000) &&
           clip.rms >= 0.03,
     ),
   );
@@ -194,7 +194,7 @@ _SongEvents _buildSongEvents(
           clip.assetId != beat?.assetId &&
           clip.assetId != bass?.assetId &&
           clip.suggestedRole != SuggestedRole.transient &&
-          clip.durationSamples >= 18000 &&
+          _hasAudibleSpan(clip, 14000) &&
           clip.rms >= 0.03,
     ),
   );
@@ -332,6 +332,14 @@ _SongEvents _buildSongEvents(
   return _SongEvents(events, roles);
 }
 
+bool _hasAudibleSpan(AnalyzedClip clip, int minimumSamples) =>
+    clip.audibleRegions.isEmpty
+    // Older analyses have no region data; retain their duration behavior.
+    ? clip.durationSamples >= minimumSamples
+    : clip.audibleRegions.any(
+        (region) => region.durationSamples >= minimumSamples,
+      );
+
 SoundEvent _songEvent(
   AnalyzedClip clip,
   int destinationStart,
@@ -374,11 +382,22 @@ SoundEvent _event(
     SuggestedRole.sustain => template.sustainDuration,
     SuggestedRole.texture => template.textureDuration,
   };
-  final region = clip.audibleRegions.firstOrNull;
+  final regions = clip.audibleRegions;
+  // Prefer a loud region that holds a complete event. If none does, use the
+  // longest audible region and shorten the event to fit it.
+  final region =
+      regions
+          .where((value) => value.durationSamples >= desiredDuration)
+          .firstOrNull ??
+      (regions.isEmpty
+          ? null
+          : regions.reduce(
+              (a, b) => a.durationSamples >= b.durationSamples ? a : b,
+            ));
   final destinationRemaining = 720000 - destinationStart;
   final activeDuration = region == null
       ? clip.durationSamples
-      : (region.durationSamples < 4800 ? 4800 : region.durationSamples);
+      : region.durationSamples;
   final duration = _min(
     desiredDuration,
     _min(activeDuration, _min(clip.durationSamples, destinationRemaining)),
@@ -387,7 +406,13 @@ SoundEvent _event(
     throw const MediaContractException('Event has no bounded duration.');
   }
   final maxSourceStart =
-      clip.sourceStartSample + clip.durationSamples - duration;
+      _min(
+        clip.sourceStartSample + clip.durationSamples,
+        region == null
+            ? clip.sourceStartSample + clip.durationSamples
+            : region.startSample + region.durationSamples,
+      ) -
+      duration;
   final candidates = clip.onsetSamples
       .where(
         (sample) =>

@@ -331,6 +331,9 @@ void main() {
       );
       addTearDown(controller.dispose);
       await controller.startDemo();
+      expect(controller.state.melody, MelodyTemplate.hop);
+      await controller.createPreview();
+      expect(projects.project!.arrangement['melodyTemplate'], 'hop');
       controller.selectMelody(MelodyTemplate.wink);
       await controller.createPreview();
       expect(projects.project!.arrangement['melodyTemplate'], 'wink');
@@ -346,6 +349,13 @@ void main() {
       await controller.openProject(saved);
       expect(controller.state.style, ArrangementStyle.lively);
       expect(controller.state.melody, MelodyTemplate.wink);
+
+      await controller.openProject(
+        saved.copyWith(
+          arrangement: const {'schemaVersion': 1, 'style': 'lively'},
+        ),
+      );
+      expect(controller.state.melody, MelodyTemplate.none);
     },
   );
 

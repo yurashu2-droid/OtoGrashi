@@ -607,6 +607,90 @@ void main() {
     );
   });
 
+  test('late onset cannot move an event beyond its audible region', () {
+    final clips = [
+      _clip('tap', role: SuggestedRole.transient),
+      AnalyzedClip(
+        assetId: 'voice',
+        durationSamples: 144000,
+        sampleRate: 48000,
+        onsetSamples: const [95000],
+        audibleRegions: const [
+          AudibleRegion(startSample: 72000, durationSamples: 24000),
+        ],
+        peak: .7,
+        rms: .2,
+        suggestedRole: SuggestedRole.sustain,
+      ),
+      _clip('room', role: SuggestedRole.texture),
+    ];
+    final arranged = arrange(
+      clips: clips,
+      style: ArrangementStyle.sparse,
+      melodyTemplate: MelodyTemplate.hop,
+      seed: 3,
+    );
+    final voiceEvents = arranged.events.where(
+      (event) => event.assetId == 'voice',
+    );
+    expect(voiceEvents, isNotEmpty);
+    expect(
+      voiceEvents.every(
+        (event) =>
+            event.sourceStartSample >= 72000 &&
+            event.sourceStartSample + event.durationSamples <= 96000,
+      ),
+      isTrue,
+    );
+  });
+
+  test('song roles require long audible spans while legacy analyses work', () {
+    AnalyzedClip analyzed(
+      String id,
+      SuggestedRole role,
+      int audibleLength,
+      double rms,
+    ) => AnalyzedClip(
+      assetId: id,
+      durationSamples: 144000,
+      sampleRate: 48000,
+      onsetSamples: const [],
+      audibleRegions: [
+        AudibleRegion(startSample: 48000, durationSamples: audibleLength),
+      ],
+      peak: .7,
+      rms: rms,
+      suggestedRole: role,
+    );
+    final song = arrange(
+      clips: [
+        _clip('tap', role: SuggestedRole.transient),
+        analyzed('short-voice', SuggestedRole.sustain, 8000, .4),
+        analyzed('long-voice', SuggestedRole.sustain, 24000, .2),
+        analyzed('short-room', SuggestedRole.texture, 8000, .4),
+        analyzed('long-room', SuggestedRole.texture, 16000, .2),
+      ],
+      style: ArrangementStyle.swaying,
+      melodyTemplate: MelodyTemplate.hop,
+      seed: 4,
+    );
+    expect(song.songRoles?.bass, 'long-voice');
+    expect(song.songRoles?.melody, 'long-voice');
+    expect(song.songRoles?.keys, 'long-room');
+
+    final legacy = arrange(
+      clips: [
+        _clip('tap', role: SuggestedRole.transient),
+        _clip('old-voice', role: SuggestedRole.sustain),
+        _clip('room', role: SuggestedRole.texture),
+      ],
+      style: ArrangementStyle.sparse,
+      melodyTemplate: MelodyTemplate.hop,
+      seed: 4,
+    );
+    expect(legacy.songRoles?.bass, 'old-voice');
+  });
+
   test('seed zero has a stable golden arrangement JSON', () {
     final arrangement = arrange(
       clips: threeFixtures,
