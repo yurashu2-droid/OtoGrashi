@@ -55,14 +55,19 @@ final class _CaptureScreenState extends State<CaptureScreen> {
         final captured = state.capturedMedia;
         final screenSize = MediaQuery.sizeOf(context);
         final largeText = MediaQuery.textScalerOf(context).scale(16) > 21;
-        final previewHeight = (screenSize.height * 0.65).clamp(
-          340.0,
-          largeText ? 420.0 : 540.0,
-        ).toDouble();
+        final previewHeight = (screenSize.height * 0.65)
+            .clamp(340.0, largeText ? 420.0 : 540.0)
+            .toDouble();
         return Scaffold(
           appBar: AppBar(title: const Text('音を録る'), toolbarHeight: 52),
           bottomNavigationBar: state.phase == CapturePhase.completed
               ? _reviewActions()
+              : state.phase == CapturePhase.ready
+              ? _captureActions()
+              : state.phase == CapturePhase.recording
+              ? _recordingActions(state)
+              : (state.phase == CapturePhase.idle || state.canRetry)
+              ? _prepareActions()
               : null,
           body: SafeArea(
             child: ListView(
@@ -120,8 +125,7 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                                 top: 12,
                                 right: 12,
                                 child: OutlinedButton.icon(
-                                  onPressed:
-                                      widget.controller.isSwitchingCamera
+                                  onPressed: widget.controller.isSwitchingCamera
                                       ? null
                                       : widget.controller.switchCamera,
                                   style: OutlinedButton.styleFrom(
@@ -160,12 +164,7 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                     ),
                   ),
                 ),
-                if (state.phase == CapturePhase.recording)
-                  _RecordingProgress(
-                    progress: state.progress,
-                    targetDurationUs: _durationUs,
-                  )
-                else ...[
+                if (state.phase != CapturePhase.recording) ...[
                   const SizedBox(height: 8),
                   _CaptureStatus(text: _statusText(state)),
                 ],
@@ -178,73 +177,6 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                   ),
                 ],
                 const SizedBox(height: 10),
-                if (state.phase == CapturePhase.idle || state.canRetry)
-                  FilledButton(
-                    onPressed: state.isBusy ? null : widget.controller.prepare,
-                    child: const Text('カメラとマイクを準備'),
-                  ),
-                if (state.phase == CapturePhase.ready) ...[
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      '録音する長さ',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: AppTokens.ink,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      for (final duration in const [3000000, 6000000])
-                        Expanded(
-                          child: Padding(
-                            padding: EdgeInsets.only(
-                              right: duration == 3000000 ? 5 : 0,
-                              left: duration == 6000000 ? 5 : 0,
-                            ),
-                            child: _DurationChoice(
-                              label: duration == 3000000 ? '3秒' : '6秒',
-                              selected: _durationUs == duration,
-                              onPressed: () =>
-                                  setState(() => _durationUs = duration),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: AppTokens.controlGap),
-                  FilledButton(
-                    onPressed: () => widget.controller.record(
-                      maxDurationUs: _durationUs,
-                    ),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppTokens.coral,
-                      foregroundColor: AppTokens.ink,
-                      minimumSize: const Size.fromHeight(62),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      textStyle: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    child: Text(
-                      _durationUs == 3000000 ? '♪  3秒撮る' : '♪  6秒撮る',
-                    ),
-                  ),
-                ],
-                if (state.phase == CapturePhase.recording)
-                  FilledButton(
-                    onPressed: widget.controller.stop,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppTokens.ink,
-                      foregroundColor: Colors.white,
-                    ),
-                    child: const Text('録音を止める'),
-                  ),
                 if (!state.isBusy &&
                     state.phase != CapturePhase.recording &&
                     state.phase != CapturePhase.completed) ...[
@@ -394,6 +326,114 @@ final class _CaptureScreenState extends State<CaptureScreen> {
     ),
   );
 
+  Widget _captureActions() => Material(
+    color: AppTokens.surfaceColor,
+    child: SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '録音する長さ',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: AppTokens.ink,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                for (final duration in const [3000000, 6000000])
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.only(
+                        right: duration == 3000000 ? 5 : 0,
+                        left: duration == 6000000 ? 5 : 0,
+                      ),
+                      child: _DurationChoice(
+                        label: duration == 3000000 ? '3秒' : '6秒',
+                        selected: _durationUs == duration,
+                        onPressed: () => setState(() => _durationUs = duration),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            FilledButton(
+              onPressed: () =>
+                  widget.controller.record(maxDurationUs: _durationUs),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTokens.coral,
+                foregroundColor: AppTokens.ink,
+                minimumSize: const Size.fromHeight(62),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                textStyle: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              child: Text(_durationUs == 3000000 ? '♪  3秒撮る' : '♪  6秒撮る'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Widget _recordingActions(CaptureState state) => Material(
+    color: AppTokens.surfaceColor,
+    child: SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _RecordingProgress(
+              progress: state.progress,
+              targetDurationUs: _durationUs,
+            ),
+            const SizedBox(height: 10),
+            FilledButton(
+              onPressed: widget.controller.stop,
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTokens.ink,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('録音を止める'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Widget _prepareActions() => Material(
+    color: AppTokens.surfaceColor,
+    child: SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
+        child: FilledButton(
+          onPressed: widget.controller.prepare,
+          style: FilledButton.styleFrom(
+            backgroundColor: AppTokens.coral,
+            foregroundColor: AppTokens.ink,
+          ),
+          child: const Text('カメラとマイクを準備'),
+        ),
+      ),
+    ),
+  );
+
   String _statusText(CaptureState state) => switch (state.phase) {
     CapturePhase.idle => '身近な音を、3秒から録ってみよう',
     CapturePhase.preparing => 'カメラとマイクを準備しています',
@@ -510,9 +550,7 @@ final class _CollectionHeader extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    completeCount == 3
-                        ? '音をもうひとつ集めよう'
-                        : '音を集めて、曲にしよう',
+                    completeCount == 3 ? '音をもうひとつ集めよう' : '音を集めて、曲にしよう',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       fontSize: 18,
                       fontWeight: FontWeight.w800,
@@ -521,13 +559,9 @@ final class _CollectionHeader extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    completeCount == 3
-                        ? '音はいつでも追加できます'
-                        : '身近な音を3つ。気になる音から。',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AppTokens.mutedInk,
-                      fontSize: 12,
-                    ),
+                    completeCount == 3 ? '音はいつでも追加できます' : '身近な音を3つ。気になる音から。',
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: AppTokens.mutedInk, fontSize: 12),
                   ),
                 ],
               ),
@@ -644,7 +678,11 @@ final class _PreviewSticker extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.graphic_eq_rounded, size: 17, color: AppTokens.coral),
+          const Icon(
+            Icons.graphic_eq_rounded,
+            size: 17,
+            color: AppTokens.coral,
+          ),
           const SizedBox(width: 5),
           Text(
             label,
@@ -673,10 +711,8 @@ final class _CaptureStatus extends StatelessWidget {
     child: Text(
       text,
       textAlign: TextAlign.center,
-      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-        color: AppTokens.mutedInk,
-        fontWeight: FontWeight.w600,
-      ),
+      style: Theme.of(context).textTheme.bodySmall
+          ?.copyWith(color: AppTokens.mutedInk, fontWeight: FontWeight.w600),
     ),
   );
 }
@@ -699,13 +735,14 @@ final class _RecordingProgress extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Icon(Icons.graphic_eq_rounded, color: AppTokens.coral, size: 18),
+            const Icon(
+              Icons.graphic_eq_rounded,
+              color: AppTokens.coral,
+              size: 18,
+            ),
             const SizedBox(width: 6),
             const Expanded(
-              child: Text(
-                '録音中',
-                style: TextStyle(fontWeight: FontWeight.w800),
-              ),
+              child: Text('録音中', style: TextStyle(fontWeight: FontWeight.w800)),
             ),
             Text(
               '${elapsedSeconds.toStringAsFixed(1)} / '
