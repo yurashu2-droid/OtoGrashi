@@ -495,8 +495,9 @@ struct VideoRenderer {
       let reader = try AVAssetReader(asset: asset)
       let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
       output.alwaysCopiesSampleData = false
-      if let range {
-        reader.timeRange = Self.expandedSourceRange(range)
+      let acceptedRange = range.map(Self.expandedSourceRange)
+      if let range, let acceptedRange {
+        reader.timeRange = acceptedRange
         videoRenderDiagnostic(
           "VIDEO_STAGE source_pts_reader bounded start=\(range.start) duration=\(range.duration)"
         )
@@ -520,6 +521,12 @@ struct VideoRenderer {
           throw VideoRenderError.sourceReadFailed
         }
         if let timestamp = try Self.sourceTimestamp(from: sample) {
+          if let acceptedRange {
+            if CMTimeCompare(timestamp, acceptedRange.start) < 0 ||
+              CMTimeCompare(timestamp, acceptedRange.end) > 0 {
+              continue
+            }
+          }
           guard timestamps.count < 2_000 else {
             videoRenderDiagnostic(
               "VIDEO_STAGE source_pts_reader frame_cap count=\(timestamps.count)"

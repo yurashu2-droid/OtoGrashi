@@ -473,6 +473,12 @@ final class VideoRendererTests: XCTestCase {
         print(
           "VIDEO_VARIANT_NSERROR domain=\(nsError.domain) code=\(nsError.code) description=\(nsError.localizedDescription)"
         )
+        #if targetEnvironment(simulator)
+        if fixture == "hdr10-tap.mp4" &&
+          nsError.domain == AVFoundationErrorDomain && nsError.code == -11821 {
+          throw XCTSkip("This iOS Simulator cannot decode the HEVC Main 10 HDR fixture; verify on a physical iPhone.")
+        }
+        #endif
         XCTFail("variant render failed: \(String(reflecting: error))")
         return
       }

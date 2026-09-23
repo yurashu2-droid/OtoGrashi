@@ -181,7 +181,7 @@ final class VideoRecipe {
           .map((id) => ClipCrop(assetId: id, crop: NormalizedCrop.fullFrame))
           .toList(),
       captions: const <VideoCaption>[],
-      events: _buildScenes(ids, layout),
+      events: _buildScenes(ids, layout, arrangement.events),
     );
   }
 
@@ -267,24 +267,48 @@ abstract final class ArrangementPayloadClock {
   static const int totalSamples = 720000;
 }
 
-List<VideoSceneEvent> _buildScenes(List<String> ids, VideoLayout layout) {
+List<VideoSceneEvent> _buildScenes(
+  List<String> ids,
+  VideoLayout layout,
+  List<SoundEvent> sounds,
+) {
   switch (layout) {
     case VideoLayout.buildUp:
+      final introduced = ids.take(3).toSet();
       return List<VideoSceneEvent>.generate(8, (bar) {
-        final visible = switch (bar) {
-          0 || 1 || 2 => <String>[ids[bar]],
-          3 => <String>[ids[0], ids[1]],
-          4 => <String>[ids[0], ids[2]],
-          5 => <String>[ids[0], ids[1], ids[2]],
-          6 => <String>[
-            ids[0],
-            ids.length > 3 ? ids[3] : ids[1],
-            ids.length > 4 ? ids[4] : ids[2],
-          ],
-          _ => <String>[ids[0], ids.length > 5 ? ids[5] : ids[1], ids[2]],
-        };
+        final start = bar * Arrangement.barSamples;
+        final end = start + Arrangement.barSamples;
+        final visible = <String>[];
+        if (bar < 3) {
+          visible.add(ids[bar]);
+        } else {
+          visible.add(ids.first);
+          final sounding = sounds
+              .where(
+                (event) =>
+                    event.destinationStartSample < end &&
+                    event.destinationStartSample + event.durationSamples >
+                        start,
+              )
+              .map((event) => event.assetId)
+              .where((id) => id != ids.first)
+              .toSet()
+              .toList(growable: false);
+          final candidates = <String>[
+            ...sounding.where((id) => !introduced.contains(id)),
+            ...sounding,
+            ...ids.skip(1).where((id) => !introduced.contains(id)),
+            ...ids.skip(1),
+          ];
+          final count = bar < 5 ? 2 : 3;
+          for (final id in candidates) {
+            if (visible.length >= count) break;
+            if (!visible.contains(id)) visible.add(id);
+          }
+          introduced.addAll(visible);
+        }
         return VideoSceneEvent(
-          destinationStartSample: bar * Arrangement.barSamples,
+          destinationStartSample: start,
           durationSamples: Arrangement.barSamples,
           assetIds: visible,
           primaryAssetId: visible.first,

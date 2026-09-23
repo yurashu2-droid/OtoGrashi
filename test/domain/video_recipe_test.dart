@@ -55,6 +55,26 @@ void main() {
     expect(recipe.events[5].assetIds, ['asset-0', 'asset-1', 'asset-2']);
   });
 
+  test('build-up foregrounds the sound heard in each mixed bar', () {
+    final recipe = VideoRecipe.fromArrangement(
+      arrangement: _arrangementWithSourceCount(
+        3,
+        events: const [
+          SoundEvent(
+            assetId: 'asset-2',
+            sourceStartSample: 0,
+            destinationStartSample: 270000,
+            durationSamples: 9000,
+            gain: .8,
+            fades: EventFades(fadeInSamples: 0, fadeOutSamples: 0),
+          ),
+        ],
+      ),
+      layout: VideoLayout.buildUp,
+    );
+    expect(recipe.events[3].assetIds, ['asset-0', 'asset-2']);
+  });
+
   test(
     'four to six sources switch at the middle boundary and appear by the end',
     () {
@@ -117,7 +137,10 @@ Arrangement _arrangement() => Arrangement(
   videoEvents: const <VideoEvent>[],
 );
 
-Arrangement _arrangementWithSourceCount(int count) => Arrangement(
+Arrangement _arrangementWithSourceCount(
+  int count, {
+  List<SoundEvent> events = const <SoundEvent>[],
+}) => Arrangement(
   templateId: 'fixture',
   templateVersion: 1,
   analysisVersion: 1,
@@ -126,6 +149,17 @@ Arrangement _arrangementWithSourceCount(int count) => Arrangement(
   style: ArrangementStyle.sparse,
   sourceAssetIds: List<String>.generate(count, (index) => 'asset-$index'),
   unusableAssetIds: const <String>[],
-  events: const <SoundEvent>[],
-  videoEvents: const <VideoEvent>[],
+  events: events,
+  videoEvents: events
+      .map(
+        (event) => VideoEvent(
+          assetId: event.assetId,
+          destinationStartSample: event.destinationStartSample,
+          durationSamples: event.durationSamples,
+          sourceVideoStartTime: RationalTime(event.sourceStartSample, 48000),
+          crop: NormalizedCrop.fullFrame,
+          loopMode: VideoLoopMode.once,
+        ),
+      )
+      .toList(),
 );
