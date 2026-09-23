@@ -23,6 +23,52 @@ import 'package:otogurashi/storage/asset_repository.dart';
 import 'package:otogurashi/storage/project_repository.dart';
 
 void main() {
+  testWidgets('camera and Photos start from separate collect actions', (
+    tester,
+  ) async {
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(count: 2),
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('今撮る'),
+      150,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('今撮る'));
+    await tester.pumpAndSettle();
+    expect(media.prepareCalls, 1);
+    expect(media.pickCalls, 0);
+    expect(find.textContaining('3秒撮る'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('動画を選ぶ'),
+      150,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('動画を選ぶ'));
+    await tester.pumpAndSettle();
+    expect(media.prepareCalls, 1);
+    expect(media.pickCalls, 1);
+    expect(find.text('カメラとマイクを準備'), findsOneWidget);
+  });
+
   testWidgets('building preview includes clips beyond the first three', (
     tester,
   ) async {
@@ -704,6 +750,8 @@ final class _UnusedAssets implements AssetRepository {
 
 final class _FakeMedia implements MediaGateway {
   CapturedMedia? pickedVideo;
+  int prepareCalls = 0;
+  int pickCalls = 0;
   final renderRequests = <RenderRequest>[];
   bool failAnalysis = false;
   @override
@@ -742,8 +790,11 @@ final class _FakeMedia implements MediaGateway {
   @override
   Future<void> disposeCapture() async {}
   @override
-  Future<CaptureHandle> prepareCapture() async =>
-      const CaptureHandle(previewViewType: 'test-capture-preview');
+  Future<CaptureHandle> prepareCapture() async {
+    prepareCalls += 1;
+    return const CaptureHandle(previewViewType: 'test-capture-preview');
+  }
+
   @override
   Future<CameraFacing> switchCamera() async => CameraFacing.front;
   @override
@@ -757,7 +808,11 @@ final class _FakeMedia implements MediaGateway {
   Future<CapturedMedia> stopCapture(String operationId) =>
       throw UnimplementedError();
   @override
-  Future<CapturedMedia?> pickVideo(String operationId) async => pickedVideo;
+  Future<CapturedMedia?> pickVideo(String operationId) async {
+    pickCalls += 1;
+    return pickedVideo;
+  }
+
   @override
   Future<InspectedMedia> inspectStaged(String path) =>
       throw UnimplementedError();

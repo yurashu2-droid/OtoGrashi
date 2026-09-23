@@ -55,12 +55,13 @@ class _CreationFlowState extends State<CreationFlow> {
     }
   }
 
-  Future<void> _openCapture() async {
+  Future<void> _openCapture({bool fromPhotos = false}) async {
     final captured = await Navigator.of(context).push<CapturedMedia>(
       MaterialPageRoute(
         builder: (_) => _CaptureRoute(
           media: widget.media,
           presentation: widget.controller.presentation,
+          fromPhotos: fromPhotos,
         ),
         fullscreenDialog: true,
       ),
@@ -157,14 +158,20 @@ class _CreationFlowState extends State<CreationFlow> {
     return _CollectScreen(
       controller: widget.controller,
       onCapture: _openCapture,
+      onPhotos: () => _openCapture(fromPhotos: true),
     );
   }
 }
 
 class _CollectScreen extends StatelessWidget {
-  const _CollectScreen({required this.controller, required this.onCapture});
+  const _CollectScreen({
+    required this.controller,
+    required this.onCapture,
+    required this.onPhotos,
+  });
   final CreationController controller;
   final VoidCallback onCapture;
+  final VoidCallback onPhotos;
 
   Future<void> _previewClip(BuildContext context, ClipAsset clip, int index) =>
       showModalBottomSheet<void>(
@@ -360,14 +367,33 @@ class _CollectScreen extends StatelessWidget {
                 ),
               ),
             const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: state.clips.length >= 6 ? null : onCapture,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('音を録る・動画を選ぶ'),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppTokens.coral,
-                foregroundColor: AppTokens.ink,
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: state.clips.length >= 6 ? null : onCapture,
+                    icon: const Icon(Icons.videocam_outlined),
+                    label: const Text('今撮る'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppTokens.coral,
+                      foregroundColor: AppTokens.ink,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 148,
+                  child: OutlinedButton.icon(
+                    onPressed: state.clips.length >= 6 ? null : onPhotos,
+                    icon: const Icon(Icons.photo_library_outlined),
+                    label: const Text('動画を選ぶ'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 56),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             Text(
@@ -1403,9 +1429,14 @@ class _SyntheticPreview extends StatelessWidget {
 }
 
 class _CaptureRoute extends StatefulWidget {
-  const _CaptureRoute({required this.media, required this.presentation});
+  const _CaptureRoute({
+    required this.media,
+    required this.presentation,
+    required this.fromPhotos,
+  });
   final MediaGateway media;
   final MediaPresentationGateway presentation;
+  final bool fromPhotos;
 
   @override
   State<_CaptureRoute> createState() => _CaptureRouteState();
@@ -1418,6 +1449,19 @@ class _CaptureRouteState extends State<_CaptureRoute> {
     operationIdFactory: () =>
         'capture-${DateTime.now().microsecondsSinceEpoch}',
   );
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (widget.fromPhotos) {
+        unawaited(controller.importVideo());
+      } else {
+        unawaited(controller.prepare());
+      }
+    });
+  }
 
   @override
   void dispose() {
