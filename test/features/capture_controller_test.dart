@@ -169,6 +169,30 @@ void main() {
     expect(gateway.switchCalls, 1);
   });
 
+  testWidgets('front camera switch stays beside record on a small iPhone', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 667);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await controller.prepare();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CaptureScreen(controller: controller, testFixture: true),
+      ),
+    );
+
+    expect(find.text('インカメ'), findsOneWidget);
+    expect(tester.getBottomRight(find.text('インカメ')).dy, lessThan(667));
+    await tester.tap(find.text('インカメ'));
+    await tester.pump();
+    expect(gateway.switchCalls, 1);
+    expect(find.text('外カメ'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   test('retake discards the preview and restores the camera', () async {
     await controller.prepare();
     await controller.record();

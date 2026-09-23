@@ -96,27 +96,6 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                           if (state.phase == CapturePhase.completed &&
                               captured != null)
                             _reviewPlayback(captured),
-                          if (state.phase == CapturePhase.ready)
-                            Positioned(
-                              top: 65,
-                              right: 12,
-                              child: SizedBox(
-                                width: 180,
-                                child: FilledButton.tonalIcon(
-                                  onPressed: widget.controller.isSwitchingCamera
-                                      ? null
-                                      : widget.controller.switchCamera,
-                                  icon: const Icon(
-                                    Icons.flip_camera_ios_outlined,
-                                  ),
-                                  label: Text(
-                                    state.cameraFacing == CameraFacing.back
-                                        ? 'インカメに切替'
-                                        : '外カメに切替',
-                                  ),
-                                ),
-                              ),
-                            ),
                         ],
                       ),
                     ),
@@ -166,14 +145,35 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                     ],
                   ),
                   const SizedBox(height: AppTokens.controlGap),
-                  FilledButton(
-                    onPressed: () =>
-                        widget.controller.record(maxDurationUs: _durationUs),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppTokens.coral,
-                      foregroundColor: const Color(0xFF2C2730),
-                    ),
-                    child: Text(_durationUs == 3000000 ? '●  3秒撮る' : '●  6秒撮る'),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => widget.controller.record(
+                            maxDurationUs: _durationUs,
+                          ),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppTokens.coral,
+                            foregroundColor: const Color(0xFF2C2730),
+                          ),
+                          child: Text(
+                            _durationUs == 3000000 ? '●  3秒撮る' : '●  6秒撮る',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      OutlinedButton.icon(
+                        onPressed: widget.controller.isSwitchingCamera
+                            ? null
+                            : widget.controller.switchCamera,
+                        icon: const Icon(Icons.flip_camera_ios_outlined),
+                        label: Text(
+                          state.cameraFacing == CameraFacing.back
+                              ? 'インカメ'
+                              : '外カメ',
+                        ),
+                      ),
+                    ],
                   ),
                 ],
                 if (state.phase == CapturePhase.recording)
@@ -310,7 +310,7 @@ final class _CaptureScreenState extends State<CaptureScreen> {
   String _statusText(CaptureState state) => switch (state.phase) {
     CapturePhase.idle => '準備するときに、カメラとマイクの使用を確認します',
     CapturePhase.preparing => 'カメラとマイクを準備しています',
-    CapturePhase.ready => '撮る長さを選んでください',
+    CapturePhase.ready => '撮ったあとに再生・撮り直しできます',
     CapturePhase.starting => '録画を始めています',
     CapturePhase.recording => '録画中',
     CapturePhase.stopping => '動画を確定しています',
