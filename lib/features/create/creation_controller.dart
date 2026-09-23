@@ -467,7 +467,13 @@ final class CreationController extends ChangeNotifier {
     if (_disposed || version != _requestVersion) return;
     final project = _state.project;
     if (project == null || _state.clips.length < 3) return;
-    _set(_state.copyWith(phase: CreationPhase.preparing, clearError: true));
+    _set(
+      _state.copyWith(
+        phase: CreationPhase.preparing,
+        clearPreview: true,
+        clearError: true,
+      ),
+    );
     try {
       final analyses = await Future.wait(
         _state.clips.map((clip) => media.analyze(_analysisRequest(clip))),

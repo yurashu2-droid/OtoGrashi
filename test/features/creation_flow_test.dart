@@ -12,6 +12,7 @@ import 'package:otogurashi/domain/clip_asset.dart';
 import 'package:otogurashi/domain/project.dart';
 import 'package:otogurashi/features/create/creation_controller.dart';
 import 'package:otogurashi/features/create/creation_flow.dart';
+import 'package:otogurashi/features/create/beat_building_preview.dart';
 import 'package:otogurashi/features/export/media_playback.dart';
 import 'package:otogurashi/features/capture/capture_controller.dart';
 import 'package:otogurashi/features/capture/capture_screen.dart';
@@ -22,6 +23,29 @@ import 'package:otogurashi/storage/asset_repository.dart';
 import 'package:otogurashi/storage/project_repository.dart';
 
 void main() {
+  testWidgets('building preview includes clips beyond the first three', (
+    tester,
+  ) async {
+    final clips = await _FakeDemo(count: 6).install(_UnusedAssets());
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 225,
+              height: 400,
+              child: BeatBuildingPreview(clips: clips, thumbnails: const {}),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 2550));
+    expect(find.text('音 06'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   test('adding a fourth clip rebuilds a renderable recipe', () async {
     final projects = _MemoryProjects();
     final controller = CreationController(
@@ -48,6 +72,27 @@ void main() {
     final crops = projects.project!.videoRecipe['clipCrops'] as List<Object?>;
     expect(crops, hasLength(4));
     expect((crops.last as Map)['assetId'], added.id);
+  });
+
+  test('failed remix does not leave an outdated preview playable', () async {
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    await controller.createPreview();
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.state.preview, isNotNull);
+
+    media.failAnalysis = true;
+    await controller.createPreview();
+    expect(controller.state.phase, CreationPhase.failed);
+    expect(controller.state.preview, isNull);
   });
 
   test(
@@ -514,6 +559,46 @@ void main() {
       boundaryKey,
       File('${output.path}/completed.png'),
     );
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: boundaryKey,
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: theme,
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 225,
+                height: 400,
+                child: BeatBuildingPreview(
+                  clips: completeController.state.clips,
+                  thumbnails: const {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/building-one.png'),
+    );
+    await tester.pump(const Duration(milliseconds: 1700));
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/building-duplicate.png'),
+    );
+    await tester.pump(const Duration(milliseconds: 850));
+    await _captureScreen(
+      tester,
+      boundaryKey,
+      File('${output.path}/building-all.png'),
+    );
+    await tester.pumpWidget(const SizedBox());
     completeController.dispose();
   }, skip: !const bool.fromEnvironment('TASK7_VISUALS'));
 }
@@ -598,20 +683,23 @@ final class _UnusedAssets implements AssetRepository {
 
 final class _FakeMedia implements MediaGateway {
   final renderRequests = <RenderRequest>[];
+  bool failAnalysis = false;
   @override
   Stream<MediaEvent> get events => const Stream.empty();
 
   @override
-  Future<AnalyzedClip> analyze(MediaAnalysisRequest request) async =>
-      AnalyzedClip(
-        assetId: request.assetId,
-        durationSamples: 48000,
-        sampleRate: 48000,
-        onsetSamples: const [0],
-        peak: 0.8,
-        rms: 0.2,
-        suggestedRole: SuggestedRole.transient,
-      );
+  Future<AnalyzedClip> analyze(MediaAnalysisRequest request) async {
+    if (failAnalysis) throw StateError('analysis failed');
+    return AnalyzedClip(
+      assetId: request.assetId,
+      durationSamples: 48000,
+      sampleRate: 48000,
+      onsetSamples: const [0],
+      peak: 0.8,
+      rms: 0.2,
+      suggestedRole: SuggestedRole.transient,
+    );
+  }
 
   @override
   Future<RenderedMedia> render(RenderRequest request) async {

@@ -21,6 +21,7 @@ import '../../media/media_presentation_gateway.dart';
 import '../../media/media_delivery_gateway.dart';
 import '../export/comparison_player.dart';
 import '../export/media_playback.dart';
+import 'beat_building_preview.dart';
 import 'creation_controller.dart';
 
 class CreationFlow extends StatefulWidget {
@@ -866,7 +867,12 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
                       AspectRatio(
                         aspectRatio: 9 / 16,
                         child: path == null
-                            ? const _PreviewPlaceholder()
+                            ? state.phase == CreationPhase.failed
+                                  ? const _PreviewFailed()
+                                  : BeatBuildingPreview(
+                                      clips: state.clips,
+                                      thumbnails: state.thumbnails,
+                                    )
                             : NativeMovieView(
                                 key: ValueKey(
                                   '$path:${state.project?.revision}',
@@ -1013,6 +1019,7 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   bool _busy = false;
   bool _saved = false;
   String? _message;
+  String? _busyStage;
 
   Future<void> _openComparison() async {
     await playback.pause();
@@ -1070,9 +1077,11 @@ class _CompletedScreenState extends State<_CompletedScreen> {
     setState(() {
       _busy = true;
       _message = null;
+      _busyStage = '高画質の動画を準備しています';
     });
     try {
       final video = await _ensureFullVideo();
+      if (mounted) setState(() => _busyStage = '写真に保存しています');
       await delivery.saveToPhotos(video.relativePath);
       if (mounted) {
         setState(() {
@@ -1091,7 +1100,12 @@ class _CompletedScreenState extends State<_CompletedScreen> {
     } catch (_) {
       if (mounted) setState(() => _message = '保存できませんでした。もう一度お試しください。');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _busyStage = null;
+        });
+      }
     }
   }
 
@@ -1100,14 +1114,21 @@ class _CompletedScreenState extends State<_CompletedScreen> {
     setState(() {
       _busy = true;
       _message = null;
+      _busyStage = '高画質の動画を準備しています';
     });
     try {
       final video = await _ensureFullVideo();
+      if (mounted) setState(() => _busyStage = '共有画面を開いています');
       await delivery.share(video.relativePath);
     } catch (_) {
       if (mounted) setState(() => _message = '共有できませんでした。もう一度お試しください。');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _busyStage = null;
+        });
+      }
     }
   }
 
@@ -1209,7 +1230,7 @@ class _CompletedScreenState extends State<_CompletedScreen> {
               if (_busy) ...[
                 const LinearProgressIndicator(),
                 const SizedBox(height: 7),
-                const Text('動画を準備しています'),
+                Text(_busyStage ?? '動画を準備しています'),
               ],
               if (_message != null) ...[
                 Text(_message!, textAlign: TextAlign.center),
@@ -1329,12 +1350,21 @@ class _PlaybackControls extends StatelessWidget {
       '${value.inSeconds.toString().padLeft(2, '0')}秒';
 }
 
-class _PreviewPlaceholder extends StatelessWidget {
-  const _PreviewPlaceholder();
+class _PreviewFailed extends StatelessWidget {
+  const _PreviewFailed();
   @override
   Widget build(BuildContext context) => const ColoredBox(
     color: Color(0xFF302D36),
-    child: Center(child: CircularProgressIndicator()),
+    child: Center(
+      child: Padding(
+        padding: EdgeInsets.all(20),
+        child: Text(
+          '音をつなげられませんでした',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+        ),
+      ),
+    ),
   );
 }
 
