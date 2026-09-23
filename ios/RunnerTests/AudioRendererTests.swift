@@ -17,6 +17,46 @@ final class AudioRendererTests: XCTestCase {
     XCTAssertEqual(timeline, [0, 0, 0, 0, 0, 0.25, 0.5, 0.75, 0, 0])
   }
 
+  func testPitchShiftKeepsDurationDrySoundAndRaisesSustainedTone() throws {
+    let source = (0..<24_000).map { frame in
+      Float(sin(2 * Double.pi * 220 * Double(frame) / 48_000) * 0.5)
+    }
+    let renderer = AudioRenderer(accompanimentGain: 0)
+    let shifted = renderer.pitchPreservingDuration(source, semitones: 3)
+    XCTAssertEqual(shifted.count, source.count)
+    XCTAssertEqual(renderer.pitchPreservingDuration(source, semitones: 0), source)
+    XCTAssertTrue(shifted.allSatisfy(\.isFinite))
+    XCTAssertGreaterThan(shifted.suffix(2_400).map(\.magnitude).max() ?? 0, 0.05)
+    XCTAssertGreaterThan(toneEnergy(shifted, hertz: 261.6), toneEnergy(source, hertz: 261.6) * 3)
+
+    var json = validJSON(
+      sourceDuration: source.count,
+      destinationStart: 0,
+      eventDuration: source.count,
+      fadeIn: 0,
+      fadeOut: 0,
+      loopMode: "once"
+    )
+    XCTAssertEqual(try decode(json).events[0].effectivePitchSemitones, 0)
+    var event = (json["events"] as! [[String: Any]])[0]
+    event["pitchSemitones"] = 4
+    json["events"] = [event]
+    XCTAssertThrowsError(try decode(json)) { error in
+      XCTAssertEqual(error as? AudioRenderError, .eventOutOfBounds)
+    }
+  }
+
+  private func toneEnergy(_ samples: [Float], hertz: Double) -> Double {
+    var real = 0.0
+    var imaginary = 0.0
+    for frame in 4_800..<19_200 {
+      let phase = 2 * Double.pi * hertz * Double(frame) / 48_000
+      real += Double(samples[frame]) * cos(phase)
+      imaginary += Double(samples[frame]) * sin(phase)
+    }
+    return hypot(real, imaginary)
+  }
+
   func testPCMReaderHonorsCancellationBeforeOpeningTheAsset() throws {
     let token = CancellationToken(operationId: "reader-cancelled")
     token.cancel()

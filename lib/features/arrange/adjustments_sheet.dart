@@ -160,7 +160,7 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
               child: Column(
                 children: [
                   for (final entry in const <VideoLayout, String>{
-                    VideoLayout.buildUp: 'ひとつずつ → 音が重なる',
+                    VideoLayout.buildUp: 'ひとつずつ → 音に合わせて増える',
                     VideoLayout.stacked: '3段で見せる',
                     VideoLayout.sequentialFocus: '順番に大きく',
                     VideoLayout.photoDump: 'フォトダンプ',

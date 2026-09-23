@@ -89,6 +89,57 @@ void main() {
     );
   });
 
+  test('melody changes only sustained sounds and survives JSON round trip', () {
+    for (final style in ArrangementStyle.values) {
+      final arrangement = arrange(clips: threeFixtures, style: style, seed: 7);
+      expect(
+        arrangement.events.any((event) => event.pitchSemitones != 0),
+        isTrue,
+      );
+      expect(
+        arrangement.events
+            .where((event) => event.assetId != 'hum')
+            .every((event) => event.pitchSemitones == 0),
+        isTrue,
+      );
+      expect(
+        arrangement.events.every((event) => event.pitchSemitones.abs() <= 3),
+        isTrue,
+      );
+      expect(
+        Arrangement.fromJson(arrangement.toJson()).toJson(),
+        arrangement.toJson(),
+      );
+    }
+
+    final oldJson = arrange(
+      clips: threeFixtures,
+      style: ArrangementStyle.sparse,
+      seed: 7,
+    ).toJson();
+    final oldEvents = (oldJson['events'] as List<Object?>)
+        .map(
+          (value) =>
+              Map<String, Object?>.from(value! as Map)
+                ..remove('pitchSemitones'),
+        )
+        .toList();
+    final oldArrangement = Arrangement.fromJson({
+      ...oldJson,
+      'events': oldEvents,
+    });
+    expect(
+      oldArrangement.events.every((event) => event.pitchSemitones == 0),
+      isTrue,
+    );
+
+    oldEvents.first['pitchSemitones'] = 4;
+    expect(
+      () => Arrangement.fromJson({...oldJson, 'events': oldEvents}),
+      throwsA(isA<MediaContractException>()),
+    );
+  });
+
   test('persisted arrangement rejects more than six assets or 64 events', () {
     final valid = arrange(
       clips: threeFixtures,

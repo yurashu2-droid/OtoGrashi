@@ -191,6 +191,12 @@ struct VideoRenderer {
     )
     videoRenderDiagnostic("VIDEO_STAGE audio_complete")
     try checkCancellation(cancellation)
+    let waveformPeaks: [CGFloat]
+    if request.video.layout == .buildUp {
+      waveformPeaks = (try? Self.waveformPeaks(from: audioURL)) ?? []
+    } else {
+      waveformPeaks = []
+    }
 
     let dimensions = request.quality.dimensions
     let providers = try await makeProviders(
@@ -319,6 +325,7 @@ struct VideoRenderer {
             frame,
             request: request,
             providers: providers,
+            waveformPeaks: waveformPeaks,
             into: buffer,
             width: dimensions.width,
             height: dimensions.height
@@ -631,6 +638,7 @@ struct VideoRenderer {
     _ frame: Int,
     request: VideoRenderRequestPayload,
     providers: [String: SourceProvider],
+    waveformPeaks: [CGFloat],
     into buffer: CVPixelBuffer,
     width: Int,
     height: Int
@@ -673,15 +681,32 @@ struct VideoRenderer {
       )
       let cropped = image.cropped(to: sourceCrop)
       let target = targets[index]
-      let scale = max(target.width / cropped.extent.width, target.height / cropped.extent.height)
-      let scaled = cropped.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-      let translated = scaled.transformed(
-        by: CGAffineTransform(
-          translationX: target.midX - scaled.extent.midX,
-          y: target.midY - scaled.extent.midY
-        )
-      ).cropped(to: target)
-      canvas = translated.composited(over: canvas)
+      let tileCount = request.video.layout == .buildUp && scene.assetIds.count > 1 && index > 0
+        ? Self.buildUpTileCount(assetId: id, sample: sample, events: request.arrangement.events)
+        : 1
+      let melodyFlip = request.arrangement.events.contains { event in
+        let elapsed = sample - event.destinationStartSample
+        return event.assetId == id && event.effectivePitchSemitones != 0 &&
+          elapsed >= 0 && elapsed < 9_600
+      }
+      for (tileIndex, tile) in Self.tileRects(in: target, count: tileCount).enumerated() {
+        let scale = max(tile.width / cropped.extent.width, tile.height / cropped.extent.height)
+        let scaled = cropped.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let translated = scaled.transformed(
+          by: CGAffineTransform(
+            translationX: tile.midX - scaled.extent.midX,
+            y: tile.midY - scaled.extent.midY
+          )
+        ).cropped(to: tile)
+        let mirror = request.video.layout == .buildUp && index > 0 &&
+          ((tileIndex % 2 == 1) != melodyFlip)
+        let image = mirror
+          ? translated.transformed(
+            by: CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: tile.minX + tile.maxX, ty: 0)
+          ).cropped(to: tile)
+          : translated
+        canvas = image.composited(over: canvas)
+      }
     }
     context.render(
       canvas,
@@ -704,6 +729,7 @@ struct VideoRenderer {
         sample: sample,
         visibleAssetIds: visibleAssetIds,
         targets: targets,
+        waveformPeaks: waveformPeaks,
         into: buffer,
         width: width,
         height: height
@@ -762,6 +788,46 @@ struct VideoRenderer {
     }
   }
 
+  static func buildUpTileCount(
+    assetId: String,
+    sample: Int,
+    events: [SoundEventPayload]
+  ) -> Int {
+    let hits = events.filter {
+      $0.assetId == assetId &&
+        $0.destinationStartSample >= 3 * 90_000 &&
+        $0.destinationStartSample <= sample
+    }.count
+    return hits >= 4 ? 4 : (hits >= 2 ? 2 : 1)
+  }
+
+  static func tileRects(in target: CGRect, count: Int) -> [CGRect] {
+    switch count {
+    case 2:
+      if target.width < target.height * 0.7 {
+        return [
+          CGRect(x: target.minX, y: target.minY, width: target.width, height: target.height / 2),
+          CGRect(x: target.minX, y: target.midY, width: target.width, height: target.height / 2),
+        ]
+      }
+      return [
+        CGRect(x: target.minX, y: target.minY, width: target.width / 2, height: target.height),
+        CGRect(x: target.midX, y: target.minY, width: target.width / 2, height: target.height),
+      ]
+    case 4:
+      return (0..<4).map { index in
+        CGRect(
+          x: target.minX + CGFloat(index % 2) * target.width / 2,
+          y: target.minY + CGFloat(index / 2) * target.height / 2,
+          width: target.width / 2,
+          height: target.height / 2
+        )
+      }
+    default:
+      return [target]
+    }
+  }
+
   static func visibleAssetIds(
     scene: VideoSceneEventPayload,
     layout: VideoLayoutPayload
@@ -808,6 +874,24 @@ struct VideoRenderer {
     guard duration.isNumeric, duration > .zero else { return .zero }
     let lastFrame = CMTimeMaximum(.zero, duration - CMTime(value: 1, timescale: 600))
     return CMTimeMinimum(lastFrame, CMTimeMaximum(.zero, requested))
+  }
+
+  private static func waveformPeaks(from url: URL) throws -> [CGFloat] {
+    let file = try AVAudioFile(forReading: url)
+    guard let buffer = AVAudioPCMBuffer(
+      pcmFormat: file.processingFormat,
+      frameCapacity: AVAudioFrameCount(ArrangementPayload.totalSamples)
+    ) else { throw VideoRenderError.sourceReadFailed }
+    try file.read(into: buffer, frameCount: buffer.frameCapacity)
+    guard let samples = buffer.floatChannelData?[0] else {
+      throw VideoRenderError.sourceReadFailed
+    }
+    var peaks = Array(repeating: CGFloat(0), count: frameCount)
+    for sample in 0..<min(Int(buffer.frameLength), ArrangementPayload.totalSamples) {
+      let frame = sample / 1_600
+      peaks[frame] = max(peaks[frame], CGFloat(abs(samples[sample])))
+    }
+    return peaks
   }
 
   private func drawCaptions(
@@ -863,6 +947,7 @@ struct VideoRenderer {
     sample: Int,
     visibleAssetIds: [String],
     targets: [CGRect],
+    waveformPeaks: [CGFloat],
     into buffer: CVPixelBuffer,
     width: Int,
     height: Int
@@ -871,7 +956,12 @@ struct VideoRenderer {
       let elapsed = sample - event.destinationStartSample
       return elapsed >= 0 && elapsed < 9_600 && visibleAssetIds.contains(event.assetId)
     }
-    guard !active.isEmpty else { return }
+    let waveformEvent = events.last { event in
+      let elapsed = sample - event.destinationStartSample
+      return elapsed >= 0 && elapsed < 28_800
+    }
+    guard !active.isEmpty || (waveformEvent != nil && waveformPeaks.count == Self.frameCount)
+    else { return }
     CVPixelBufferLockBaseAddress(buffer, [])
     defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
     guard let base = CVPixelBufferGetBaseAddress(buffer),
@@ -888,6 +978,34 @@ struct VideoRenderer {
     else { throw VideoRenderError.writerFailed }
 
     graphics.setLineCap(.round)
+    if let waveformEvent, waveformPeaks.count == Self.frameCount {
+      let fade = CGFloat(1 - Double(sample - waveformEvent.destinationStartSample) / 28_800)
+      let centerY = CGFloat(height) * (visibleAssetIds.count > 1 ? 0.45 : 0.22)
+      let step = CGFloat(width) * 0.88 / 48
+      let currentFrame = sample / 1_600
+      let path = CGMutablePath()
+      for bar in 0..<48 {
+        let frame = currentFrame + bar - 24
+        let peak = waveformPeaks[max(0, min(Self.frameCount - 1, frame))]
+        let barHeight = CGFloat(height) * (0.004 + 0.068 * min(CGFloat(1), peak).squareRoot())
+        let x = CGFloat(width) * 0.06 + (CGFloat(bar) + 0.5) * step
+        path.move(to: CGPoint(x: x, y: centerY - barHeight / 2))
+        path.addLine(to: CGPoint(x: x, y: centerY + barHeight / 2))
+      }
+      graphics.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: fade * 0.15))
+      graphics.fill(CGRect(
+        x: 0, y: centerY - CGFloat(height) * 0.055,
+        width: CGFloat(width), height: CGFloat(height) * 0.11
+      ))
+      graphics.addPath(path)
+      graphics.setStrokeColor(CGColor(red: 0.12, green: 0.09, blue: 0.08, alpha: fade * 0.55))
+      graphics.setLineWidth(max(2, CGFloat(width) * 0.009))
+      graphics.strokePath()
+      graphics.addPath(path)
+      graphics.setStrokeColor(CGColor(red: 0.98, green: 0.52, blue: 0.52, alpha: fade))
+      graphics.setLineWidth(max(1, CGFloat(width) * 0.005))
+      graphics.strokePath()
+    }
     for event in active {
       guard let index = visibleAssetIds.firstIndex(of: event.assetId) else { continue }
       let target = targets[index]

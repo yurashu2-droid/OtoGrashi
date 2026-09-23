@@ -68,8 +68,20 @@ iOS CIの診断では、54件中52件が通過した。長尺元動画の短い�
 
 映像が1本から複数本へ増えるだけでは、どの断片が今の音か瞬時に伝わりにくい。標準の `buildUp` 書き出しに限り、実際の音イベントの開始から0.2秒、該当素材の映像内に小さな3本の線を描く。白い縁で実写上の視認性を保ち、コーラルと薄紫を交互に使う。映像を覆う枠や常時表示の装飾は増やさない。これは編集表現であり、後続のユーザー選択式サウンド／ビデオエフェクトとは別に扱う。
 
+ネイティブCIは54件成功・1件スキップ・失敗0件。[音の入り](iteration-3-rhythm-on.png)と[約0.27秒後](iteration-3-rhythm-off.png)の書き出しフレームを比較し、対応する映像の中で短く点灯して消えることを確認した。合成素材での見え方なので、強さや楽しさの判断は実写と実機で行う。
+
 初回画面も抽象的な丸では撮る対象や完成物が伝わらなかったため、ImageGenで[日常の3場面を切り貼りした画像](../../assets/art/onboarding-moments-v1.webp)を作成し、友達の「わっ！」・タイピング・コップの例を文言にした。[390×844の描画確認](iteration-3-onboarding.png)では画像・説明・主ボタンが一画面に収まる。この画像は体験を示す挿絵で、ユーザー素材や完成動画のサンプルではない。
 
 使用プロンプト（built-in ImageGen、`photorealistic-natural`）:
 
 > Create a single landscape 3:2 image for the first screen of a Japanese iPhone app that turns everyday videos into a 15-second rhythm video. Three candid moments: an adult friend reacting with an open-mouthed delighted laugh, hands typing on a laptop, and a ceramic cup being set on a home table. Make a cohesive collage of three readable uneven film frames; the friend is largest. Warm natural light, believable handheld smartphone footage, lived-in Japanese apartment, cream paper gaps, subtle coral and lavender hand-drawn beat marks. Compose for a rounded 1.55:1 crop. No words, logos, watermarks, UI buttons, phone bezel, gradients, neon, mascot, or cup-shaped border.
+
+## 第4回：拍ごとに増える映像と本物の波形
+
+[増殖と波形の絵コンテ](remix-rhythm-storyboard-v2.png)をImageGenで作成。音の反復に合わせて上段の素材を1枚→2枚→4枚へ分割し、複製の一部を左右反転する。先頭素材の下段ループは維持する。短い波形は合成した音声ファイルから実測した振幅を使い、音の入りから約0.6秒だけ表示する。小さな線だけでは伝わらなかった「何が鳴っているか」「音が重なる楽しさ」を映像の動きとして見せる。
+
+持続音の音程が変わる瞬間は複製の向きも一時的に切り替え、音と映像の変化を同じイベントへ結びつける。音程の範囲、原音との混合、旧レシピ互換は[音声設計メモ](2026-09-24-audio-melody.md)に記録する。これは音声全体をMIDI音源へ変換する機能ではなく、元の場面が分かる範囲の小さな旋律付けである。
+
+使用プロンプト（built-in ImageGen、`ui-mockup`）:
+
+> Four successive 9:16 frames of a 15-second vertical video using the same candid footage: a friend's delighted reaction, typing, and a cup tap. Begin with a full-screen friend and a small live waveform; then full-screen typing. Next the friend loops in a bottom bass lane while typing on top splits into two copies on a sound hit, one mirrored. Finally the upper half repeats keyboard moments with cup footage, some mirrored, with a short coral waveform following the sound. Warm real handheld footage and casual setlog/TikTok scrapbook energy; no app chrome, phone bezel, neon, mascot, permanent frame, words or captions.

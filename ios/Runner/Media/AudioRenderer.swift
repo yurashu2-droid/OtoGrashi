@@ -24,6 +24,9 @@ struct SoundEventPayload: Codable, Equatable {
   let durationSamples: Int
   let gain: Double
   let fades: EventFadesPayload
+  let pitchSemitones: Int?
+
+  var effectivePitchSemitones: Int { pitchSemitones ?? 0 }
 }
 
 enum VideoLoopModePayload: String, Codable, Equatable {
@@ -157,6 +160,7 @@ struct ArrangementPayload: Decodable, Equatable {
         destinationEnd <= Self.totalSamples,
         event.gain.isFinite,
         (0...1).contains(event.gain),
+        (-3...3).contains(event.effectivePitchSemitones),
         event.fades.fadeInSamples >= 0,
         event.fades.fadeOutSamples >= 0,
         fadeTotal <= event.durationSamples,
@@ -277,8 +281,12 @@ struct AudioRenderer {
       } else {
         eventSamples = decoded.samples
       }
-      mixEvent(
+      let pitched = pitchPreservingDuration(
         eventSamples,
+        semitones: event.effectivePitchSemitones
+      )
+      mixEvent(
+        pitched,
         destinationStart: event.destinationStartSample - preRoll,
         eventGain: Float(event.gain),
         fadeInSamples: max(event.fades.fadeInSamples, min(120, renderedDuration / 4)),
@@ -299,6 +307,38 @@ struct AudioRenderer {
       throw AudioRenderError.cancelled
     }
     return try inspectWrittenOutput(outputURL)
+  }
+
+  // Two crossing read heads resample short grains while their output clock
+  // stays fixed. The dry layer retains the recorded voice and attacks.
+  func pitchPreservingDuration(_ source: [Float], semitones: Int) -> [Float] {
+    let grainLength = 2_048
+    guard semitones != 0, (-3...3).contains(semitones),
+      source.count >= grainLength, source.allSatisfy(\.isFinite)
+    else { return source }
+    let ratio = pow(2.0, Double(semitones) / 12)
+    var shifted = Array(repeating: Float(0), count: source.count)
+    let windows = (0..<grainLength).map { phase in
+      Float(0.5 - 0.5 * cos(2 * .pi * Double(phase) / Double(grainLength)))
+    }
+    for index in shifted.indices {
+      var weighted: Float = 0
+      var weight: Float = 0
+      for head in 0..<2 {
+        let offset = head * grainLength / 2
+        let phase = (index + offset) % grainLength
+        let position = Double(index) + (ratio - 1) * Double(phase)
+        guard position >= 0, position < Double(source.count - 1) else { continue }
+        let lower = Int(position)
+        let fraction = Float(position - Double(lower))
+        let value = source[lower] * (1 - fraction) + source[lower + 1] * fraction
+        weighted += value * windows[phase]
+        weight += windows[phase]
+      }
+      let wet = weight > 0 ? weighted / weight : source[index]
+      shifted[index] = source[index] * 0.35 + wet * 0.65
+    }
+    return shifted
   }
 
   private func mixEvent(

@@ -44,7 +44,14 @@ Arrangement arrange({
   for (var bar = 0; bar < 3; bar++) {
     final clip = usable[bar % usable.length];
     events.add(
-      _event(clip, bar * Arrangement.barSamples, template, random, intro: true),
+      _event(
+        clip,
+        bar * Arrangement.barSamples,
+        template,
+        random,
+        melodyStep: bar,
+        intro: true,
+      ),
     );
   }
 
@@ -65,6 +72,7 @@ Arrangement arrange({
           bar * Arrangement.barSamples + template.mixOffsets[step] + swing,
           template,
           random,
+          melodyStep: bar + step,
         ),
       );
       mixIndex++;
@@ -80,6 +88,7 @@ Arrangement arrange({
         7 * Arrangement.barSamples + template.outroOffsets[step],
         template,
         random,
+        melodyStep: 7 + step,
         outro: true,
       ),
     );
@@ -119,6 +128,7 @@ SoundEvent _event(
   int destinationStart,
   _ArrangementTemplate template,
   _XorShift32 random, {
+  required int melodyStep,
   bool intro = false,
   bool outro = false,
 }) {
@@ -169,6 +179,9 @@ SoundEvent _event(
     durationSamples: duration,
     gain: gain,
     fades: EventFades(fadeInSamples: boundedFade, fadeOutSamples: boundedFade),
+    pitchSemitones: clip.suggestedRole == SuggestedRole.sustain
+        ? template.melody[melodyStep % template.melody.length]
+        : 0,
   );
 }
 
@@ -191,6 +204,7 @@ final class _ArrangementTemplate {
     required this.transientDuration,
     required this.sustainDuration,
     required this.textureDuration,
+    required this.melody,
   });
 
   final String id;
@@ -201,6 +215,7 @@ final class _ArrangementTemplate {
   final int transientDuration;
   final int sustainDuration;
   final int textureDuration;
+  final List<int> melody;
 }
 
 const _templates = <ArrangementStyle, _ArrangementTemplate>{
@@ -213,6 +228,7 @@ const _templates = <ArrangementStyle, _ArrangementTemplate>{
     transientDuration: 9000,
     sustainDuration: 22500,
     textureDuration: 45000,
+    melody: [0, 2, 3, 2, 0, -2, 0, 2],
   ),
   ArrangementStyle.swaying: _ArrangementTemplate(
     id: 'swaying-128bpm-8bar',
@@ -223,6 +239,7 @@ const _templates = <ArrangementStyle, _ArrangementTemplate>{
     transientDuration: 11250,
     sustainDuration: 22500,
     textureDuration: 45000,
+    melody: [0, 2, 3, 2, 0, -2, 0, 2],
   ),
   ArrangementStyle.lively: _ArrangementTemplate(
     id: 'lively-128bpm-8bar',
@@ -233,6 +250,7 @@ const _templates = <ArrangementStyle, _ArrangementTemplate>{
     transientDuration: 9000,
     sustainDuration: 16875,
     textureDuration: 22500,
+    melody: [0, 2, 3, 2, 0, -2, 0, 2],
   ),
 };
 

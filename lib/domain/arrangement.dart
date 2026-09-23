@@ -49,6 +49,7 @@ final class SoundEvent {
     required this.durationSamples,
     required this.gain,
     required this.fades,
+    this.pitchSemitones = 0,
   });
 
   final String assetId;
@@ -57,6 +58,7 @@ final class SoundEvent {
   final int durationSamples;
   final double gain;
   final EventFades fades;
+  final int pitchSemitones;
 
   Map<String, Object?> toJson() => {
     'assetId': assetId,
@@ -65,6 +67,7 @@ final class SoundEvent {
     'durationSamples': durationSamples,
     'gain': gain,
     'fades': fades.toJson(),
+    if (pitchSemitones != 0) 'pitchSemitones': pitchSemitones,
   };
 
   factory SoundEvent.fromJson(Map<String, Object?> json) => SoundEvent(
@@ -74,6 +77,7 @@ final class SoundEvent {
     durationSamples: json['durationSamples'] as int,
     gain: (json['gain'] as num).toDouble(),
     fades: EventFades.fromJson((json['fades'] as Map<Object?, Object?>).cast()),
+    pitchSemitones: json['pitchSemitones'] as int? ?? 0,
   );
 }
 
@@ -210,6 +214,8 @@ final class Arrangement {
               !event.gain.isFinite ||
               event.gain < 0 ||
               event.gain > 1 ||
+              event.pitchSemitones < -3 ||
+              event.pitchSemitones > 3 ||
               event.fades.fadeInSamples < 0 ||
               event.fades.fadeOutSamples < 0 ||
               event.fades.fadeInSamples + event.fades.fadeOutSamples >

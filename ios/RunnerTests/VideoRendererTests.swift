@@ -317,6 +317,21 @@ final class VideoRendererTests: XCTestCase {
     XCTAssertEqual(trio[0].width, 360)
     XCTAssertEqual(trio[1].width, 180)
     XCTAssertEqual(trio[2].width, 180)
+    let cues = (0..<4).map { index in
+      SoundEventPayload(
+        assetId: "typing",
+        sourceStartSample: 0,
+        destinationStartSample: 312_000 + index * 12_000,
+        durationSamples: 12_000,
+        gain: 0.6,
+        fades: EventFadesPayload(fadeInSamples: 0, fadeOutSamples: 120),
+        pitchSemitones: nil
+      )
+    }
+    XCTAssertEqual(VideoRenderer.buildUpTileCount(assetId: "typing", sample: 312_000, events: cues), 1)
+    XCTAssertEqual(VideoRenderer.buildUpTileCount(assetId: "typing", sample: 324_000, events: cues), 2)
+    XCTAssertEqual(VideoRenderer.buildUpTileCount(assetId: "typing", sample: 348_000, events: cues), 4)
+    XCTAssertEqual(VideoRenderer.tileRects(in: duo[1], count: 4).count, 4)
   }
 
   func testBuildUpRepeatsTheFirstSourceEvenWhenItsNormalModeHolds() {
@@ -539,7 +554,9 @@ final class VideoRendererTests: XCTestCase {
       "loopMode": "loop",
     ]
     let rhythmCues: [(assetId: String, start: Int)] = layout == "buildUp"
-      ? [("sustain", 312_000), ("texture", 600_000)] : []
+      ? [("sustain", 312_000), ("sustain", 324_000),
+        ("sustain", 336_000), ("sustain", 348_000),
+        ("texture", 600_000)] : []
     let soundEvents = [event] + rhythmCues.map { cue -> [String: Any] in
       [
         "assetId": cue.assetId,
