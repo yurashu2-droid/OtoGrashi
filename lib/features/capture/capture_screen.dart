@@ -54,9 +54,10 @@ final class _CaptureScreenState extends State<CaptureScreen> {
         final state = widget.controller.state;
         final captured = state.capturedMedia;
         final screenSize = MediaQuery.sizeOf(context);
-        final previewHeight = (screenSize.height * 0.46).clamp(
-          280.0,
-          MediaQuery.textScalerOf(context).scale(16) > 21 ? 360.0 : 400.0,
+        final largeText = MediaQuery.textScalerOf(context).scale(16) > 21;
+        final previewHeight = (screenSize.height * 0.65).clamp(
+          340.0,
+          largeText ? 420.0 : 540.0,
         ).toDouble();
         return Scaffold(
           appBar: AppBar(title: const Text('音を録る'), toolbarHeight: 52),
@@ -114,6 +115,31 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                                 handle: state.handle,
                                 testFixture: widget.testFixture,
                               ),
+                            if (state.phase == CapturePhase.ready)
+                              Positioned(
+                                top: 12,
+                                right: 12,
+                                child: OutlinedButton.icon(
+                                  onPressed:
+                                      widget.controller.isSwitchingCamera
+                                      ? null
+                                      : widget.controller.switchCamera,
+                                  style: OutlinedButton.styleFrom(
+                                    minimumSize: const Size(0, 44),
+                                    backgroundColor: AppTokens.surfaceColor,
+                                    foregroundColor: AppTokens.ink,
+                                  ),
+                                  icon: const Icon(
+                                    Icons.flip_camera_ios_outlined,
+                                    size: 18,
+                                  ),
+                                  label: Text(
+                                    state.cameraFacing == CameraFacing.back
+                                        ? 'インカメ'
+                                        : '外カメ',
+                                  ),
+                                ),
+                              ),
                             Positioned(
                               left: 12,
                               bottom: 12,
@@ -135,7 +161,10 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                   ),
                 ),
                 if (state.phase == CapturePhase.recording)
-                  _RecordingProgress(progress: state.progress)
+                  _RecordingProgress(
+                    progress: state.progress,
+                    targetDurationUs: _durationUs,
+                  )
                 else ...[
                   const SizedBox(height: 8),
                   _CaptureStatus(text: _statusText(state)),
@@ -186,46 +215,25 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                     ],
                   ),
                   const SizedBox(height: AppTokens.controlGap),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: () => widget.controller.record(
-                            maxDurationUs: _durationUs,
-                          ),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppTokens.coral,
-                            foregroundColor: AppTokens.ink,
-                            minimumSize: const Size.fromHeight(62),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            textStyle: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          child: Text(
-                            _durationUs == 3000000 ? '♪  3秒撮る' : '♪  6秒撮る',
-                          ),
-                        ),
+                  FilledButton(
+                    onPressed: () => widget.controller.record(
+                      maxDurationUs: _durationUs,
+                    ),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppTokens.coral,
+                      foregroundColor: AppTokens.ink,
+                      minimumSize: const Size.fromHeight(62),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
                       ),
-                      const SizedBox(width: 10),
-                      OutlinedButton.icon(
-                        onPressed: widget.controller.isSwitchingCamera
-                            ? null
-                            : widget.controller.switchCamera,
-                        style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(0, 56),
-                        ),
-                        icon: const Icon(Icons.flip_camera_ios_outlined),
-                        label: Text(
-                          state.cameraFacing == CameraFacing.back
-                              ? 'インカメ'
-                              : '外カメ',
-                        ),
+                      textStyle: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
                       ),
-                    ],
+                    ),
+                    child: Text(
+                      _durationUs == 3000000 ? '♪  3秒撮る' : '♪  6秒撮る',
+                    ),
                   ),
                 ],
                 if (state.phase == CapturePhase.recording)
@@ -674,36 +682,48 @@ final class _CaptureStatus extends StatelessWidget {
 }
 
 final class _RecordingProgress extends StatelessWidget {
-  const _RecordingProgress({required this.progress});
+  const _RecordingProgress({
+    required this.progress,
+    required this.targetDurationUs,
+  });
 
   final double progress;
+  final int targetDurationUs;
 
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Row(
-        children: [
-          const Icon(Icons.graphic_eq_rounded, color: AppTokens.coral, size: 18),
-          const SizedBox(width: 6),
-          const Expanded(
-            child: Text(
-              '録音中',
-              style: TextStyle(fontWeight: FontWeight.w800),
+  Widget build(BuildContext context) {
+    final boundedProgress = progress.clamp(0, 1).toDouble();
+    final targetSeconds = targetDurationUs / 1000000;
+    final elapsedSeconds = targetSeconds * boundedProgress;
+    return Column(
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.graphic_eq_rounded, color: AppTokens.coral, size: 18),
+            const SizedBox(width: 6),
+            const Expanded(
+              child: Text(
+                '録音中',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
             ),
-          ),
-          Text('${(progress.clamp(0, 1) * 100).round()}%'),
-        ],
-      ),
-      const SizedBox(height: 5),
-      ClipRRect(
-        borderRadius: BorderRadius.circular(4),
-        child: LinearProgressIndicator(
-          value: progress.clamp(0, 1).toDouble(),
-          minHeight: 6,
-          color: AppTokens.coral,
-          backgroundColor: const Color(0xFFE9DFD4),
+            Text(
+              '${elapsedSeconds.toStringAsFixed(1)} / '
+              '${targetSeconds.toStringAsFixed(1)}秒',
+            ),
+          ],
         ),
-      ),
-    ],
-  );
+        const SizedBox(height: 5),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: boundedProgress,
+            minHeight: 6,
+            color: AppTokens.coral,
+            backgroundColor: const Color(0xFFE9DFD4),
+          ),
+        ),
+      ],
+    );
+  }
 }
