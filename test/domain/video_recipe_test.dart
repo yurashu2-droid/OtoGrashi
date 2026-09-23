@@ -20,6 +20,20 @@ void main() {
     });
   });
 
+  test('only explicit sound names survive recipe serialization', () {
+    final original = _recipe(VideoLayout.buildUp);
+    final named = VideoRecipe(
+      layout: original.layout,
+      clipCrops: original.clipCrops,
+      captions: original.captions,
+      events: original.events,
+      clipNames: const {'one': '友達のわっ！'},
+    );
+    final decoded = VideoRecipe.fromJson(named.toJson());
+    expect(decoded.clipNames, {'one': '友達のわっ！'});
+    expect(_recipe(VideoLayout.buildUp).clipNames, isEmpty);
+  });
+
   test('all layouts use bar-boundary scenes and show every source', () {
     for (final layout in VideoLayout.values) {
       final recipe = VideoRecipe.fromArrangement(

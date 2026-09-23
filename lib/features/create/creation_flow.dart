@@ -778,35 +778,42 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
     );
   }
 
-  Future<void> _renameSounds() => showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    builder: (sheetContext) => AnimatedBuilder(
-      animation: widget.controller,
-      builder: (context, _) {
-        final clips = widget.controller.state.clips;
-        return SafeArea(
-          child: SizedBox(
-            height: (88.0 + clips.length * 62).clamp(
-              150.0,
-              MediaQuery.sizeOf(context).height * .7,
+  Future<void> _renameSounds() async {
+    final startingRevision = widget.controller.state.project?.revision;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => AnimatedBuilder(
+        animation: widget.controller,
+        builder: (context, _) {
+          final clips = widget.controller.state.clips;
+          return SafeArea(
+            child: SizedBox(
+              height: (88.0 + clips.length * 62).clamp(
+                150.0,
+                MediaQuery.sizeOf(context).height * .7,
+              ),
+              child: ListView(
+                children: [
+                  const ListTile(title: Text('音の名前をつける')),
+                  for (var index = 0; index < clips.length; index++)
+                    ListTile(
+                      title: Text(_soundName(clips[index], index)),
+                      trailing: const Icon(Icons.edit_rounded),
+                      onTap: () => _renameSound(clips[index], index),
+                    ),
+                ],
+              ),
             ),
-            child: ListView(
-              children: [
-                const ListTile(title: Text('音の名前をつける')),
-                for (var index = 0; index < clips.length; index++)
-                  ListTile(
-                    title: Text(_soundName(clips[index], index)),
-                    trailing: const Icon(Icons.edit_rounded),
-                    onTap: () => _renameSound(clips[index], index),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    ),
-  );
+          );
+        },
+      ),
+    );
+    if (mounted &&
+        widget.controller.state.project?.revision != startingRevision) {
+      widget.controller.refreshNamedPreview();
+    }
+  }
 
   String _soundName(ClipAsset clip, int index) =>
       RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$').hasMatch(clip.label)

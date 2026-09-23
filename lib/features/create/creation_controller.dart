@@ -280,13 +280,49 @@ final class CreationController extends ChangeNotifier {
     if (_disposed || !_state.clips.any((clip) => clip.id == assetId)) return;
     final renamed = await assets.rename(assetId, label);
     if (_disposed) return;
+    final project = _state.project;
+    Project? updated;
+    if (project != null) {
+      final recipe = Map<String, Object?>.of(project.videoRecipe);
+      final names = <String, String>{
+        if (recipe['clipNames'] is Map)
+          for (final entry in (recipe['clipNames'] as Map).entries)
+            if (entry.key is String && entry.value is String)
+              entry.key as String: entry.value as String,
+        assetId: renamed.label,
+      };
+      recipe['clipNames'] = names;
+      updated = project.copyWith(
+        revision: project.revision + 1,
+        videoRecipe: recipe,
+        updatedAt: DateTime.now().toUtc(),
+      );
+      await projects.save(updated, expectedRevision: project.revision);
+      if (_disposed) return;
+      _render.open(updated);
+    }
     _set(
       _state.copyWith(
+        project: updated,
         clips: _state.clips
             .map((clip) => clip.id == assetId ? renamed : clip)
             .toList(growable: false),
       ),
     );
+  }
+
+  void refreshNamedPreview() {
+    final project = _state.project;
+    if (_disposed ||
+        project == null ||
+        _state.clips.length < 3 ||
+        project.arrangement['events'] is! List ||
+        project.videoRecipe['events'] is! List) {
+      return;
+    }
+    _set(_state.copyWith(phase: CreationPhase.rendering, clearError: true));
+    _render.open(project);
+    _render.generate(RenderQuality.preview);
   }
 
   void selectStyle(ArrangementStyle style) {
@@ -569,7 +605,20 @@ final class CreationController extends ChangeNotifier {
     final result = Map<String, Object?>.of(generated);
     final captions = previous['captions'];
     final crops = previous['clipCrops'];
+    final clipNames = previous['clipNames'];
     if (captions is List) result['captions'] = _copyJson(captions);
+    if (clipNames is Map) {
+      final validIds = (generated['clipCrops'] as List<Object?>)
+          .map((crop) => (crop as Map)['assetId'])
+          .toSet();
+      result['clipNames'] = <String, String>{
+        for (final entry in clipNames.entries)
+          if (entry.key is String &&
+              entry.value is String &&
+              validIds.contains(entry.key))
+            entry.key as String: entry.value as String,
+      };
+    }
     if (crops is List) {
       final previousById = <String, Object?>{
         for (final crop in crops)

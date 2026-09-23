@@ -69,9 +69,10 @@ struct VideoRecipePayload: Decodable {
   let captions: [VideoCaptionPayload]
   let events: [VideoSceneEventPayload]
   let effects: VideoEffectsPayload
+  let clipNames: [String: String]
 
   private enum CodingKeys: String, CodingKey {
-    case schemaVersion, layout, clipCrops, captions, events, effects
+    case schemaVersion, layout, clipCrops, captions, events, effects, clipNames
   }
 
   init(from decoder: Decoder) throws {
@@ -83,6 +84,7 @@ struct VideoRecipePayload: Decodable {
     events = try container.decode([VideoSceneEventPayload].self, forKey: .events)
     effects = try container.decodeIfPresent(VideoEffectsPayload.self, forKey: .effects)
       ?? VideoEffectsPayload(enabled: [])
+    clipNames = try container.decodeIfPresent([String: String].self, forKey: .clipNames) ?? [:]
     let cropIds = clipCrops.map(\.assetId)
     guard schemaVersion == 1,
       (1...6).contains(clipCrops.count),
@@ -91,6 +93,10 @@ struct VideoRecipePayload: Decodable {
       !events.isEmpty,
       Set(cropIds).count == cropIds.count,
       clipCrops.allSatisfy({ !$0.assetId.isEmpty && $0.crop.isValid }),
+      clipNames.count <= 6,
+      clipNames.allSatisfy({ cropIds.contains($0.key) &&
+        !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        $0.value.count <= 40 }),
       effects.enabled.isEmpty,
       events.first?.destinationStartSample == 0,
       events.last?.destinationEndSample == ArrangementPayload.totalSamples
@@ -712,6 +718,17 @@ struct VideoRenderer {
         height: height
       )
     }
+    try drawSoundNames(
+      names: request.video.clipNames,
+      events: request.arrangement.events,
+      sample: sample,
+      visibleAssetIds: visibleAssetIds,
+      targets: targets,
+      layout: request.video.layout,
+      into: buffer,
+      width: width,
+      height: height
+    )
   }
 
   static func targetRects(
@@ -939,6 +956,108 @@ struct VideoRenderer {
       width: labelWidth,
       height: labelHeight
     )
+  }
+
+  static func namedActiveAssetIds(
+    names: [String: String],
+    events: [SoundEventPayload],
+    sample: Int,
+    visibleAssetIds: [String]
+  ) -> [String] {
+    visibleAssetIds.filter { id in
+      names[id] != nil && events.contains { event in
+        event.assetId == id && event.gain > 0 &&
+          sample >= event.destinationStartSample &&
+          sample < event.destinationStartSample + event.durationSamples
+      }
+    }
+  }
+
+  private func drawSoundNames(
+    names: [String: String],
+    events: [SoundEventPayload],
+    sample: Int,
+    visibleAssetIds: [String],
+    targets: [CGRect],
+    layout: VideoLayoutPayload,
+    into buffer: CVPixelBuffer,
+    width: Int,
+    height: Int
+  ) throws {
+    let activeIds = Self.namedActiveAssetIds(
+      names: names, events: events, sample: sample, visibleAssetIds: visibleAssetIds
+    )
+    guard !activeIds.isEmpty else { return }
+    CVPixelBufferLockBaseAddress(buffer, [])
+    defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+    guard let base = CVPixelBufferGetBaseAddress(buffer),
+      let graphics = CGContext(
+        data: base,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue
+          | CGImageAlphaInfo.premultipliedFirst.rawValue
+      )
+    else { throw VideoRenderError.writerFailed }
+
+    let sticker = layout == .buildUp || layout == .photoDump
+    for id in activeIds {
+      guard let name = names[id], let index = visibleAssetIds.firstIndex(of: id),
+        index < targets.count else { continue }
+      let target = targets[index]
+      let fontSize = max(12, min(CGFloat(width) * 0.055, target.width * 0.09))
+      let padding = fontSize * 0.65
+      let maxTextWidth = min(target.width * 0.78, CGFloat(width) * 0.78)
+      let characterLimit = max(4, Int(maxTextWidth / fontSize) - 1)
+      let displayed = name.count > characterLimit
+        ? String(name.prefix(characterLimit - 1)) + "…" : name
+      let font = CTFontCreateWithName("HiraginoSans-W6" as CFString, fontSize, nil)
+      let foreground = sticker
+        ? CGColor(red: 0.14, green: 0.10, blue: 0.15, alpha: 1)
+        : CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+      let attributed = NSAttributedString(string: displayed, attributes: [
+        NSAttributedString.Key(kCTFontAttributeName as String): font,
+        NSAttributedString.Key(kCTForegroundColorAttributeName as String): foreground,
+      ])
+      let line = CTLineCreateWithAttributedString(attributed)
+      let textWidth = min(maxTextWidth, CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
+      let labelWidth = min(target.width * 0.9, textWidth + padding * 2)
+      let labelHeight = fontSize * 1.8
+      let inset = max(CGFloat(width) * 0.035, target.width * 0.055)
+      let x = sticker ? target.minX + inset : target.midX - labelWidth / 2
+      let y = min(
+        max(target.minY + target.height * 0.08, CGFloat(height) * 0.10),
+        min(target.maxY - labelHeight - inset, CGFloat(height) * 0.88 - labelHeight)
+      )
+      let rect = CGRect(x: x, y: y, width: labelWidth, height: labelHeight)
+      graphics.saveGState()
+      let background = sticker
+        ? CGColor(red: 1, green: 0.97, blue: 0.93, alpha: 0.94)
+        : CGColor(red: 0.07, green: 0.05, blue: 0.10, alpha: 0.78)
+      graphics.setFillColor(background)
+      graphics.addPath(CGPath(
+        roundedRect: rect,
+        cornerWidth: sticker ? labelHeight * 0.18 : labelHeight * 0.5,
+        cornerHeight: sticker ? labelHeight * 0.18 : labelHeight * 0.5,
+        transform: nil
+      ))
+      graphics.fillPath()
+      graphics.setFillColor(sticker
+        ? CGColor(red: 0.99, green: 0.42, blue: 0.43, alpha: 1)
+        : CGColor(red: 0.75, green: 0.62, blue: 1, alpha: 1))
+      graphics.fill(CGRect(x: rect.minX, y: rect.minY,
+                           width: max(2, fontSize * 0.17), height: labelHeight))
+      graphics.clip(to: rect.insetBy(dx: padding * 0.5, dy: 0))
+      graphics.textPosition = CGPoint(
+        x: rect.minX + padding,
+        y: rect.minY + (labelHeight - fontSize) * 0.5
+      )
+      CTLineDraw(line, graphics)
+      graphics.restoreGState()
+    }
   }
 
   private func drawRhythmAccents(

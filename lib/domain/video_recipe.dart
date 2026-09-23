@@ -114,16 +114,29 @@ final class VideoRecipe {
     required List<ClipCrop> clipCrops,
     required List<VideoCaption> captions,
     required List<VideoSceneEvent> events,
+    Map<String, String> clipNames = const <String, String>{},
     this.effects = VideoEffects.none,
   }) : clipCrops = List<ClipCrop>.unmodifiable(clipCrops),
        captions = List<VideoCaption>.unmodifiable(captions),
-       events = List<VideoSceneEvent>.unmodifiable(events) {
+       events = List<VideoSceneEvent>.unmodifiable(events),
+       clipNames = Map<String, String>.unmodifiable(clipNames) {
     if (clipCrops.length > 6 || captions.length > 12 || events.length > 64) {
       throw const MediaContractException('Video recipe exceeds schema limits.');
     }
     final cropIds = clipCrops.map((value) => value.assetId).toList();
     if (cropIds.isEmpty || cropIds.toSet().length != cropIds.length) {
       throw const MediaContractException('Video recipe crops are invalid.');
+    }
+    if (clipNames.length > 6 ||
+        clipNames.entries.any(
+          (entry) =>
+              !cropIds.contains(entry.key) ||
+              entry.value.trim().isEmpty ||
+              entry.value.runes.length > 40,
+        )) {
+      throw const MediaContractException(
+        'Video recipe sound names are invalid.',
+      );
     }
     if (clipCrops.any((value) => !_validCrop(value.crop)) ||
         captions.any(
@@ -233,6 +246,10 @@ final class VideoRecipe {
               ),
             )
             .toList(),
+        clipNames:
+            (json['clipNames'] as Map<Object?, Object?>? ??
+                    const <Object?, Object?>{})
+                .cast<String, String>(),
         effects: effectsJson == null
             ? VideoEffects.none
             : VideoEffects.fromJson(
@@ -252,6 +269,7 @@ final class VideoRecipe {
   final List<ClipCrop> clipCrops;
   final List<VideoCaption> captions;
   final List<VideoSceneEvent> events;
+  final Map<String, String> clipNames;
   final VideoEffects effects;
 
   static int nearestFrameForSample(int sample) {
@@ -267,6 +285,7 @@ final class VideoRecipe {
     'clipCrops': clipCrops.map((value) => value.toJson()).toList(),
     'captions': captions.map((value) => value.toJson()).toList(),
     'events': events.map((value) => value.toJson()).toList(),
+    'clipNames': clipNames,
     'effects': effects.toJson(),
   };
 }

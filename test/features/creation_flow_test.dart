@@ -23,6 +23,41 @@ import 'package:otogurashi/storage/asset_repository.dart';
 import 'package:otogurashi/storage/project_repository.dart';
 
 void main() {
+  testWidgets('sound names reach export recipe without reanalyzing on rename', (
+    tester,
+  ) async {
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _RenamableAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    await controller.createPreview();
+    await tester.pump();
+    final originalAnalysisCalls = media.analysisCalls;
+    final originalRenderCount = media.renderRequests.length;
+
+    await controller.renameClip('clip-0', '友達のわっ！');
+    expect(media.analysisCalls, originalAnalysisCalls);
+    expect(media.renderRequests, hasLength(originalRenderCount));
+    expect(controller.state.project!.videoRecipe['clipNames'], {
+      'clip-0': '友達のわっ！',
+    });
+
+    controller.refreshNamedPreview();
+    await tester.pump();
+    expect(media.analysisCalls, originalAnalysisCalls);
+    expect(media.renderRequests.last.video.clipNames, {'clip-0': '友達のわっ！'});
+
+    await controller.createPreview();
+    await tester.pump();
+    expect(media.renderRequests.last.video.clipNames, {'clip-0': '友達のわっ！'});
+  });
+
   testWidgets('chosen video shows progress until it joins the project', (
     tester,
   ) async {
@@ -883,6 +918,18 @@ final class _UnusedAssets implements AssetRepository {
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
+final class _RenamableAssets implements AssetRepository {
+  @override
+  Future<ClipAsset> rename(String assetId, String label) async {
+    final index = int.parse(assetId.split('-').last);
+    return (await _FakeDemo(count: index + 1).install(this)).last
+        .withLabel(label);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
 final class _PendingImportAssets implements AssetRepository {
   _PendingImportAssets(this.result);
   final Future<ClipAsset> result;
@@ -918,11 +965,13 @@ final class _FakeMedia implements MediaGateway {
   int pickCalls = 0;
   final renderRequests = <RenderRequest>[];
   bool failAnalysis = false;
+  int analysisCalls = 0;
   @override
   Stream<MediaEvent> get events => const Stream.empty();
 
   @override
   Future<AnalyzedClip> analyze(MediaAnalysisRequest request) async {
+    analysisCalls += 1;
     if (failAnalysis) throw StateError('analysis failed');
     return AnalyzedClip(
       assetId: request.assetId,

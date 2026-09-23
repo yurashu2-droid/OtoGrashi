@@ -351,6 +351,28 @@ final class VideoRendererTests: XCTestCase {
     }
   }
 
+  func testNamedSoundAppearsOnlyWhileItsVisibleEventIsAudible() {
+    let event = SoundEventPayload(
+      assetId: "reaction", sourceStartSample: 0,
+      destinationStartSample: 12_000, durationSamples: 9_000,
+      gain: 0.8, fades: EventFadesPayload(fadeInSamples: 0, fadeOutSamples: 0),
+      pitchSemitones: nil
+    )
+    let names = ["reaction": "友達のわっ！", "silent": "表示しない"]
+    XCTAssertEqual(VideoRenderer.namedActiveAssetIds(
+      names: names, events: [event], sample: 12_000,
+      visibleAssetIds: ["reaction", "silent"]
+    ), ["reaction"])
+    XCTAssertTrue(VideoRenderer.namedActiveAssetIds(
+      names: names, events: [event], sample: 21_000,
+      visibleAssetIds: ["reaction", "silent"]
+    ).isEmpty)
+    XCTAssertTrue(VideoRenderer.namedActiveAssetIds(
+      names: names, events: [event], sample: 12_000,
+      visibleAssetIds: ["silent"]
+    ).isEmpty)
+  }
+
   func testVideoUsesTheCurrentlySoundingSourceEvent() {
     let firstEvent = VideoEventPayload(
       assetId: "bass",
