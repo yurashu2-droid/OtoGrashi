@@ -7,7 +7,7 @@ import '../storage/project_database.dart';
 import '../storage/project_repository.dart';
 
 final class AppDependencies {
-  AppDependencies._({
+  AppDependencies({
     required this.database,
     required this.media,
     required this.presentation,
@@ -25,7 +25,7 @@ final class AppDependencies {
     final media = PlatformMediaGateway();
     final root = await media.managedRoot();
     final database = await ProjectDatabase.open(Directory(root));
-    return AppDependencies._(
+    return AppDependencies(
       database: database,
       media: media,
       presentation: PlatformMediaPresentationGateway(),

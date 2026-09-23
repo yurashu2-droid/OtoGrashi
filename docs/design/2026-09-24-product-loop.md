@@ -87,3 +87,7 @@ iOS CIは55件成功・1件スキップ・失敗0件。[音の入り](iteration-
 使用プロンプト（built-in ImageGen、`ui-mockup`）:
 
 > Four successive 9:16 frames of a 15-second vertical video using the same candid footage: a friend's delighted reaction, typing, and a cup tap. Begin with a full-screen friend and a small live waveform; then full-screen typing. Next the friend loops in a bottom bass lane while typing on top splits into two copies on a sound hit, one mirrored. Finally the upper half repeats keyboard moments with cup footage, some mirrored, with a short coral waveform following the sound. Warm real handheld footage and casual setlog/TikTok scrapbook energy; no app chrome, phone bezel, neon, mascot, permanent frame, words or captions.
+
+## 第5回：途中の音に戻る
+
+3つの音を別々の時間に集めても制作が続くよう、起動時に保存済み作品を確認する。未完成の作品があれば更新日時が新しいものを開き、完成作品だけならライブラリを開く。作品がない初回だけ導入画面を出す。撮影を選ぶまではカメラ権限を求めない。実データベースで初回・途中再開・完成後の3経路を確認した。実機では、アプリを閉じて再起動した時の素材の見え方を確かめる。

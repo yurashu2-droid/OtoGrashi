@@ -30,6 +30,7 @@ class CreationFlow extends StatefulWidget {
     required this.media,
     this.delivery,
     this.startWithCapture = false,
+    this.startInLibrary = false,
     super.key,
   });
 
@@ -37,6 +38,7 @@ class CreationFlow extends StatefulWidget {
   final MediaGateway media;
   final MediaDeliveryGateway? delivery;
   final bool startWithCapture;
+  final bool startInLibrary;
 
   @override
   State<CreationFlow> createState() => _CreationFlowState();
@@ -44,7 +46,7 @@ class CreationFlow extends StatefulWidget {
 
 class _CreationFlowState extends State<CreationFlow> {
   var _captureOpened = false;
-  var _tabIndex = 0;
+  late int _tabIndex = widget.startInLibrary ? 1 : 0;
 
   @override
   void didChangeDependencies() {
