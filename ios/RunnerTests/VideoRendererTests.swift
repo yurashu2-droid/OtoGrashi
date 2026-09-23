@@ -538,6 +538,28 @@ final class VideoRendererTests: XCTestCase {
       "crop": ["x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0],
       "loopMode": "loop",
     ]
+    let rhythmCues: [(assetId: String, start: Int)] = layout == "buildUp"
+      ? [("sustain", 312_000), ("texture", 600_000)] : []
+    let soundEvents = [event] + rhythmCues.map { cue -> [String: Any] in
+      [
+        "assetId": cue.assetId,
+        "sourceStartSample": 0,
+        "destinationStartSample": cue.start,
+        "durationSamples": 12_000,
+        "gain": 0.6,
+        "fades": ["fadeInSamples": 0, "fadeOutSamples": 120],
+      ]
+    }
+    let videoEvents = [videoEvent] + rhythmCues.map { cue -> [String: Any] in
+      [
+        "assetId": cue.assetId,
+        "destinationStartSample": cue.start,
+        "durationSamples": 12_000,
+        "sourceVideoStartTime": ["numerator": 0, "denominator": 48_000],
+        "crop": ["x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0],
+        "loopMode": "once",
+      ]
+    }
     let arrangement: [String: Any] = [
       "schemaVersion": 1,
       "sampleRate": 48_000,
@@ -550,8 +572,8 @@ final class VideoRendererTests: XCTestCase {
       "style": "sparse",
       "sourceAssetIds": ids,
       "unusableAssetIds": [],
-      "events": [event],
-      "videoEvents": [videoEvent],
+      "events": soundEvents,
+      "videoEvents": videoEvents,
     ]
     let scene: [String: Any] = [
       "destinationStartSample": 0,

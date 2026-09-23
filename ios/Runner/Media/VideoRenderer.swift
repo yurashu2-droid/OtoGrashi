@@ -698,6 +698,17 @@ struct VideoRenderer {
       width: width,
       height: height
     )
+    if request.video.layout == .buildUp {
+      try drawRhythmAccents(
+        events: request.arrangement.events,
+        sample: sample,
+        visibleAssetIds: visibleAssetIds,
+        targets: targets,
+        into: buffer,
+        width: width,
+        height: height
+      )
+    }
   }
 
   static func targetRects(
@@ -844,6 +855,70 @@ struct VideoRenderer {
       )
       let path = CGPath(rect: rect, transform: nil)
       CTFrameDraw(CTFramesetterCreateFrame(setter, CFRange(), path, nil), graphics)
+    }
+  }
+
+  private func drawRhythmAccents(
+    events: [SoundEventPayload],
+    sample: Int,
+    visibleAssetIds: [String],
+    targets: [CGRect],
+    into buffer: CVPixelBuffer,
+    width: Int,
+    height: Int
+  ) throws {
+    let active = events.filter { event in
+      let elapsed = sample - event.destinationStartSample
+      return elapsed >= 0 && elapsed < 9_600 && visibleAssetIds.contains(event.assetId)
+    }
+    guard !active.isEmpty else { return }
+    CVPixelBufferLockBaseAddress(buffer, [])
+    defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+    guard let base = CVPixelBufferGetBaseAddress(buffer),
+      let graphics = CGContext(
+        data: base,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue
+          | CGImageAlphaInfo.premultipliedFirst.rawValue
+      )
+    else { throw VideoRenderError.writerFailed }
+
+    graphics.setLineCap(.round)
+    for event in active {
+      guard let index = visibleAssetIds.firstIndex(of: event.assetId) else { continue }
+      let target = targets[index]
+      let size = min(target.width, target.height)
+      let center = CGPoint(x: target.maxX - size * 0.18, y: target.midY)
+      let alpha = CGFloat(1 - Double(sample - event.destinationStartSample) / 9_600)
+      let tint = index.isMultiple(of: 2)
+        ? CGColor(red: 0.94, green: 0.36, blue: 0.34, alpha: alpha)
+        : CGColor(red: 0.72, green: 0.55, blue: 0.98, alpha: alpha)
+      for angle in [-0.6, 0.0, 0.6] {
+        let dx = CGFloat(cos(angle))
+        let dy = CGFloat(sin(angle))
+        let start = CGPoint(
+          x: center.x + dx * size * 0.04,
+          y: center.y + dy * size * 0.04
+        )
+        let end = CGPoint(
+          x: center.x + dx * size * 0.11,
+          y: center.y + dy * size * 0.11
+        )
+        graphics.move(to: start)
+        graphics.addLine(to: end)
+        graphics.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: alpha))
+        graphics.setLineWidth(size * 0.019)
+        graphics.strokePath()
+        graphics.move(to: start)
+        graphics.addLine(to: end)
+        graphics.setStrokeColor(tint)
+        graphics.setLineWidth(size * 0.011)
+        graphics.strokePath()
+      }
     }
   }
 
