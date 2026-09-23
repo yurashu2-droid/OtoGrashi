@@ -2,7 +2,17 @@ name: iOS check
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
+    paths:
+      - 'lib/**'
+      - 'ios/**'
+      - 'assets/**'
+      - 'test/**'
+      - 'integration_test/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'analysis_options.yaml'
 
 permissions:
   contents: read

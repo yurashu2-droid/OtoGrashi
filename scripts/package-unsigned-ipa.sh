@@ -28,7 +28,7 @@ executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.
 test -f "$app/$executable"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")" = "$bundle_id"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms:0' "$app/Info.plist")" = 'iPhoneOS'
-lipo -verify_arch arm64 "$app/$executable"
+lipo "$app/$executable" -verify_arch arm64
 test ! -e "$app/embedded.mobileprovision"
 test ! -d "$app/_CodeSignature"
 ditto "$app" "$build_root/Payload/Runner.app"
