@@ -82,6 +82,8 @@ iOS CIの診断では、54件中52件が通過した。長尺元動画の短い�
 
 持続音の音程が変わる瞬間は複製の向きも一時的に切り替え、音と映像の変化を同じイベントへ結びつける。音程の範囲、原音との混合、旧レシピ互換は[音声設計メモ](2026-09-24-audio-melody.md)に記録する。これは音声全体をMIDI音源へ変換する機能ではなく、元の場面が分かる範囲の小さな旋律付けである。
 
+iOS CIは55件成功・1件スキップ・失敗0件。[音の入り](iteration-4-one.png) → [次の拍](iteration-4-two.png) → [さらに増えた拍](iteration-4-four.png) → [別素材が重なる場面](iteration-4-mixed.png)を合成素材の書き出しで確認した。波形は音量によって変化し、素材の複製は一つの映像領域の中で進む。合成素材は左右対称に近いため反転の楽しさと音質は評価できない。iPhoneで友達のリアクション・タイピングなどの実写と声を使って確かめる。
+
 使用プロンプト（built-in ImageGen、`ui-mockup`）:
 
 > Four successive 9:16 frames of a 15-second vertical video using the same candid footage: a friend's delighted reaction, typing, and a cup tap. Begin with a full-screen friend and a small live waveform; then full-screen typing. Next the friend loops in a bottom bass lane while typing on top splits into two copies on a sound hit, one mirrored. Finally the upper half repeats keyboard moments with cup footage, some mirrored, with a short coral waveform following the sound. Warm real handheld footage and casual setlog/TikTok scrapbook energy; no app chrome, phone bezel, neon, mascot, permanent frame, words or captions.
