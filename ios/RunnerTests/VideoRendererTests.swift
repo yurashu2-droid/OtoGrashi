@@ -376,14 +376,14 @@ final class VideoRendererTests: XCTestCase {
     XCTAssertEqual(CMTimeGetSeconds(time), 2.0625, accuracy: 0.001)
   }
 
-  func testVideoHoldsTheLastFrameWhenSoundStops() {
+  func testLoopingVideoHoldsTheLastFrameWhenSoundStops() {
     let event = VideoEventPayload(
       assetId: "reaction",
       destinationStartSample: 0,
       durationSamples: 9_000,
       sourceVideoStartTime: RationalTimePayload(numerator: 48_000, denominator: 48_000),
       crop: NormalizedCropPayload(x: 0, y: 0, width: 1, height: 1),
-      loopMode: .once
+      loopMode: .loop
     )
     let time = VideoRenderer.sourceTime(
       assetId: "reaction", sample: 45_000,

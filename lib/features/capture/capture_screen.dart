@@ -62,11 +62,11 @@ final class _CaptureScreenState extends State<CaptureScreen> {
               padding: const EdgeInsets.all(AppTokens.pagePadding),
               children: [
                 SizedBox(
-                  height: (MediaQuery.sizeOf(context).height * 0.56).clamp(
-                    280.0,
+                  height: (MediaQuery.sizeOf(context).height * 0.65).clamp(
+                    340.0,
                     MediaQuery.textScalerOf(context).scale(16) > 21
-                        ? 380.0
-                        : 480.0,
+                        ? 420.0
+                        : 540.0,
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(24),

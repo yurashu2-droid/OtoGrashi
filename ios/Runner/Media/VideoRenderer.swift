@@ -829,16 +829,9 @@ struct VideoRenderer {
     }) ?? events.first(where: { $0.assetId == assetId })
     guard let event else { return .zero }
     let eventDuration = max(1, event.durationSamples)
-    let offset = max(0, sample - event.destinationStartSample)
+    let offset = min(eventDuration - 1, max(0, sample - event.destinationStartSample))
     let timescale = CMTimeScale(event.sourceVideoStartTime.denominator)
-    let boundedOffset: Int
-    switch event.loopMode {
-    case .once, .hold:
-      boundedOffset = min(eventDuration - 1, offset)
-    case .loop:
-      boundedOffset = offset % eventDuration
-    }
-    let sourceSample = event.sourceVideoStartTime.numerator + boundedOffset
+    let sourceSample = event.sourceVideoStartTime.numerator + offset
     let requested = CMTime(value: CMTimeValue(sourceSample), timescale: timescale)
     guard duration.isNumeric, duration > .zero else { return .zero }
     let lastFrame = CMTimeMaximum(.zero, duration - CMTime(value: 1, timescale: 600))
