@@ -166,6 +166,9 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                         onPressed: widget.controller.isSwitchingCamera
                             ? null
                             : widget.controller.switchCamera,
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 56),
+                        ),
                         icon: const Icon(Icons.flip_camera_ios_outlined),
                         label: Text(
                           state.cameraFacing == CameraFacing.back

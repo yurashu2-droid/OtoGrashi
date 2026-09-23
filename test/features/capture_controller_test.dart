@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:otogurashi/design/tokens.dart';
 import 'package:otogurashi/features/capture/capture_controller.dart';
 import 'package:otogurashi/features/capture/capture_screen.dart';
 import 'package:otogurashi/features/capture/capture_state.dart';
@@ -180,6 +181,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        theme: buildOtogurashiTheme(),
         home: CaptureScreen(controller: controller, testFixture: true),
       ),
     );
