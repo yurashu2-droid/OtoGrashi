@@ -247,6 +247,26 @@ final class MediaAnalysisRequest {
 
 const int _maxInt64 = 0x7fffffffffffffff;
 
+final class AudibleRegion {
+  const AudibleRegion({
+    required this.startSample,
+    required this.durationSamples,
+  });
+
+  final int startSample;
+  final int durationSamples;
+
+  factory AudibleRegion.fromJson(Map<String, Object?> json) => AudibleRegion(
+    startSample: json['startSample'] as int,
+    durationSamples: json['durationSamples'] as int,
+  );
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'startSample': startSample,
+    'durationSamples': durationSamples,
+  };
+}
+
 final class AnalyzedClip {
   AnalyzedClip({
     required this.assetId,
@@ -254,11 +274,13 @@ final class AnalyzedClip {
     required this.durationSamples,
     required this.sampleRate,
     required List<int> onsetSamples,
+    List<AudibleRegion> audibleRegions = const <AudibleRegion>[],
     required this.peak,
     required this.rms,
     required this.suggestedRole,
     this.analysisVersion = 1,
-  }) : onsetSamples = List<int>.unmodifiable(onsetSamples) {
+  }) : onsetSamples = List<int>.unmodifiable(onsetSamples),
+       audibleRegions = List<AudibleRegion>.unmodifiable(audibleRegions) {
     if (assetId.isEmpty) {
       throw const MediaContractException('Asset id cannot be empty.');
     }
@@ -274,6 +296,14 @@ final class AnalyzedClip {
           (sample) =>
               sample < sourceStartSample ||
               sample >= sourceStartSample + durationSamples,
+        ) ||
+        audibleRegions.length > 16 ||
+        audibleRegions.any(
+          (region) =>
+              region.startSample < sourceStartSample ||
+              region.durationSamples <= 0 ||
+              region.startSample >
+                  sourceStartSample + durationSamples - region.durationSamples,
         )) {
       throw const MediaContractException('Analysis sample range is invalid.');
     }
@@ -306,6 +336,13 @@ final class AnalyzedClip {
         durationSamples: json['durationSamples'] as int,
         sampleRate: json['sampleRate'] as int,
         onsetSamples: (json['onsetSamples'] as List<Object?>).cast<int>(),
+        audibleRegions: (json['audibleRegions'] as List<Object?>? ?? const [])
+            .map(
+              (value) => AudibleRegion.fromJson(
+                (value as Map<Object?, Object?>).cast(),
+              ),
+            )
+            .toList(),
         peak: (json['peak'] as num).toDouble(),
         rms: (json['rms'] as num).toDouble(),
         suggestedRole: role,
@@ -323,6 +360,7 @@ final class AnalyzedClip {
   final int durationSamples;
   final int sampleRate;
   final List<int> onsetSamples;
+  final List<AudibleRegion> audibleRegions;
   final double peak;
   final double rms;
   final SuggestedRole suggestedRole;
@@ -337,6 +375,10 @@ final class AnalyzedClip {
     'durationSamples': durationSamples,
     'sampleRate': sampleRate,
     'onsetSamples': onsetSamples,
+    if (audibleRegions.isNotEmpty)
+      'audibleRegions': audibleRegions
+          .map((region) => region.toJson())
+          .toList(),
     'peak': peak,
     'rms': rms,
     'suggestedRole': suggestedRole.name,

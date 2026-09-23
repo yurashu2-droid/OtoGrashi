@@ -421,6 +421,42 @@ void main() {
     );
   });
 
+  test('audible regions avoid quiet tails and bound repeated notes', () {
+    final clips = List<AnalyzedClip>.generate(
+      3,
+      (index) => AnalyzedClip(
+        assetId: 'voice-$index',
+        durationSamples: 144000,
+        sampleRate: 48000,
+        onsetSamples: const [],
+        audibleRegions: const [
+          AudibleRegion(startSample: 72000, durationSamples: 12000),
+        ],
+        peak: .3,
+        rms: .08,
+        suggestedRole: SuggestedRole.sustain,
+      ),
+    );
+
+    final result = arrange(
+      clips: clips,
+      style: ArrangementStyle.sparse,
+      seed: 3,
+    );
+    expect(
+      AnalyzedClip.fromJson(clips.first.toJson()).toJson(),
+      clips.first.toJson(),
+    );
+    expect(
+      result.events.every((event) => event.sourceStartSample == 72000),
+      isTrue,
+    );
+    expect(
+      result.events.every((event) => event.durationSamples <= 12000),
+      isTrue,
+    );
+  });
+
   test('seed zero has a stable golden arrangement JSON', () {
     final arrangement = arrange(
       clips: threeFixtures,

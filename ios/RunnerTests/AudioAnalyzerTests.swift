@@ -75,6 +75,10 @@ final class AudioAnalyzerTests: XCTestCase {
     XCTAssertEqual(metrics.suggestedRole, .sustain)
     XCTAssertFalse(metrics.onsetSamples.isEmpty)
     XCTAssertGreaterThanOrEqual(metrics.onsetSamples[0], 21_600)
+    let region = try XCTUnwrap(metrics.audibleRegions.first)
+    XCTAssertGreaterThanOrEqual(region.startSample, 21_600)
+    XCTAssertLessThanOrEqual(region.startSample, 24_000)
+    XCTAssertLessThanOrEqual(region.startSample + region.durationSamples, 48_000)
   }
 
   func testAVFoundationDownmixUsesRightOnlyStereoAndProducesMono48k() throws {
@@ -109,6 +113,11 @@ final class AudioAnalyzerTests: XCTestCase {
     )
     XCTAssertEqual(selected.sourceStartSample, 1_440)
     XCTAssertLessThanOrEqual(abs(selected.durationSamples - 960), 1)
+    XCTAssertTrue(selected.audibleRegions.allSatisfy {
+      $0.startSample >= selected.sourceStartSample &&
+        $0.startSample + $0.durationSamples <=
+          selected.sourceStartSample + selected.durationSamples
+    })
     XCTAssertThrowsError(
       try analyzer.analyze(
         url: url,

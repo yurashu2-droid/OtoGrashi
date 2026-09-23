@@ -778,6 +778,78 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
     );
   }
 
+  Future<void> _renameSounds() => showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) => AnimatedBuilder(
+      animation: widget.controller,
+      builder: (context, _) {
+        final clips = widget.controller.state.clips;
+        return SafeArea(
+          child: SizedBox(
+            height: (88.0 + clips.length * 62).clamp(
+              150.0,
+              MediaQuery.sizeOf(context).height * .7,
+            ),
+            child: ListView(
+              children: [
+                const ListTile(title: Text('音の名前をつける')),
+                for (var index = 0; index < clips.length; index++)
+                  ListTile(
+                    title: Text(_soundName(clips[index], index)),
+                    trailing: const Icon(Icons.edit_rounded),
+                    onTap: () => _renameSound(clips[index], index),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
+
+  String _soundName(ClipAsset clip, int index) =>
+      RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$').hasMatch(clip.label)
+      ? '録った音 ${index + 1}'
+      : clip.label;
+
+  Future<void> _renameSound(ClipAsset clip, int index) async {
+    var draft = _soundName(clip, index);
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('この音の名前'),
+        content: TextFormField(
+          initialValue: draft,
+          autofocus: true,
+          maxLength: 40,
+          decoration: const InputDecoration(hintText: '例：友達のわっ！'),
+          onChanged: (value) => draft = value,
+          onFieldSubmitted: (_) => Navigator.pop(dialogContext, draft),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, draft),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || chosen == null || chosen.trim().isEmpty) return;
+    try {
+      await widget.controller.renameClip(clip.id, chosen.trim());
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('音の名前を保存できませんでした')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = widget.controller.state;
@@ -866,6 +938,12 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               )
             else
               _PlaybackControls(playback: playback, label: '曲になった音'),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _renameSounds,
+              icon: const Icon(Icons.edit_note_rounded),
+              label: const Text('音の名前をつける'),
+            ),
             const SizedBox(height: 16),
             const Text(
               '曲の雰囲気',

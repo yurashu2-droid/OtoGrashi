@@ -523,6 +523,21 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('合成素材 1'), findsWidgets);
+    await tester.scrollUntilVisible(
+      find.text('音の名前をつける'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('音の名前をつける'));
+    await tester.pumpAndSettle();
+    expect(find.text('合成素材 1'), findsWidgets);
+    await tester.tap(find.byType(ListTile).last);
+    await tester.pumpAndSettle();
+    expect(find.text('この音の名前'), findsOneWidget);
+    await tester.tap(find.text('キャンセル'));
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
     await tester.drag(find.byType(ListView).first, const Offset(0, -320));
     await tester.pumpAndSettle();
     expect(find.text('ぽつぽつ'), findsOneWidget);

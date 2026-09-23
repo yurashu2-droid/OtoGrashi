@@ -151,10 +151,14 @@ SoundEvent _event(
     SuggestedRole.sustain => template.sustainDuration,
     SuggestedRole.texture => template.textureDuration,
   };
+  final region = clip.audibleRegions.firstOrNull;
   final destinationRemaining = 720000 - destinationStart;
+  final activeDuration = region == null
+      ? clip.durationSamples
+      : (region.durationSamples < 4800 ? 4800 : region.durationSamples);
   final duration = _min(
     desiredDuration,
-    _min(clip.durationSamples, destinationRemaining),
+    _min(activeDuration, _min(clip.durationSamples, destinationRemaining)),
   );
   if (duration <= 0) {
     throw const MediaContractException('Event has no bounded duration.');
@@ -165,7 +169,10 @@ SoundEvent _event(
       .where(
         (sample) =>
             sample >= clip.sourceStartSample &&
-            sample < clip.sourceStartSample + clip.durationSamples,
+            sample < clip.sourceStartSample + clip.durationSamples &&
+            (region == null ||
+                (sample >= region.startSample &&
+                    sample < region.startSample + region.durationSamples)),
       )
       .map((sample) => _min(sample, maxSourceStart))
       .toSet()
@@ -175,7 +182,9 @@ SoundEvent _event(
   // random point that can land in a quiet tail.
   final sourceStart = candidates.isNotEmpty
       ? candidates[random.nextInt(candidates.length)]
-      : clip.sourceStartSample;
+      : region == null
+      ? clip.sourceStartSample
+      : _min(region.startSample, maxSourceStart);
   final fade = switch (clip.suggestedRole) {
     SuggestedRole.transient => 240,
     SuggestedRole.sustain => 1200,

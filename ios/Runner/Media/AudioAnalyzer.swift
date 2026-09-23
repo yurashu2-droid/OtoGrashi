@@ -66,6 +66,11 @@ struct MediaAnalysisRequest: Codable, Equatable {
   }
 }
 
+struct AudibleRegion: Codable, Equatable {
+  let startSample: Int
+  let durationSamples: Int
+}
+
 struct AnalyzedClip: Codable, Equatable {
   static let supportedSchemaVersion = 1
   static let supportedAnalysisVersion = 1
@@ -77,6 +82,7 @@ struct AnalyzedClip: Codable, Equatable {
   let durationSamples: Int
   let sampleRate: Int
   let onsetSamples: [Int]
+  let audibleRegions: [AudibleRegion]
   let peak: Double
   let rms: Double
   let suggestedRole: SuggestedRole
@@ -86,6 +92,7 @@ struct AnalyzedClip: Codable, Equatable {
     sourceStartSample: Int = 0,
     durationSamples: Int,
     onsetSamples: [Int],
+    audibleRegions: [AudibleRegion] = [],
     peak: Double,
     rms: Double,
     suggestedRole: SuggestedRole
@@ -98,6 +105,11 @@ struct AnalyzedClip: Codable, Equatable {
       onsetSamples.allSatisfy({
         $0 >= sourceStartSample && $0 < sourceEndSample
       }),
+      audibleRegions.count <= 16,
+      audibleRegions.allSatisfy({
+        $0.startSample >= sourceStartSample && $0.durationSamples > 0 &&
+          $0.startSample <= sourceEndSample - $0.durationSamples
+      }),
       peak.isFinite, rms.isFinite,
       (0...1).contains(peak), (0...1).contains(rms)
     else { throw AudioAnalysisError.unsupportedContract }
@@ -108,6 +120,7 @@ struct AnalyzedClip: Codable, Equatable {
     self.durationSamples = durationSamples
     self.sampleRate = AudioAnalyzer.sampleRate
     self.onsetSamples = onsetSamples
+    self.audibleRegions = audibleRegions
     self.peak = peak
     self.rms = rms
     self.suggestedRole = suggestedRole
@@ -127,6 +140,7 @@ struct AnalyzedClip: Codable, Equatable {
       sourceStartSample: container.decode(Int.self, forKey: .sourceStartSample),
       durationSamples: container.decode(Int.self, forKey: .durationSamples),
       onsetSamples: container.decode([Int].self, forKey: .onsetSamples),
+      audibleRegions: container.decodeIfPresent([AudibleRegion].self, forKey: .audibleRegions) ?? [],
       peak: container.decode(Double.self, forKey: .peak),
       rms: container.decode(Double.self, forKey: .rms),
       suggestedRole: container.decode(SuggestedRole.self, forKey: .suggestedRole)
@@ -140,6 +154,7 @@ struct SignalMetrics: Equatable {
   let peak: Double
   let rms: Double
   let onsetSamples: [Int]
+  let audibleRegions: [AudibleRegion]
   let suggestedRole: SuggestedRole
 }
 
@@ -164,6 +179,10 @@ struct AudioAnalyzer {
       sourceStartSample: sourceStartSample,
       durationSamples: samples.count,
       onsetSamples: metrics.onsetSamples.map { $0 + sourceStartSample },
+      audibleRegions: metrics.audibleRegions.map {
+        AudibleRegion(startSample: $0.startSample + sourceStartSample,
+                      durationSamples: $0.durationSamples)
+      },
       peak: metrics.peak,
       rms: metrics.rms,
       suggestedRole: metrics.suggestedRole
@@ -295,8 +314,62 @@ struct AudioAnalyzer {
       peak: peak,
       rms: rms,
       onsetSamples: onsets,
+      audibleRegions: Self.audibleRegions(
+        frameRMS: frameRMS,
+        sampleCount: samples.count,
+        rms: rms
+      ),
       suggestedRole: role
     )
+  }
+
+  private static func audibleRegions(
+    frameRMS: [Double],
+    sampleCount: Int,
+    rms: Double
+  ) -> [AudibleRegion] {
+    let threshold = max(0.003, max(rms * 0.35, (frameRMS.max() ?? 0) * 0.10))
+    var active = frameRMS.map { $0 >= threshold }
+    guard active.contains(true) else { return [] }
+
+    // Keep short gaps inside a spoken syllable together, without merging
+    // separate phrases across a long quiet stretch.
+    if active.count > 2 {
+      for frame in active.indices where frame > 0 &&
+        frame + 1 < active.count && !active[frame] {
+        let before = max(0, frame - 5)
+        let after = min(active.count - 1, frame + 5)
+        if active[before..<frame].contains(true) &&
+          active[(frame + 1)...after].contains(true) {
+          active[frame] = true
+        }
+      }
+    }
+
+    var scored: [(region: AudibleRegion, score: Double)] = []
+    var frame = 0
+    while frame < active.count {
+      guard active[frame] else { frame += 1; continue }
+      let begin = frame
+      var energy = 0.0
+      var strongest = 0.0
+      while frame < active.count && active[frame] {
+        let level = frameRMS[frame]
+        energy += level * level
+        strongest = max(strongest, level)
+        frame += 1
+      }
+      let start = max(0, begin * frameSamples - 960)
+      let end = min(sampleCount, frame * frameSamples + 1_920)
+      guard end > start else { continue }
+      let meanEnergy = energy / Double(frame - begin)
+      scored.append((
+        region: AudibleRegion(startSample: start, durationSamples: end - start),
+        score: meanEnergy + strongest * strongest
+      ))
+    }
+    return scored.sorted { $0.score > $1.score }
+      .prefix(16).map { $0.region }
   }
 
   private static func samples(fromMicroseconds microseconds: Int64) throws -> Int64 {
