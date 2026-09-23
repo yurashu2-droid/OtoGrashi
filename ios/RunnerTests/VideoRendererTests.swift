@@ -334,6 +334,22 @@ final class VideoRendererTests: XCTestCase {
     XCTAssertEqual(VideoRenderer.tileRects(in: duo[1], count: 4).count, 4)
   }
 
+  func testCaptionAnchorStaysInsideTheVerticalVideo() {
+    for x in [0.0, 0.5, 1.0] {
+      for y in [0.0, 0.22, 1.0] {
+        let caption = VideoCaptionPayload(
+          text: "わっ！", x: x, y: y,
+          destinationStartSample: 0, durationSamples: 72_000
+        )
+        let rect = VideoRenderer.captionRect(for: caption, width: 360, height: 640)
+        XCTAssertGreaterThanOrEqual(rect.minX, 28)
+        XCTAssertLessThanOrEqual(rect.maxX, 332)
+        XCTAssertGreaterThanOrEqual(rect.minY, 50)
+        XCTAssertLessThanOrEqual(rect.maxY, 590)
+      }
+    }
+  }
+
   func testBuildUpRepeatsTheFirstSourceEvenWhenItsNormalModeHolds() {
     let event = VideoEventPayload(
       assetId: "bass",
@@ -442,7 +458,8 @@ final class VideoRendererTests: XCTestCase {
       print("VIDEO_RENDER_START quality=\(quality) time=\(Date().timeIntervalSince1970)")
       let request = try decodeRequest(
         quality: quality,
-        layout: quality == "preview" ? "buildUp" : "stacked"
+        layout: quality == "preview" ? "buildUp" : "stacked",
+        captionText: quality == "preview" ? "わっ！" : nil
       )
       let output = temporaryURL("\(quality).mp4")
       outputs.append(output)
@@ -533,7 +550,7 @@ final class VideoRendererTests: XCTestCase {
     }
   }
 
-  private func decodeRequest(quality: String, layout: String) throws
+  private func decodeRequest(quality: String, layout: String, captionText: String? = nil) throws
     -> VideoRenderRequestPayload
   {
     let ids = ["tap", "sustain", "texture"]
@@ -612,6 +629,15 @@ final class VideoRendererTests: XCTestCase {
           ]
         }
       : [scene]
+    let captions: [[String: Any]] = captionText.map { text in
+      [[
+        "text": text,
+        "x": 0.5,
+        "y": 0.22,
+        "destinationStartSample": 0,
+        "durationSamples": 72_000,
+      ]]
+    } ?? []
     let video: [String: Any] = [
       "schemaVersion": 1,
       "layout": layout,
@@ -621,7 +647,7 @@ final class VideoRendererTests: XCTestCase {
           "crop": ["x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0],
         ]
       },
-      "captions": [],
+      "captions": captions,
       "events": scenes,
       "effects": ["enabled": []],
     ]

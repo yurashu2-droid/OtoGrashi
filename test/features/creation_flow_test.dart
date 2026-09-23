@@ -272,7 +272,11 @@ void main() {
       media: media,
       presentation: _FakePresentation(),
       demo: _FakeDemo(),
-      renderOperationIds: <String>['preview-1', 'preview-2'].iterator,
+      renderOperationIds: <String>[
+        'preview-1',
+        'preview-2',
+        'preview-3',
+      ].iterator,
     );
     addTearDown(controller.dispose);
 
@@ -287,12 +291,33 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('合成素材 1'), findsWidgets);
+    await tester.scrollUntilVisible(
+      find.text('動画にひとこと足す'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('動画にひとこと足す'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField).last, 'わっ！');
+    await tester.tap(find.text('動画に入れる'));
+    await tester.pumpAndSettle();
+    final caption =
+        ((controller.state.project!.videoRecipe['captions'] as List).first
+            as Map);
+    expect(caption['text'], 'わっ！');
+    expect(caption['durationSamples'], 72_000);
+
     await tester.drag(find.byType(ListView).first, const Offset(0, -320));
     await tester.pumpAndSettle();
     expect(find.text('ぽつぽつ'), findsOneWidget);
     await tester.tap(find.text('ゆらゆら'));
     await tester.pumpAndSettle();
     expect(controller.state.style, ArrangementStyle.swaying);
+    expect(
+      ((controller.state.project!.videoRecipe['captions'] as List).first
+          as Map)['text'],
+      'わっ！',
+    );
 
     await tester.scrollUntilVisible(
       find.text('これで完成'),

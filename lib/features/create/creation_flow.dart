@@ -744,6 +744,86 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
     );
   }
 
+  String get _soundWord {
+    final captions = widget.controller.state.project?.videoRecipe['captions'];
+    if (captions is! List || captions.isEmpty || captions.first is! Map) {
+      return '';
+    }
+    return (captions.first as Map)['text'] as String? ?? '';
+  }
+
+  Future<void> _editSoundWord() async {
+    final before = _soundWord;
+    var draft = before;
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('動画にひとこと'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('曲の入りに、短く文字を出します。入れなくても大丈夫。'),
+            const SizedBox(height: 12),
+            TextFormField(
+              initialValue: before,
+              autofocus: true,
+              maxLength: 12,
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(
+                hintText: 'わっ！  コトッ  カタカタ',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) => draft = value,
+              onFieldSubmitted: (_) => Navigator.pop(dialogContext, draft),
+            ),
+          ],
+        ),
+        actions: [
+          if (before.isNotEmpty)
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, ''),
+              child: const Text('文字を消す'),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, draft),
+            child: const Text('動画に入れる'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || chosen == null) return;
+    final text = chosen.trim();
+    final captions = widget.controller.state.project?.videoRecipe['captions'];
+    final current =
+        captions is List && captions.isNotEmpty && captions.first is Map
+        ? captions.first as Map
+        : null;
+    if (text == before &&
+        (text.isEmpty ||
+            (current?['destinationStartSample'] == 0 &&
+                current?['durationSamples'] == 72_000 &&
+                current?['x'] == .5 &&
+                current?['y'] == .22))) {
+      return;
+    }
+    if (text.isEmpty) {
+      if (before.isNotEmpty) await widget.controller.removeCaption(0);
+    } else {
+      await widget.controller.setCaption(
+        text,
+        x: .5,
+        y: .22,
+        destinationStartSample: 0,
+        durationSamples: 72_000,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = widget.controller.state;
@@ -827,7 +907,19 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               )
             else
               _PlaybackControls(playback: playback, label: '曲になった音'),
-            const SizedBox(height: 20),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: state.phase == CreationPhase.ready
+                  ? _editSoundWord
+                  : null,
+              icon: const Icon(Icons.edit_note_rounded),
+              label: Text(
+                _soundWord.isEmpty ? '動画にひとこと足す' : 'ひとこと「$_soundWord」を編集',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(height: 16),
             const Text(
               '曲の雰囲気',
               style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),

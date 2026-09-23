@@ -30,10 +30,6 @@ final class AdjustmentsSheet extends StatefulWidget {
 
 final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
   late String? _assetId = widget.controller.state.clips.firstOrNull?.id;
-  late final TextEditingController _caption = TextEditingController(
-    text: _existingCaption,
-  );
-  final _captionIndex = 0;
   late int _trimStartUs = _selectedSegment?.startUs ?? 0;
   late int _trimDurationUs = _selectedSegment?.durationUs ?? 1;
   final _waveforms = <String, Future<AudioWaveform>>{};
@@ -53,12 +49,6 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
     return widget.controller.comparisonSegments[index];
   }
 
-  String get _existingCaption {
-    final value = widget.controller.state.project?.videoRecipe['captions'];
-    if (value is! List || value.isEmpty || value.first is! Map) return '';
-    return (value.first as Map)['text'] as String? ?? '';
-  }
-
   double get _gain {
     final events = widget.controller.state.project?.arrangement['events'];
     if (events is List) {
@@ -76,12 +66,6 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
     final value =
         widget.controller.state.project?.arrangement['accompanimentGain'];
     return value is num ? value.toDouble().clamp(0, 1) : .25;
-  }
-
-  @override
-  void dispose() {
-    _caption.dispose();
-    super.dispose();
   }
 
   @override
@@ -150,18 +134,6 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
               },
             ),
             const SizedBox(height: 8),
-            Text('字幕・短い一言', style: Theme.of(context).textTheme.titleMedium),
-            TextField(
-              controller: _caption,
-              onChanged: (_) => setState(() {}),
-              maxLength: 80,
-              decoration: const InputDecoration(
-                hintText: 'たとえば「朝のコップ」',
-                border: OutlineInputBorder(),
-              ),
-              textInputAction: TextInputAction.done,
-            ),
-            const SizedBox(height: 8),
             Text('動画の見せ方', style: Theme.of(context).textTheme.titleMedium),
             RadioGroup<VideoLayout>(
               groupValue: widget.controller.state.layout,
@@ -185,20 +157,7 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
               ),
             ),
             FilledButton(
-              onPressed: () {
-                final caption = _caption.text.trim();
-                if (caption != _existingCaption) {
-                  unawaited(
-                    caption.isEmpty
-                        ? widget.controller.removeCaption(_captionIndex)
-                        : widget.controller.setCaption(
-                            caption,
-                            index: _captionIndex,
-                          ),
-                  );
-                }
-                Navigator.pop(context);
-              },
+              onPressed: () => Navigator.pop(context),
               child: const Text('調整を保存'),
             ),
           ],

@@ -916,10 +916,11 @@ struct VideoRenderer {
       )
     else { throw VideoRenderError.writerFailed }
     for caption in captions {
+      let rect = Self.captionRect(for: caption, width: width, height: height)
       let attributes: [NSAttributedString.Key: Any] = [
         NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(
-          "Helvetica-Bold" as CFString,
-          CGFloat(width) * 0.055,
+          "HiraginoSans-W6" as CFString,
+          CGFloat(width) * 0.07,
           nil
         ),
         NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(
@@ -931,15 +932,51 @@ struct VideoRenderer {
       ]
       let text = NSAttributedString(string: caption.text, attributes: attributes)
       let setter = CTFramesetterCreateWithAttributedString(text)
-      let rect = CGRect(
-        x: CGFloat(caption.x) * CGFloat(width),
-        y: CGFloat(1 - caption.y) * CGFloat(height) - CGFloat(height) * 0.12,
-        width: CGFloat(width) * 0.9,
-        height: CGFloat(height) * 0.12
-      )
       let path = CGPath(rect: rect, transform: nil)
+      graphics.saveGState()
+      graphics.setShadow(
+        offset: CGSize(width: 0, height: -CGFloat(width) * 0.004),
+        blur: CGFloat(width) * 0.018,
+        color: CGColor(red: 0.08, green: 0.06, blue: 0.08, alpha: 0.85)
+      )
       CTFrameDraw(CTFramesetterCreateFrame(setter, CFRange(), path, nil), graphics)
+      graphics.restoreGState()
+
+      let accentX = min(CGFloat(width) * 0.88, rect.maxX + CGFloat(width) * 0.01)
+      let accentY = rect.maxY - CGFloat(width) * 0.015
+      graphics.setStrokeColor(CGColor(red: 0.73, green: 0.63, blue: 1, alpha: 1))
+      graphics.setLineCap(.round)
+      graphics.setLineWidth(CGFloat(width) * 0.009)
+      graphics.move(to: CGPoint(x: accentX, y: accentY))
+      graphics.addLine(to: CGPoint(x: accentX + CGFloat(width) * 0.018,
+                                   y: accentY + CGFloat(width) * 0.045))
+      graphics.move(to: CGPoint(x: accentX + CGFloat(width) * 0.04,
+                                y: accentY - CGFloat(width) * 0.012))
+      graphics.addLine(to: CGPoint(x: accentX + CGFloat(width) * 0.068,
+                                   y: accentY + CGFloat(width) * 0.012))
+      graphics.strokePath()
     }
+  }
+
+  static func captionRect(for caption: VideoCaptionPayload, width: Int, height: Int) -> CGRect {
+    let canvasWidth = CGFloat(width)
+    let canvasHeight = CGFloat(height)
+    let estimatedTextWidth = CGFloat(caption.text.count) * canvasWidth * 0.0665
+    let labelWidth = min(canvasWidth * 0.84, max(canvasWidth * 0.26, estimatedTextWidth))
+    let labelHeight = canvasHeight * 0.18
+    let marginX = canvasWidth * 0.08
+    let centerX = min(
+      max(CGFloat(caption.x) * canvasWidth, marginX + labelWidth / 2),
+      canvasWidth - marginX - labelWidth / 2
+    )
+    let top = min(max(CGFloat(caption.y) * canvasHeight, canvasHeight * 0.08),
+                  canvasHeight * 0.74)
+    return CGRect(
+      x: centerX - labelWidth / 2,
+      y: canvasHeight - top - labelHeight,
+      width: labelWidth,
+      height: labelHeight
+    )
   }
 
   private func drawRhythmAccents(
