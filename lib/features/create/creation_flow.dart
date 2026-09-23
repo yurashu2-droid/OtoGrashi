@@ -124,6 +124,7 @@ class _CreationFlowState extends State<CreationFlow> {
           media: widget.media,
           presentation: widget.controller.presentation,
           fromPhotos: fromPhotos,
+          recordedClipCount: widget.controller.state.clips.length,
           onCommit: (captured) async {
             final added = await widget.controller.addCaptured(captured);
             if (added && mounted) unawaited(HapticFeedback.selectionClick());
@@ -1517,11 +1518,13 @@ class _CaptureRoute extends StatefulWidget {
     required this.media,
     required this.presentation,
     required this.fromPhotos,
+    required this.recordedClipCount,
     required this.onCommit,
   });
   final MediaGateway media;
   final MediaPresentationGateway presentation;
   final bool fromPhotos;
+  final int recordedClipCount;
   final Future<bool> Function(CapturedMedia) onCommit;
 
   @override
@@ -1615,6 +1618,7 @@ class _CaptureRouteState extends State<_CaptureRoute> {
       presentation: widget.presentation,
       isAdding: _saving,
       addError: _saveError,
+      recordedClipCount: widget.recordedClipCount,
       onMediaReady: () => unawaited(_commit()),
     ),
   );
