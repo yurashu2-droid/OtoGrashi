@@ -50,14 +50,20 @@ final class _CaptureScreenState extends State<CaptureScreen> {
         final captured = state.capturedMedia;
         return Scaffold(
           appBar: AppBar(title: const Text('音を撮る')),
+          bottomNavigationBar: state.phase == CapturePhase.completed
+              ? _reviewActions()
+              : null,
           body: SafeArea(
             child: ListView(
               padding: const EdgeInsets.all(AppTokens.pagePadding),
               children: [
                 SizedBox(
-                  height: MediaQuery.textScalerOf(context).scale(16) > 21
-                      ? 330
-                      : 405,
+                  height: (MediaQuery.sizeOf(context).height * 0.47).clamp(
+                    280.0,
+                    MediaQuery.textScalerOf(context).scale(16) > 21
+                        ? 330.0
+                        : 405.0,
+                  ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(24),
                     child: CaptureChrome(
@@ -81,6 +87,9 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                               handle: state.handle,
                               testFixture: widget.testFixture,
                             ),
+                          if (state.phase == CapturePhase.completed &&
+                              captured != null)
+                            _reviewPlayback(captured),
                           if (state.phase == CapturePhase.ready)
                             Positioned(
                               top: 65,
@@ -175,70 +184,13 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                     child: const Text('写真から動画を選ぶ'),
                   ),
                 ],
-                if (state.phase == CapturePhase.completed) ...[
-                  const SizedBox(height: AppTokens.controlGap),
+                if (state.phase == CapturePhase.completed)
                   AnimatedBuilder(
                     animation: _playback,
-                    builder: (context, _) => Column(
-                      children: [
-                        Row(
-                          children: [
-                            FilledButton.tonalIcon(
-                              onPressed: _playback.isReady
-                                  ? _playback.toggle
-                                  : null,
-                              icon: Icon(
-                                _playback.isPlaying
-                                    ? Icons.pause_rounded
-                                    : Icons.play_arrow_rounded,
-                              ),
-                              label: Text(
-                                _playback.isLoading
-                                    ? '読み込み中'
-                                    : _playback.isPlaying
-                                    ? '一時停止'
-                                    : '再生して確認',
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                '${_playback.position.inSeconds} / ${state.capturedMedia!.durationUs ~/ 1000000}秒',
-                                textAlign: TextAlign.end,
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (_playback.error != null)
-                          const Padding(
-                            padding: EdgeInsets.only(top: 8),
-                            child: Text('再生できませんでした。撮り直すか、別の動画を選んでください。'),
-                          ),
-                      ],
-                    ),
+                    builder: (context, _) => _playback.error == null
+                        ? const SizedBox.shrink()
+                        : const Text('再生できませんでした。撮り直すか、別の動画を選んでください。'),
                   ),
-                  const SizedBox(height: AppTokens.smallGap),
-                  OutlinedButton.icon(
-                    onPressed: () async {
-                      await _playback.pause();
-                      await widget.controller.retake();
-                    },
-                    icon: const Icon(Icons.restart_alt_rounded),
-                    label: const Text('撮り直す'),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      await _playback.pause();
-                      await widget.controller.chooseAnotherVideo();
-                    },
-                    child: const Text('別の動画を選ぶ'),
-                  ),
-                  const SizedBox(height: AppTokens.smallGap),
-                  FilledButton(
-                    onPressed: widget.onMediaReady,
-                    child: const Text('この音を使う'),
-                  ),
-                ],
               ],
             ),
           ),
@@ -246,6 +198,91 @@ final class _CaptureScreenState extends State<CaptureScreen> {
       },
     );
   }
+
+  Widget _reviewPlayback(CapturedMedia captured) => AnimatedBuilder(
+    animation: _playback,
+    builder: (context, _) => Stack(
+      children: [
+        Center(
+          child: FilledButton.tonalIcon(
+            onPressed: _playback.isReady ? _playback.toggle : null,
+            icon: Icon(
+              _playback.isPlaying
+                  ? Icons.pause_rounded
+                  : Icons.play_arrow_rounded,
+            ),
+            label: Text(
+              _playback.isLoading
+                  ? '読み込み中'
+                  : _playback.isPlaying
+                  ? '一時停止'
+                  : '再生して確認',
+            ),
+          ),
+        ),
+        Positioned(
+          bottom: 73,
+          right: 12,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xDD211C1A),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              child: Text(
+                '${_playback.position.inSeconds} / ${captured.durationUs ~/ 1000000}秒',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _reviewActions() => Material(
+    color: AppTokens.surfaceColor,
+    child: SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 10, 24, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      await _playback.pause();
+                      await widget.controller.retake();
+                    },
+                    icon: const Icon(Icons.restart_alt_rounded),
+                    label: const Text('撮り直す'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: widget.onMediaReady,
+                    child: const Text('この音を使う'),
+                  ),
+                ),
+              ],
+            ),
+            TextButton(
+              onPressed: () async {
+                await _playback.pause();
+                await widget.controller.chooseAnotherVideo();
+              },
+              child: const Text('別の動画を選ぶ'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   String _statusText(CaptureState state) => switch (state.phase) {
     CapturePhase.idle => '準備するときに、カメラとマイクの使用を確認します',

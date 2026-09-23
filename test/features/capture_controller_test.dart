@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:otogurashi/features/capture/capture_controller.dart';
+import 'package:otogurashi/features/capture/capture_screen.dart';
 import 'package:otogurashi/features/capture/capture_state.dart';
 import 'package:otogurashi/media/media_gateway.dart';
 import 'package:otogurashi/media/media_messages.dart';
@@ -179,6 +181,38 @@ void main() {
     expect(gateway.prepareCalls, 2);
     expect(controller.state.phase, CapturePhase.ready);
     expect(controller.state.capturedMedia, isNull);
+  });
+
+  testWidgets('review keeps retake and use visible on a small iPhone', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 667);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await controller.prepare();
+    await controller.record();
+    await controller.stop();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CaptureScreen(
+          controller: controller,
+          testFixture: true,
+          onMediaReady: () {},
+        ),
+      ),
+    );
+
+    expect(find.text('再生して確認'), findsOneWidget);
+    expect(find.text('撮り直す'), findsOneWidget);
+    expect(find.text('この音を使う'), findsOneWidget);
+    expect(tester.getBottomRight(find.text('撮り直す')).dy, lessThan(667));
+    expect(tester.getBottomRight(find.text('この音を使う')).dy, lessThan(667));
+
+    await tester.tap(find.text('撮り直す'));
+    await tester.pump();
+    expect(controller.state.phase, CapturePhase.ready);
   });
 
   test(
