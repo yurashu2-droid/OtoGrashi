@@ -106,6 +106,7 @@ void main() {
     expect(find.text('音を追加しています'), findsNothing);
     expect(find.text('この音を使う'), findsNothing);
     expect(controller.state.clips, hasLength(1));
+    expect(find.byTooltip('合成素材 1の順番を変える'), findsNothing);
   });
 
   testWidgets('failed addition leaves the chosen video available to retake', (
@@ -490,6 +491,42 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('chosen theme and another theme appear above the preview', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    controller.selectMelody(MelodyTemplate.answer);
+    await controller.createPreview();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('かけあい'), findsOneWidget);
+    expect(find.text('スキップ'), findsOneWidget);
+    expect(
+      tester.getBottomLeft(find.text('かけあい')).dy,
+      lessThan(tester.getTopLeft(find.text('これで完成')).dy),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('completed video exports once for save and share', (
     tester,
   ) async {
@@ -660,6 +697,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView).first, const Offset(0, 1000));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('はねる'));
+    await tester.pumpAndSettle();
+    expect(controller.state.melody, MelodyTemplate.hop);
     await tester.drag(find.byType(ListView).first, const Offset(0, -320));
     await tester.pumpAndSettle();
     expect(find.text('ぽつぽつ'), findsOneWidget);
@@ -667,14 +709,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.state.style, ArrangementStyle.swaying);
 
-    await tester.scrollUntilVisible(
-      find.text('はねる'),
-      120,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.tap(find.text('はねる'));
-    await tester.pumpAndSettle();
-    expect(controller.state.melody, MelodyTemplate.hop);
     expect(find.text('拍  合成素材 1'), findsOneWidget);
     expect(find.text('ベース風  お休み'), findsOneWidget);
 

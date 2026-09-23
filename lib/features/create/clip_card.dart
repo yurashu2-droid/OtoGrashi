@@ -134,26 +134,27 @@ class ClipCard extends StatelessWidget {
                             ),
                           ),
                         ),
-                        PopupMenuButton<_ClipAction>(
-                          tooltip: '$titleの順番を変える',
-                          icon: const Icon(Icons.more_horiz_rounded),
-                          onSelected: (action) => switch (action) {
-                            _ClipAction.moveUp => onMove(-1),
-                            _ClipAction.moveDown => onMove(1),
-                          },
-                          itemBuilder: (_) => [
-                            if (index > 0)
-                              const PopupMenuItem(
-                                value: _ClipAction.moveUp,
-                                child: Text('ひとつ前へ'),
-                              ),
-                            if (canMoveDown)
-                              const PopupMenuItem(
-                                value: _ClipAction.moveDown,
-                                child: Text('ひとつ後ろへ'),
-                              ),
-                          ],
-                        ),
+                        if (index > 0 || canMoveDown)
+                          PopupMenuButton<_ClipAction>(
+                            tooltip: '$titleの順番を変える',
+                            icon: const Icon(Icons.more_horiz_rounded),
+                            onSelected: (action) => switch (action) {
+                              _ClipAction.moveUp => onMove(-1),
+                              _ClipAction.moveDown => onMove(1),
+                            },
+                            itemBuilder: (_) => [
+                              if (index > 0)
+                                const PopupMenuItem(
+                                  value: _ClipAction.moveUp,
+                                  child: Text('ひとつ前へ'),
+                                ),
+                              if (canMoveDown)
+                                const PopupMenuItem(
+                                  value: _ClipAction.moveDown,
+                                  child: Text('ひとつ後ろへ'),
+                                ),
+                            ],
+                          ),
                       ],
                     ),
                     Text(

@@ -634,6 +634,8 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
   final ScrollController _scrollController = ScrollController(
     keepScrollOffset: false,
   );
+  final ScrollController _melodyScrollController = ScrollController();
+  bool _melodyPositioned = false;
   late final MediaPlaybackController playback = MediaPlaybackController(
     widget.controller.presentation,
   );
@@ -641,6 +643,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _melodyScrollController.dispose();
     unawaited(playback.pause());
     playback.dispose();
     super.dispose();
@@ -776,6 +779,64 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 18),
+            Row(
+              children: [
+                const Text(
+                  '曲のかたち',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '横にスワイプして選ぶ',
+                    textAlign: TextAlign.end,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final cardWidth = (constraints.maxWidth - 24) / 2;
+                if (!_melodyPositioned && state.melody.index > 0) {
+                  _melodyPositioned = true;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!_melodyScrollController.hasClients) return;
+                    final target = (state.melody.index - 1) * (cardWidth + 8);
+                    _melodyScrollController.jumpTo(
+                      target.clamp(
+                        0,
+                        _melodyScrollController.position.maxScrollExtent,
+                      ),
+                    );
+                  });
+                }
+                final textScale =
+                    MediaQuery.textScalerOf(context).scale(16) / 16;
+                return SizedBox(
+                  height: 140 + (textScale - 1).clamp(0, 2) * 48,
+                  child: ListView.separated(
+                    controller: _melodyScrollController,
+                    scrollDirection: Axis.horizontal,
+                    itemCount: MelodyTemplate.values.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) {
+                      final melody = MelodyTemplate.values[index];
+                      return SizedBox(
+                        width: cardWidth,
+                        child: MelodyTemplateCard(
+                          melody: melody,
+                          selected: state.melody == melody,
+                          onTap: () => widget.controller.selectMelody(melody),
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 18),
             Center(
               child: PlaybackChrome(
                 child: SizedBox(
@@ -863,28 +924,6 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
                   widget.controller.selectStyle(value.single),
             ),
             const SizedBox(height: 16),
-            const Text(
-              '曲のかたち',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
-            ),
-            const SizedBox(height: 8),
-            LayoutBuilder(
-              builder: (context, constraints) => Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final melody in MelodyTemplate.values)
-                    SizedBox(
-                      width: (constraints.maxWidth - 8) / 2,
-                      child: MelodyTemplateCard(
-                        melody: melody,
-                        selected: state.melody == melody,
-                        onTap: () => widget.controller.selectMelody(melody),
-                      ),
-                    ),
-                ],
-              ),
-            ),
             if (state.melody != MelodyTemplate.none)
               _SongRoleSummary(state: state),
             const SizedBox(height: 12),
