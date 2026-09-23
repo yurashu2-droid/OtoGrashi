@@ -187,7 +187,12 @@ _SongEvents _buildSongEvents(
           clip.rms >= 0.03,
     ),
   );
-  final bass = sustained.firstOrNull;
+  // Prefer a measured, stable tone for the song's melody. A louder spoken
+  // phrase with no stable fundamental can still be used as a rhythm layer.
+  final bass = sustained
+          .where((clip) => clip.fundamentalMidiNote != null)
+          .firstOrNull ??
+      sustained.firstOrNull;
   final otherLongSounds = ranked(
     usable.where(
       (clip) =>
@@ -216,6 +221,7 @@ _SongEvents _buildSongEvents(
     keys: keys?.assetId,
     melody: bass?.assetId,
   );
+  final melodyRoot = bass?.fundamentalMidiNote?.roundToDouble();
 
   final events = <SoundEvent>[];
   for (var bar = 0; bar < 8; bar++) {
@@ -264,7 +270,7 @@ _SongEvents _buildSongEvents(
             gain: 0.53,
             fadeIn: 900,
             fadeOut: 2400,
-            pitch: bar.isEven ? -3 : -2,
+            pitch: _pitchForNote(bass, bar.isEven ? -3 : -2, melodyRoot),
           ),
         );
       }
@@ -282,7 +288,7 @@ _SongEvents _buildSongEvents(
             gain: 0.46,
             fadeIn: 300,
             fadeOut: 6800,
-            pitch: index.isEven ? 2 : 0,
+            pitch: _pitchForNote(keys, index.isEven ? 2 : 0, melodyRoot),
           ),
         );
       }
@@ -302,7 +308,7 @@ _SongEvents _buildSongEvents(
             gain: 0.58,
             fadeIn: 700,
             fadeOut: 1500,
-            pitch: pitch,
+            pitch: _pitchForNote(bass, pitch, melodyRoot),
           ),
         );
       }
@@ -332,6 +338,20 @@ _SongEvents _buildSongEvents(
   return _SongEvents(events, roles);
 }
 
+double _pitchForNote(AnalyzedClip clip, int relativeNote, double? root) {
+  final fundamental = clip.fundamentalMidiNote;
+  if (root == null || fundamental == null) return relativeNote.toDouble();
+  final shift = root + relativeNote - fundamental;
+  // The existing granular renderer has a three-semitone quality envelope.
+  // At a template extreme, preserve the phrase within that range, even when
+  // this leaves a few cents of the source's original tuning.
+  if (shift >= -3 && shift <= 3) return shift;
+  if ((fundamental - root).abs() <= 0.5) {
+    return shift.clamp(-3.0, 3.0).toDouble();
+  }
+  return relativeNote.toDouble();
+}
+
 bool _hasAudibleSpan(AnalyzedClip clip, int minimumSamples) =>
     clip.audibleRegions.isEmpty
     // Older analyses have no region data; retain their duration behavior.
@@ -349,7 +369,7 @@ SoundEvent _songEvent(
   required double gain,
   required int fadeIn,
   required int fadeOut,
-  int pitch = 0,
+  double pitch = 0,
 }) {
   // Reuse the regular source-window choice so audible-region analysis can
   // select both rhythm and song clips using the same source timing.

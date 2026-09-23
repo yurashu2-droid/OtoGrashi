@@ -235,6 +235,64 @@ void main() {
     expect(arrangement.events.length, lessThanOrEqualTo(64));
   });
 
+  test('a measured sustained note follows each song melody automatically', () {
+    final clips = [
+      _clip('tap', role: SuggestedRole.transient),
+      _clip('voice', pitch: 57.35),
+      _clip('room', role: SuggestedRole.texture),
+    ];
+    for (final song in MelodyTemplate.values.skip(1)) {
+      final arranged = arrange(
+        clips: clips,
+        style: ArrangementStyle.sparse,
+        melodyTemplate: song,
+        seed: 7,
+      );
+      final start = 3 * Arrangement.barSamples;
+      final melodyEvents = arranged.events.where(
+        (event) =>
+            event.assetId == 'voice' &&
+            event.destinationStartSample >= start &&
+            event.destinationStartSample < 7 * Arrangement.barSamples &&
+            event.durationSamples == 18000,
+      );
+      final expectedNotes = song.notes
+          .where((note) => note.pitchSemitones != null)
+          .toList();
+      expect(melodyEvents.length, expectedNotes.length);
+      for (var index = 0; index < expectedNotes.length; index++) {
+        final actual = melodyEvents.elementAt(index);
+        final target = 57 + expectedNotes[index].pitchSemitones!;
+        expect(
+          57.35 + actual.pitchSemitones,
+          closeTo(target, 0.351),
+        );
+      }
+      expect(arranged.events.length, lessThanOrEqualTo(64));
+      expect(arranged.videoEvents.length, arranged.events.length);
+      for (var index = 0; index < arranged.events.length; index++) {
+        expect(
+          arranged.videoEvents[index].destinationStartSample,
+          arranged.events[index].destinationStartSample,
+        );
+      }
+      expect(
+        Arrangement.fromJson(arranged.toJson()).toJson(),
+        arranged.toJson(),
+      );
+    }
+
+    final measured = clips[1];
+    expect(AnalyzedClip.fromJson(measured.toJson()).fundamentalMidiNote, 57.35);
+    expect(
+      () => AnalyzedClip.fromJson({
+        ...measured.toJson(),
+        'fundamentalMidiNote': double.nan,
+      }),
+      throwsA(isA<MediaContractException>()),
+    );
+  });
+
   test('six user clips all sound in the busiest song template', () {
     final clips = [
       _clip('beat', role: SuggestedRole.transient),
@@ -751,6 +809,7 @@ AnalyzedClip _clip(
   List<int> onsets = const [1000],
   double peak = 0.8,
   double rms = 0.2,
+  double? pitch,
 }) => AnalyzedClip(
   assetId: id,
   durationSamples: 288000,
@@ -759,6 +818,7 @@ AnalyzedClip _clip(
   peak: peak,
   rms: rms,
   suggestedRole: role,
+  fundamentalMidiNote: pitch,
 );
 
 bool _fitsDestination(SoundEvent event) =>

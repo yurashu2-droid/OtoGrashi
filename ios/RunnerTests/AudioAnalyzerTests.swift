@@ -65,6 +65,30 @@ final class AudioAnalyzerTests: XCTestCase {
     XCTAssertEqual(result.sampleRate, 48_000)
     XCTAssertEqual(result.durationSamples, 4_800)
     XCTAssertEqual(result.suggestedRole, .sustain)
+    XCTAssertNil(result.fundamentalMidiNote)
+  }
+
+  func testStableToneHasFundamentalButChangingToneAndNoiseDoNot() throws {
+    func tone(_ frequency: Double, count: Int) -> [Float] {
+      (0..<count).map { frame in
+        Float(0.4 * sin(2 * .pi * frequency * Double(frame) / 48_000))
+      }
+    }
+    let steady = try analyzer.analyze(samples: tone(220, count: 24_000), assetId: "a")
+    XCTAssertEqual(try XCTUnwrap(steady.fundamentalMidiNote), 57, accuracy: 0.15)
+
+    let changing = try analyzer.analyze(
+      samples: tone(220, count: 12_000) + tone(330, count: 12_000),
+      assetId: "changing"
+    )
+    XCTAssertNil(changing.fundamentalMidiNote)
+
+    var state: UInt32 = 12345
+    let noise = (0..<24_000).map { _ -> Float in
+      state = state &* 1_664_525 &+ 1_013_904_223
+      return Float(Double(state) / Double(UInt32.max) - 0.5) * 0.6
+    }
+    XCTAssertNil(try analyzer.analyze(samples: noise, assetId: "noise").fundamentalMidiNote)
   }
 
   func testSoftSoundAfterSilenceProvidesAnAudibleAnchor() throws {

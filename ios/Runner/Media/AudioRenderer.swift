@@ -24,9 +24,9 @@ struct SoundEventPayload: Codable, Equatable {
   let durationSamples: Int
   let gain: Double
   let fades: EventFadesPayload
-  let pitchSemitones: Int?
+  let pitchSemitones: Double?
 
-  var effectivePitchSemitones: Int { pitchSemitones ?? 0 }
+  var effectivePitchSemitones: Double { pitchSemitones ?? 0 }
 }
 
 enum VideoLoopModePayload: String, Codable, Equatable {
@@ -160,7 +160,8 @@ struct ArrangementPayload: Decodable, Equatable {
         destinationEnd <= Self.totalSamples,
         event.gain.isFinite,
         (0...1).contains(event.gain),
-        (-3...3).contains(event.effectivePitchSemitones),
+        event.effectivePitchSemitones.isFinite,
+        (-3.0...3.0).contains(event.effectivePitchSemitones),
         event.fades.fadeInSamples >= 0,
         event.fades.fadeOutSamples >= 0,
         fadeTotal <= event.durationSamples,
@@ -310,13 +311,14 @@ struct AudioRenderer {
   }
 
   // Two crossing read heads resample short grains while their output clock
-  // stays fixed. The dry layer retains the recorded voice and attacks.
-  func pitchPreservingDuration(_ source: [Float], semitones: Int) -> [Float] {
+  // stays fixed. A shifted melody uses the wet signal so its original note
+  // does not continue sounding against the template's target note.
+  func pitchPreservingDuration(_ source: [Float], semitones: Double) -> [Float] {
     let grainLength = 2_048
-    guard semitones != 0, (-3...3).contains(semitones),
+    guard semitones != 0, semitones.isFinite, (-3.0...3.0).contains(semitones),
       source.count >= grainLength, source.allSatisfy(\.isFinite)
     else { return source }
-    let ratio = pow(2.0, Double(semitones) / 12)
+    let ratio = pow(2.0, semitones / 12)
     var shifted = Array(repeating: Float(0), count: source.count)
     let windows = (0..<grainLength).map { phase in
       Float(0.5 - 0.5 * cos(2 * .pi * Double(phase) / Double(grainLength)))
@@ -336,7 +338,7 @@ struct AudioRenderer {
         weight += windows[phase]
       }
       let wet = weight > 0 ? weighted / weight : source[index]
-      shifted[index] = source[index] * 0.35 + wet * 0.65
+      shifted[index] = wet
     }
     return shifted
   }

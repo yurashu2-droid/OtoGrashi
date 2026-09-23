@@ -59,7 +59,7 @@ final class SoundEvent {
   final int durationSamples;
   final double gain;
   final EventFades fades;
-  final int pitchSemitones;
+  final double pitchSemitones;
 
   Map<String, Object?> toJson() => {
     'assetId': assetId,
@@ -78,7 +78,7 @@ final class SoundEvent {
     durationSamples: json['durationSamples'] as int,
     gain: (json['gain'] as num).toDouble(),
     fades: EventFades.fromJson((json['fades'] as Map<Object?, Object?>).cast()),
-    pitchSemitones: json['pitchSemitones'] as int? ?? 0,
+    pitchSemitones: (json['pitchSemitones'] as num?)?.toDouble() ?? 0,
   );
 }
 

@@ -278,6 +278,7 @@ final class AnalyzedClip {
     required this.peak,
     required this.rms,
     required this.suggestedRole,
+    this.fundamentalMidiNote,
     this.analysisVersion = 1,
   }) : onsetSamples = List<int>.unmodifiable(onsetSamples),
        audibleRegions = List<AudibleRegion>.unmodifiable(audibleRegions) {
@@ -317,6 +318,12 @@ final class AnalyzedClip {
         'Analysis levels must be finite and normalized.',
       );
     }
+    if (fundamentalMidiNote != null &&
+        (!fundamentalMidiNote!.isFinite ||
+            fundamentalMidiNote! < 40 ||
+            fundamentalMidiNote! > 88)) {
+      throw const MediaContractException('Fundamental note is out of range.');
+    }
   }
 
   factory AnalyzedClip.fromJson(Map<String, Object?> json) {
@@ -346,6 +353,7 @@ final class AnalyzedClip {
         peak: (json['peak'] as num).toDouble(),
         rms: (json['rms'] as num).toDouble(),
         suggestedRole: role,
+        fundamentalMidiNote: (json['fundamentalMidiNote'] as num?)?.toDouble(),
         analysisVersion: json['analysisVersion'] as int,
       );
     } on TypeError {
@@ -364,6 +372,7 @@ final class AnalyzedClip {
   final double peak;
   final double rms;
   final SuggestedRole suggestedRole;
+  final double? fundamentalMidiNote;
 
   bool get isUsable => peak >= 0.001 || rms >= 0.0001;
 
@@ -382,6 +391,8 @@ final class AnalyzedClip {
     'peak': peak,
     'rms': rms,
     'suggestedRole': suggestedRole.name,
+    if (fundamentalMidiNote != null)
+      'fundamentalMidiNote': fundamentalMidiNote,
   };
 }
 

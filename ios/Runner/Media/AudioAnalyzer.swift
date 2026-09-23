@@ -86,6 +86,9 @@ struct AnalyzedClip: Codable, Equatable {
   let peak: Double
   let rms: Double
   let suggestedRole: SuggestedRole
+  /// Stable fundamental of a sustained, single-pitched recording, in MIDI notes.
+  /// Nil means that the recording must not be treated as a tuned instrument.
+  let fundamentalMidiNote: Double?
 
   init(
     assetId: String,
@@ -95,7 +98,8 @@ struct AnalyzedClip: Codable, Equatable {
     audibleRegions: [AudibleRegion] = [],
     peak: Double,
     rms: Double,
-    suggestedRole: SuggestedRole
+    suggestedRole: SuggestedRole,
+    fundamentalMidiNote: Double? = nil
   ) throws {
     guard !assetId.isEmpty else { throw AudioAnalysisError.emptyAssetId }
     let (sourceEndSample, sourceEndOverflow) = sourceStartSample
@@ -111,7 +115,9 @@ struct AnalyzedClip: Codable, Equatable {
           $0.startSample <= sourceEndSample - $0.durationSamples
       }),
       peak.isFinite, rms.isFinite,
-      (0...1).contains(peak), (0...1).contains(rms)
+      (0...1).contains(peak), (0...1).contains(rms),
+      fundamentalMidiNote == nil ||
+        (fundamentalMidiNote!.isFinite && (40...88).contains(fundamentalMidiNote!))
     else { throw AudioAnalysisError.unsupportedContract }
     self.schemaVersion = Self.supportedSchemaVersion
     self.analysisVersion = Self.supportedAnalysisVersion
@@ -124,6 +130,7 @@ struct AnalyzedClip: Codable, Equatable {
     self.peak = peak
     self.rms = rms
     self.suggestedRole = suggestedRole
+    self.fundamentalMidiNote = fundamentalMidiNote
   }
 
   init(from decoder: Decoder) throws {
@@ -143,7 +150,8 @@ struct AnalyzedClip: Codable, Equatable {
       audibleRegions: container.decodeIfPresent([AudibleRegion].self, forKey: .audibleRegions) ?? [],
       peak: container.decode(Double.self, forKey: .peak),
       rms: container.decode(Double.self, forKey: .rms),
-      suggestedRole: container.decode(SuggestedRole.self, forKey: .suggestedRole)
+      suggestedRole: container.decode(SuggestedRole.self, forKey: .suggestedRole),
+      fundamentalMidiNote: container.decodeIfPresent(Double.self, forKey: .fundamentalMidiNote)
     )
   }
 }
@@ -156,6 +164,7 @@ struct SignalMetrics: Equatable {
   let onsetSamples: [Int]
   let audibleRegions: [AudibleRegion]
   let suggestedRole: SuggestedRole
+  let fundamentalMidiNote: Double?
 }
 
 struct AudioAnalyzer {
@@ -185,7 +194,8 @@ struct AudioAnalyzer {
       },
       peak: metrics.peak,
       rms: metrics.rms,
-      suggestedRole: metrics.suggestedRole
+      suggestedRole: metrics.suggestedRole,
+      fundamentalMidiNote: metrics.fundamentalMidiNote
     )
   }
 
@@ -308,19 +318,82 @@ struct AudioAnalyzer {
     } else {
       role = .texture
     }
+    let audibleRegions = Self.audibleRegions(
+      frameRMS: frameRMS,
+      sampleCount: samples.count,
+      rms: rms
+    )
     return SignalMetrics(
       frameRMS: frameRMS,
       differenceEnergy: differenceEnergy,
       peak: peak,
       rms: rms,
       onsetSamples: onsets,
-      audibleRegions: Self.audibleRegions(
-        frameRMS: frameRMS,
-        sampleCount: samples.count,
-        rms: rms
-      ),
-      suggestedRole: role
+      audibleRegions: audibleRegions,
+      suggestedRole: role,
+      fundamentalMidiNote: role == .sustain
+        ? audibleRegions.first(where: { $0.durationSamples >= 12_000 }).flatMap {
+          Self.stableFundamental(samples: samples, region: $0)
+        }
+        : nil
     )
+  }
+
+  /// YIN's first strong normalized-difference trough avoids picking a harmonic
+  /// as the fundamental. Three separated windows must agree before a clip is
+  /// allowed to drive a melody; speech, room noise and changing notes return nil.
+  private static func stableFundamental(
+    samples: [Float], region: AudibleRegion
+  ) -> Double? {
+    let start = region.startSample
+    let end = min(samples.count, start + region.durationSamples)
+    let window = 4_096
+    guard end - start >= 12_000 else { return nil }
+    let available = end - start - window
+    let offsets = [available / 6, available / 2, available * 5 / 6]
+    let notes = offsets.compactMap {
+      fundamental(in: samples, start: start + $0, count: window)
+    }
+    guard notes.count == 3,
+      (notes.max()! - notes.min()!) <= 0.35
+    else { return nil }
+    return notes.reduce(0, +) / 3
+  }
+
+  private static func fundamental(in samples: [Float], start: Int, count: Int) -> Double? {
+    let signal = (start..<(start + count)).map { Double(samples[$0]) }
+    let mean = signal.reduce(0, +) / Double(count)
+    let centered = signal.map { $0 - mean }
+    let variance = centered.reduce(0) { $0 + $1 * $1 } / Double(count)
+    guard variance >= 0.000_1 else { return nil }
+
+    let minimumLag = sampleRate / 1_000
+    let maximumLag = sampleRate / 100
+    var runningDifference = 0.0
+    var previous = 1.0
+    var bestLag: Int?
+    var bestValue = 1.0
+    for lag in 1...maximumLag {
+      var difference = 0.0
+      for index in 0..<(count - maximumLag) {
+        let delta = centered[index] - centered[index + lag]
+        difference += delta * delta
+      }
+      runningDifference += difference
+      guard lag >= minimumLag, runningDifference > 0 else { continue }
+      let normalized = difference * Double(lag) / runningDifference
+      if normalized < 0.18 && normalized < bestValue {
+        bestLag = lag
+        bestValue = normalized
+      } else if let bestLag, normalized > previous,
+        bestValue < 0.18 {
+        let hertz = Double(sampleRate) / Double(bestLag)
+        let midi = 69 + 12 * log2(hertz / 440)
+        return (40...88).contains(midi) ? midi : nil
+      }
+      previous = normalized
+    }
+    return nil
   }
 
   private static func audibleRegions(

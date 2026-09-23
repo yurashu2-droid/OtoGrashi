@@ -17,13 +17,16 @@ final class AudioRendererTests: XCTestCase {
     XCTAssertEqual(timeline, [0, 0, 0, 0, 0, 0.25, 0.5, 0.75, 0, 0])
   }
 
-  func testPitchShiftKeepsDurationDrySoundAndRaisesSustainedTone() throws {
+  func testPitchShiftKeepsDurationAndRaisesSustainedTone() throws {
     let source = (0..<24_000).map { frame in
       Float(sin(2 * Double.pi * 220 * Double(frame) / 48_000) * 0.5)
     }
     let renderer = AudioRenderer(accompanimentGain: 0)
     let shifted = renderer.pitchPreservingDuration(source, semitones: 3)
+    let fractional = renderer.pitchPreservingDuration(source, semitones: 1.25)
     XCTAssertEqual(shifted.count, source.count)
+    XCTAssertEqual(fractional.count, source.count)
+    XCTAssertTrue(fractional.allSatisfy(\.isFinite))
     XCTAssertEqual(renderer.pitchPreservingDuration(source, semitones: 0), source)
     XCTAssertTrue(shifted.allSatisfy(\.isFinite))
     XCTAssertGreaterThan(shifted.suffix(2_400).map(\.magnitude).max() ?? 0, 0.05)

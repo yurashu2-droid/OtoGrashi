@@ -1,7 +1,7 @@
 /// Original song patterns made only from the recorded clips. Each melody slot
 /// is half a bar at 128 BPM; null is a deliberate rest.
-/// Pitches are relative to the recorded voice, so the recorded sound remains
-/// recognizable even when its absolute pitch cannot be measured reliably.
+/// Note steps become absolute notes when a stable recorded fundamental is
+/// available. Otherwise they remain relative to the recorded sound.
 enum MelodyTemplate { none, hop, wink, answer }
 
 extension MelodyTemplateDetails on MelodyTemplate {
