@@ -164,6 +164,18 @@ class _CollectScreen extends StatelessWidget {
   final CreationController controller;
   final VoidCallback onCapture;
 
+  Future<void> _previewClip(BuildContext context, ClipAsset clip, int index) =>
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (_) => _ClipPreviewSheet(
+          clip: clip,
+          segment: controller.comparisonSegments[index],
+          presentation: controller.presentation,
+        ),
+      );
+
   Future<void> _renameClip(
     BuildContext context,
     ClipAsset clip,
@@ -327,10 +339,13 @@ class _CollectScreen extends StatelessWidget {
                   clip: state.clips[index],
                   index: index,
                   thumbnail: state.thumbnails[state.clips[index].id],
+                  onPreview: () =>
+                      _previewClip(context, state.clips[index], index),
                   onRename: () =>
                       _renameClip(context, state.clips[index], index),
                   onRemove: () =>
                       unawaited(controller.removeClip(state.clips[index].id)),
+                  canMoveDown: index < state.clips.length - 1,
                   onMove: (offset) {
                     final target = (index + offset).clamp(
                       0,
@@ -396,125 +411,270 @@ class _CollectScreen extends StatelessWidget {
   }
 }
 
+enum _ClipAction { rename, moveUp, moveDown, remove }
+
 class _ClipCard extends StatelessWidget {
   const _ClipCard({
     required this.clip,
     required this.index,
     required this.thumbnail,
+    required this.onPreview,
     required this.onRename,
     required this.onMove,
     required this.onRemove,
+    required this.canMoveDown,
     super.key,
   });
   final ClipAsset clip;
   final int index;
-  final dynamic thumbnail;
+  final Uint8List? thumbnail;
+  final VoidCallback onPreview;
   final VoidCallback onRename;
   final ValueChanged<int> onMove;
   final VoidCallback onRemove;
+  final bool canMoveDown;
 
   @override
   Widget build(BuildContext context) {
     final generatedName = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$')
         .hasMatch(clip.label);
     final title = generatedName ? '録った音 ${index + 1}' : clip.label;
+    final duration =
+        '${(clip.selectionDurationUs / 1000000).toStringAsFixed(1)}秒';
     return Semantics(
       sortKey: OrdinalSortKey(index.toDouble()),
-      label:
-          '$title、${(clip.selectionDurationUs / 1000000).toStringAsFixed(1)}秒、${index + 1}番目',
+      label: '$title、$duration、${index + 1}番目。タップして音を確認',
       child: Card(
         margin: const EdgeInsets.only(bottom: 12),
-        elevation: 0,
-        color: Colors.white,
+        elevation: 2,
+        shadowColor: const Color(0x334F332B),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
-          side: const BorderSide(color: Color(0xFFEAE3DD)),
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFFE9DDD4)),
         ),
         clipBehavior: Clip.antiAlias,
         child: SizedBox(
           height: 112,
-          child: Row(
+          child: Stack(
+            fit: StackFit.expand,
             children: [
-              SizedBox(
-                width: 102,
-                height: 112,
-                child: thumbnail != null
-                    ? Image.memory(thumbnail, fit: BoxFit.cover)
-                    : _ThumbnailFallback(
-                        index: index,
-                        synthetic:
-                            clip.label.startsWith('synthetic-') ||
-                            clip.label.startsWith('合成素材'),
-                      ),
+              thumbnail != null
+                  ? Image.memory(thumbnail!, fit: BoxFit.cover)
+                  : _ThumbnailFallback(
+                      index: index,
+                      synthetic:
+                          clip.label.startsWith('synthetic-') ||
+                          clip.label.startsWith('合成素材'),
+                    ),
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Color(0x44000000),
+                      Color(0x11000000),
+                      Color(0xCC1C171B),
+                    ],
+                  ),
+                ),
               ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onPreview,
+                  child: const SizedBox.expand(),
+                ),
+              ),
+              Positioned(
+                left: 14,
+                top: 12,
+                child: Transform.rotate(
+                  angle: -0.035,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 5,
+                    ),
+                    color: AppTokens.paper,
+                    child: Text(
+                      '音 ${(index + 1).toString().padLeft(2, '0')}',
+                      style: const TextStyle(
+                        color: AppTokens.ink,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                right: 8,
+                top: 6,
+                child: Material(
+                  color: const Color(0xDDFFF8F1),
+                  shape: const CircleBorder(),
+                  child: PopupMenuButton<_ClipAction>(
+                    tooltip: '$titleのメニュー',
+                    icon: const Icon(Icons.more_horiz_rounded),
+                    onSelected: (action) => switch (action) {
+                      _ClipAction.rename => onRename(),
+                      _ClipAction.moveUp => onMove(-1),
+                      _ClipAction.moveDown => onMove(1),
+                      _ClipAction.remove => onRemove(),
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: _ClipAction.rename,
+                        child: Text('名前を変える'),
+                      ),
+                      if (index > 0)
+                        const PopupMenuItem(
+                          value: _ClipAction.moveUp,
+                          child: Text('ひとつ前へ'),
+                        ),
+                      if (canMoveDown)
+                        const PopupMenuItem(
+                          value: _ClipAction.moveDown,
+                          child: Text('ひとつ後ろへ'),
+                        ),
+                      const PopupMenuItem(
+                        value: _ClipAction.remove,
+                        child: Text('作品から外す'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 13,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onPreview,
+                  child: Row(
                     children: [
-                      Text(
-                        'SOUND ${(index + 1).toString().padLeft(2, '0')}',
-                        style: const TextStyle(
-                          color: AppTokens.coral,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.6,
+                      const Icon(
+                        Icons.play_circle_fill_rounded,
+                        color: Colors.white,
+                        size: 32,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      InkWell(
-                        onTap: onRename,
-                        child: Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                            ),
-                            const SizedBox(width: 3),
-                            const Icon(Icons.edit_outlined, size: 15),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 2),
                       Text(
-                        '${(clip.selectionDurationUs / 1000000).toStringAsFixed(1)}秒の動画',
+                        duration,
                         style: const TextStyle(
-                          color: AppTokens.mutedInk,
-                          fontSize: 12,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
-              PopupMenuButton<int>(
-                tooltip: '順番を変更',
-                onSelected: onMove,
-                itemBuilder: (_) => [
-                  if (index > 0)
-                    const PopupMenuItem(value: -1, child: Text('ひとつ上へ')),
-                  const PopupMenuItem(value: 1, child: Text('ひとつ下へ')),
-                ],
-                icon: const Icon(Icons.swap_vert_rounded, size: 21),
-              ),
-              IconButton(
-                onPressed: onRemove,
-                tooltip: '$titleを作品から外す',
-                icon: const Icon(Icons.close_rounded),
-              ),
-              const SizedBox(width: 4),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+class _ClipPreviewSheet extends StatefulWidget {
+  const _ClipPreviewSheet({
+    required this.clip,
+    required this.segment,
+    required this.presentation,
+  });
+
+  final ClipAsset clip;
+  final PlaybackSegment segment;
+  final MediaPresentationGateway presentation;
+
+  @override
+  State<_ClipPreviewSheet> createState() => _ClipPreviewSheetState();
+}
+
+class _ClipPreviewSheetState extends State<_ClipPreviewSheet> {
+  late final MediaPlaybackController playback = MediaPlaybackController(
+    widget.presentation,
+  );
+
+  @override
+  void dispose() {
+    unawaited(playback.pause());
+    playback.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FractionallySizedBox(
+    heightFactor: 0.78,
+    child: SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 6, 20, 20),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.clip.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  tooltip: '閉じる',
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text('曲にする前の、元の動画と音'),
+            const SizedBox(height: 14),
+            Expanded(
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: 9 / 16,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(18),
+                    child: NativeMovieView(
+                      relativePath: widget.clip.relativePath,
+                      segments: [widget.segment],
+                      gateway: widget.presentation,
+                      controller: playback,
+                      fallback: const ColoredBox(
+                        color: Color(0xFF302D36),
+                        child: Center(child: Text('元の動画')),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            _PlaybackControls(playback: playback, label: '元の音'),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _ThumbnailFallback extends StatelessWidget {
@@ -532,13 +692,10 @@ class _ThumbnailFallback extends StatelessWidget {
       ),
     ),
     child: Center(
-      child: Text(
-        synthetic ? '合成\nサンプル映像' : 'サムネイルを\n表示できません',
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w700,
-        ),
+      child: Icon(
+        synthetic ? Icons.graphic_eq_rounded : Icons.broken_image_outlined,
+        size: 40,
+        color: Colors.white70,
       ),
     ),
   );
@@ -986,8 +1143,12 @@ class _PlaybackControls extends StatelessWidget {
           Row(
             children: [
               IconButton.filledTonal(
-                onPressed: playback.toggle,
-                tooltip: playback.isPlaying ? '一時停止' : '再生',
+                onPressed: playback.isReady ? playback.toggle : null,
+                tooltip: playback.isLoading
+                    ? '動画を読み込み中'
+                    : playback.isPlaying
+                    ? '一時停止'
+                    : '再生',
                 icon: Text(
                   playback.isPlaying ? 'Ⅱ' : '▶',
                   style: const TextStyle(fontSize: 19),
@@ -1006,9 +1167,11 @@ class _PlaybackControls extends StatelessWidget {
             child: Slider(
               value: positionUs.toDouble(),
               max: durationUs.toDouble(),
-              onChanged: (value) => unawaited(
-                playback.seek(Duration(microseconds: value.round())),
-              ),
+              onChanged: playback.isReady
+                  ? (value) => unawaited(
+                      playback.seek(Duration(microseconds: value.round())),
+                    )
+                  : null,
             ),
           ),
           if (playback.error != null)

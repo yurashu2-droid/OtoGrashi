@@ -481,8 +481,18 @@ final class PlaybackRegistry {
   }
 
   func state(viewId: Int64) throws -> [String: Any] {
-    guard let player = players[viewId], let item = player.currentItem else {
+    if let error = loadingErrors[viewId] { throw error }
+    guard let player = players[viewId] else {
       throw CaptureServiceError.invalidState
+    }
+    guard let item = player.currentItem else {
+      return [
+        "positionUs": 0,
+        "durationUs": 0,
+        "isPlaying": false,
+        "ended": false,
+        "loading": true,
+      ]
     }
     if item.status == .failed { throw item.error ?? CaptureServiceError.invalidMedia }
     let position = player.currentTime()
@@ -498,6 +508,7 @@ final class PlaybackRegistry {
       "durationUs": durationUs,
       "isPlaying": player.rate != 0,
       "ended": ended,
+      "loading": item.status == .unknown,
     ]
   }
 

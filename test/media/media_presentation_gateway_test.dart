@@ -10,9 +10,11 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const channel = MethodChannel(PlatformMediaGateway.channelName);
   final calls = <MethodCall>[];
+  var loading = false;
 
   setUp(() {
     calls.clear();
+    loading = false;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           calls.add(call);
@@ -28,6 +30,7 @@ void main() {
               'durationUs': 15000000,
               'isPlaying': false,
               'ended': true,
+              'loading': loading,
             },
             _ => null,
           };
@@ -50,6 +53,25 @@ void main() {
       levels: List<double>.filled(96, 0.4),
     );
     expect(waveform.strongestWindowStart(1000000), isNull);
+  });
+
+  test('play waits for an asynchronously assembled video', () async {
+    loading = true;
+    final gateway = PlatformMediaPresentationGateway(channel: channel);
+    final controller = MediaPlaybackController(gateway);
+    addTearDown(controller.dispose);
+
+    controller.attach(7);
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.isLoading, isTrue);
+    await controller.toggle();
+    expect(calls.where((call) => call.method == 'playbackPlay'), isEmpty);
+
+    loading = false;
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(controller.isReady, isTrue);
+    await controller.toggle();
+    expect(calls.where((call) => call.method == 'playbackPlay'), hasLength(1));
   });
 
   tearDown(() {
@@ -91,6 +113,7 @@ void main() {
     () async {
       final gateway = _DeferredPresentation();
       final controller = MediaPlaybackController(gateway)..attach(4);
+      await Future<void>.delayed(Duration.zero);
 
       final toggle = controller.toggle();
       controller.dispose();
@@ -165,7 +188,7 @@ final class _DeferredPresentation implements MediaPresentationGateway {
       const PlaybackSnapshot(
         position: Duration.zero,
         duration: Duration(seconds: 15),
-        isPlaying: true,
+        isPlaying: false,
         ended: false,
       );
   @override

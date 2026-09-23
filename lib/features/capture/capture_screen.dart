@@ -85,17 +85,20 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                             Positioned(
                               top: 65,
                               right: 12,
-                              child: FilledButton.tonalIcon(
-                                onPressed: widget.controller.isSwitchingCamera
-                                    ? null
-                                    : widget.controller.switchCamera,
-                                icon: const Icon(
-                                  Icons.flip_camera_ios_outlined,
-                                ),
-                                label: Text(
-                                  state.cameraFacing == CameraFacing.back
-                                      ? 'インカメに切替'
-                                      : '外カメに切替',
+                              child: SizedBox(
+                                width: 180,
+                                child: FilledButton.tonalIcon(
+                                  onPressed: widget.controller.isSwitchingCamera
+                                      ? null
+                                      : widget.controller.switchCamera,
+                                  icon: const Icon(
+                                    Icons.flip_camera_ios_outlined,
+                                  ),
+                                  label: Text(
+                                    state.cameraFacing == CameraFacing.back
+                                        ? 'インカメに切替'
+                                        : '外カメに切替',
+                                  ),
                                 ),
                               ),
                             ),
@@ -181,14 +184,20 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                         Row(
                           children: [
                             FilledButton.tonalIcon(
-                              onPressed: _playback.toggle,
+                              onPressed: _playback.isReady
+                                  ? _playback.toggle
+                                  : null,
                               icon: Icon(
                                 _playback.isPlaying
                                     ? Icons.pause_rounded
                                     : Icons.play_arrow_rounded,
                               ),
                               label: Text(
-                                _playback.isPlaying ? '一時停止' : '再生して確認',
+                                _playback.isLoading
+                                    ? '読み込み中'
+                                    : _playback.isPlaying
+                                    ? '一時停止'
+                                    : '再生して確認',
                               ),
                             ),
                             const SizedBox(width: 12),

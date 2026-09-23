@@ -79,12 +79,14 @@ final class PlaybackSnapshot {
     required this.duration,
     required this.isPlaying,
     required this.ended,
+    this.loading = false,
   });
 
   final Duration position;
   final Duration duration;
   final bool isPlaying;
   final bool ended;
+  final bool loading;
 }
 
 final class PlatformMediaPresentationGateway
@@ -160,6 +162,7 @@ final class PlatformMediaPresentationGateway
       duration: Duration(microseconds: (value['durationUs'] as num).toInt()),
       isPlaying: value['isPlaying'] as bool,
       ended: value['ended'] as bool,
+      loading: value['loading'] as bool? ?? false,
     );
   }
 }

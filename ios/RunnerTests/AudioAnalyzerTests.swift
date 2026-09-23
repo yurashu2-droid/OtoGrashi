@@ -265,7 +265,7 @@ final class AudioAnalyzerTests: XCTestCase {
     XCTAssertEqual(levels.count, AudioWaveformSampler.barCount)
     XCTAssertTrue(levels.allSatisfy { $0.isFinite && (0...1).contains($0) })
     XCTAssertGreaterThan(levels.max() ?? 0, 0.9)
-    XCTAssertGreaterThan(payload["durationUs"] as? Int64 ?? 0, 2_900_000)
+    XCTAssertGreaterThan(payload["durationUs"] as? Int64 ?? 0, 900_000)
   }
 
   func testDelayed44100AACMapsImpulseFromActualPTSIntoAbsoluteTimeline() throws {

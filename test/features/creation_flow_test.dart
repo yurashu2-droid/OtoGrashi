@@ -118,7 +118,15 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('合成素材 1を作品から外す'));
+    await tester.tap(find.byIcon(Icons.play_circle_fill_rounded).first);
+    await tester.pumpAndSettle();
+    expect(find.text('曲にする前の、元の動画と音'), findsOneWidget);
+    await tester.tap(find.byTooltip('閉じる'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('合成素材 1のメニュー'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('作品から外す').last);
     await tester.pumpAndSettle();
     expect(controller.state.clips, hasLength(2));
     expect(projects.project!.clipIds, ['clip-1', 'clip-2']);

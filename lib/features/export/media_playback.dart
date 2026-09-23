@@ -30,6 +30,7 @@ final class MediaPlaybackController extends ChangeNotifier {
   final MediaPresentationGateway gateway;
   int? _viewId;
   bool _playing = false;
+  bool _loading = false;
   bool _ended = false;
   Duration _position = Duration.zero;
   Duration _duration = const Duration(seconds: 15);
@@ -39,6 +40,8 @@ final class MediaPlaybackController extends ChangeNotifier {
   Timer? _ticker;
 
   bool get isPlaying => _playing;
+  bool get isReady => _viewId != null && !_loading && _error == null;
+  bool get isLoading => _loading;
   bool get ended => _ended;
   Duration get position => _position;
   Duration get duration => _duration;
@@ -49,6 +52,7 @@ final class MediaPlaybackController extends ChangeNotifier {
     _viewId = viewId;
     _attachmentVersion += 1;
     _playing = false;
+    _loading = true;
     _ended = false;
     _position = Duration.zero;
     _error = null;
@@ -59,7 +63,7 @@ final class MediaPlaybackController extends ChangeNotifier {
 
   Future<void> toggle() async {
     final viewId = _viewId;
-    if (viewId == null) return;
+    if (viewId == null || !isReady) return;
     final version = _attachmentVersion;
     final wasPlaying = _playing;
     try {
@@ -136,14 +140,20 @@ final class MediaPlaybackController extends ChangeNotifier {
       _position = snapshot.position;
       if (snapshot.duration > Duration.zero) _duration = snapshot.duration;
       _playing = snapshot.isPlaying;
+      _loading = snapshot.loading;
       _ended = snapshot.ended;
       _error = null;
-      if (snapshot.ended || !snapshot.isPlaying) _ticker?.cancel();
+      if (snapshot.loading) {
+        _startTicker(version);
+      } else if (snapshot.ended || !snapshot.isPlaying) {
+        _ticker?.cancel();
+      }
       notifyListeners();
     } catch (error) {
       if (_disposed || version != _attachmentVersion) return;
       _ticker?.cancel();
       _playing = false;
+      _loading = false;
       _error = error;
       notifyListeners();
     }
