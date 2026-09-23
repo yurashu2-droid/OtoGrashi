@@ -40,6 +40,26 @@ final class PlatformMediaGateway implements MediaGateway {
   );
 
   @override
+  Future<CameraFacing> switchCamera() => _capture(() async {
+    final facing = await _channel.invokeMethod<String>('switchCamera');
+    if (facing == null) {
+      throw const MediaContractException('Camera position is unavailable.');
+    }
+    return CameraFacing.values.byName(facing);
+  });
+
+  @override
+  Future<void> suspendCaptureForReview() =>
+      _capture(() => _channel.invokeMethod<void>('suspendCaptureForReview'));
+
+  @override
+  Future<void> discardStaged(String relativePath) => _capture(
+    () => _channel.invokeMethod<void>('discardStaged', <String, Object?>{
+      'relativePath': relativePath,
+    }),
+  );
+
+  @override
   Future<void> startCapture(String operationId, {required int maxDurationUs}) =>
       _capture(
         () => _channel.invokeMethod<void>('startCapture', <String, Object?>{

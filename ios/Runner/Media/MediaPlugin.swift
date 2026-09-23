@@ -72,6 +72,25 @@ final class MediaPlugin: NSObject, FlutterPlugin {
       capture.prepare { outcome in
         self.finish(result, outcome)
       }
+    case "switchCamera":
+      capture.switchCamera { outcome in self.finish(result, outcome) }
+    case "suspendCaptureForReview":
+      capture.suspendForReview { outcome in
+        switch outcome {
+        case .success: self.succeed(result, value: nil)
+        case .failure(let error): self.fail(result, error: error)
+        }
+      }
+    case "discardStaged":
+      guard let arguments = call.arguments as? [String: Any],
+        let relativePath = arguments["relativePath"] as? String
+      else { fail(result, error: CaptureServiceError.invalidMedia); return }
+      capture.discardStaged(relativePath: relativePath) { outcome in
+        switch outcome {
+        case .success: self.succeed(result, value: nil)
+        case .failure(let error): self.fail(result, error: error)
+        }
+      }
     case "startCapture":
       guard let arguments = call.arguments as? [String: Any],
         let operationId = arguments["operationId"] as? String,
@@ -642,7 +661,8 @@ struct ManagedMediaStore {
   }
 
   func resolvePlayable(relativePath: String) throws -> URL {
-    guard (relativePath.hasPrefix("originals/") || relativePath.hasPrefix("renders/")),
+    guard (relativePath.hasPrefix("originals/") || relativePath.hasPrefix("renders/")
+      || relativePath.hasPrefix("staging/")),
       safeRelativePath(relativePath)
     else { throw VideoRenderError.unsupportedContract }
     let root = try prepareRoot().resolvingSymlinksInPath()
@@ -654,6 +674,14 @@ struct ManagedMediaStore {
       values.isSymbolicLink != true
     else { throw VideoRenderError.missingAsset }
     return resolved
+  }
+
+  func discardStaged(relativePath: String) throws {
+    guard relativePath.hasPrefix("staging/"), safeRelativePath(relativePath) else {
+      throw CaptureServiceError.invalidMedia
+    }
+    let url = try resolvePlayable(relativePath: relativePath)
+    try fileManager.removeItem(at: url)
   }
 
   func resolveOriginals(assetIds: [String]) throws -> [String: URL] {

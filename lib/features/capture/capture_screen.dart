@@ -4,18 +4,22 @@ import 'package:flutter/material.dart';
 import '../../design/tokens.dart';
 import '../../design/capture_chrome.dart';
 import '../../media/media_messages.dart';
+import '../../media/media_presentation_gateway.dart';
+import '../export/media_playback.dart';
 import 'capture_controller.dart';
 import 'capture_state.dart';
 
 final class CaptureScreen extends StatefulWidget {
   const CaptureScreen({
     required this.controller,
+    this.presentation,
     this.onMediaReady,
     this.testFixture = false,
     super.key,
   });
 
   final CaptureController controller;
+  final MediaPresentationGateway? presentation;
   final VoidCallback? onMediaReady;
   final bool testFixture;
 
@@ -25,6 +29,17 @@ final class CaptureScreen extends StatefulWidget {
 
 final class _CaptureScreenState extends State<CaptureScreen> {
   int _durationUs = 3000000;
+  late final MediaPresentationGateway _presentation =
+      widget.presentation ?? PlatformMediaPresentationGateway();
+  late final MediaPlaybackController _playback = MediaPlaybackController(
+    _presentation,
+  );
+
+  @override
+  void dispose() {
+    _playback.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -32,6 +47,7 @@ final class _CaptureScreenState extends State<CaptureScreen> {
       animation: widget.controller,
       builder: (context, _) {
         final state = widget.controller.state;
+        final captured = state.capturedMedia;
         return Scaffold(
           appBar: AppBar(title: const Text('音を撮る')),
           body: SafeArea(
@@ -45,13 +61,51 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(24),
                     child: CaptureChrome(
-                      child: _CapturePreview(
-                        handle: state.handle,
-                        testFixture: widget.testFixture,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (state.phase == CapturePhase.completed &&
+                              captured != null)
+                            NativeMovieView(
+                              key: ValueKey(captured.relativePath),
+                              relativePath: captured.relativePath,
+                              gateway: _presentation,
+                              controller: _playback,
+                              fallback: const ColoredBox(
+                                color: Color(0xFF252126),
+                                child: Center(child: Text('撮った動画のプレビュー')),
+                              ),
+                            )
+                          else
+                            _CapturePreview(
+                              handle: state.handle,
+                              testFixture: widget.testFixture,
+                            ),
+                          if (state.phase == CapturePhase.ready)
+                            Positioned(
+                              top: 65,
+                              right: 12,
+                              child: FilledButton.tonalIcon(
+                                onPressed: widget.controller.isSwitchingCamera
+                                    ? null
+                                    : widget.controller.switchCamera,
+                                icon: const Icon(
+                                  Icons.flip_camera_ios_outlined,
+                                ),
+                                label: Text(
+                                  state.cameraFacing == CameraFacing.back
+                                      ? 'インカメに切替'
+                                      : '外カメに切替',
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   ),
                 ),
+                if (state.phase == CapturePhase.recording)
+                  LinearProgressIndicator(value: state.progress),
                 const SizedBox(height: AppTokens.smallGap),
                 Text(
                   _statusText(state),
@@ -109,7 +163,9 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                     onPressed: widget.controller.stop,
                     child: const Text('■  録画を止める'),
                   ),
-                if (!state.isBusy && state.phase != CapturePhase.recording) ...[
+                if (!state.isBusy &&
+                    state.phase != CapturePhase.recording &&
+                    state.phase != CapturePhase.completed) ...[
                   const SizedBox(height: AppTokens.controlGap),
                   OutlinedButton(
                     onPressed: widget.controller.importVideo,
@@ -118,6 +174,57 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                 ],
                 if (state.phase == CapturePhase.completed) ...[
                   const SizedBox(height: AppTokens.controlGap),
+                  AnimatedBuilder(
+                    animation: _playback,
+                    builder: (context, _) => Column(
+                      children: [
+                        Row(
+                          children: [
+                            FilledButton.tonalIcon(
+                              onPressed: _playback.toggle,
+                              icon: Icon(
+                                _playback.isPlaying
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                              ),
+                              label: Text(
+                                _playback.isPlaying ? '一時停止' : '再生して確認',
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                '${_playback.position.inSeconds} / ${state.capturedMedia!.durationUs ~/ 1000000}秒',
+                                textAlign: TextAlign.end,
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_playback.error != null)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 8),
+                            child: Text('再生できませんでした。撮り直すか、別の動画を選んでください。'),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppTokens.smallGap),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      await _playback.pause();
+                      await widget.controller.retake();
+                    },
+                    icon: const Icon(Icons.restart_alt_rounded),
+                    label: const Text('撮り直す'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await _playback.pause();
+                      await widget.controller.chooseAnotherVideo();
+                    },
+                    child: const Text('別の動画を選ぶ'),
+                  ),
+                  const SizedBox(height: AppTokens.smallGap),
                   FilledButton(
                     onPressed: widget.onMediaReady,
                     child: const Text('この音を使う'),
@@ -139,7 +246,7 @@ final class _CaptureScreenState extends State<CaptureScreen> {
     CapturePhase.recording => '録画中',
     CapturePhase.stopping => '動画を確定しています',
     CapturePhase.importing => '動画を読み込んでいます',
-    CapturePhase.completed => '音のある動画を保存しました',
+    CapturePhase.completed => '動画と音を確認してください',
     CapturePhase.permissionDenied => 'カメラとマイクを利用できません',
     CapturePhase.interrupted => '録画が中断されました',
     CapturePhase.failed => '動画を保存できませんでした',

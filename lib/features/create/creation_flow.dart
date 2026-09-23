@@ -17,6 +17,7 @@ import '../../storage/project_repository.dart';
 import '../../features/capture/capture_controller.dart';
 import '../../features/capture/capture_screen.dart';
 import '../../media/media_gateway.dart';
+import '../../media/media_presentation_gateway.dart';
 import '../../media/media_delivery_gateway.dart';
 import '../export/media_playback.dart';
 import 'creation_controller.dart';
@@ -55,7 +56,10 @@ class _CreationFlowState extends State<CreationFlow> {
   Future<void> _openCapture() async {
     final captured = await Navigator.of(context).push<CapturedMedia>(
       MaterialPageRoute(
-        builder: (_) => _CaptureRoute(media: widget.media),
+        builder: (_) => _CaptureRoute(
+          media: widget.media,
+          presentation: widget.controller.presentation,
+        ),
         fullscreenDialog: true,
       ),
     );
@@ -1065,14 +1069,16 @@ class _SyntheticPreview extends StatelessWidget {
 }
 
 class _CaptureRoute extends StatefulWidget {
-  const _CaptureRoute({required this.media});
+  const _CaptureRoute({required this.media, required this.presentation});
   final MediaGateway media;
+  final MediaPresentationGateway presentation;
 
   @override
   State<_CaptureRoute> createState() => _CaptureRouteState();
 }
 
 class _CaptureRouteState extends State<_CaptureRoute> {
+  bool _committed = false;
   late final CaptureController controller = CaptureController(
     widget.media,
     operationIdFactory: () =>
@@ -1081,17 +1087,33 @@ class _CaptureRouteState extends State<_CaptureRoute> {
 
   @override
   void dispose() {
+    final unselected = controller.state.capturedMedia;
+    if (!_committed && unselected != null) {
+      unawaited(_discardUnselected(unselected.relativePath));
+    }
     unawaited(controller.releaseCapture());
     controller.dispose();
     super.dispose();
   }
 
+  Future<void> _discardUnselected(String path) async {
+    try {
+      await widget.media.discardStaged(path);
+    } catch (_) {
+      // Leaving this screen should still succeed if staging cleanup fails.
+    }
+  }
+
   @override
   Widget build(BuildContext context) => CaptureScreen(
     controller: controller,
+    presentation: widget.presentation,
     onMediaReady: () {
       final media = controller.state.capturedMedia;
-      if (media != null) Navigator.pop(context, media);
+      if (media != null) {
+        _committed = true;
+        Navigator.pop(context, media);
+      }
     },
   );
 }

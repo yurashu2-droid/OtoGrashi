@@ -152,6 +152,33 @@ void main() {
     expect(controller.state.phase, CapturePhase.completed);
     expect(controller.state.savedAssetId, 'asset-1');
     expect(gateway.maxDurationUs, 6000000);
+    expect(gateway.suspendCalls, 1);
+  });
+
+  test('switches cameras only while ready', () async {
+    await controller.switchCamera();
+    expect(gateway.switchCalls, 0);
+    await controller.prepare();
+    await controller.switchCamera();
+    expect(controller.state.cameraFacing, CameraFacing.front);
+    expect(gateway.switchCalls, 1);
+    await controller.record();
+    await controller.switchCamera();
+    expect(gateway.switchCalls, 1);
+  });
+
+  test('retake discards the preview and restores the camera', () async {
+    await controller.prepare();
+    await controller.record();
+    await controller.stop();
+    final oldPath = controller.state.capturedMedia!.relativePath;
+
+    await controller.retake();
+
+    expect(gateway.discardedPaths, [oldPath]);
+    expect(gateway.prepareCalls, 2);
+    expect(controller.state.phase, CapturePhase.ready);
+    expect(controller.state.capturedMedia, isNull);
   });
 
   test(
@@ -208,6 +235,9 @@ final class _FakeMediaGateway implements MediaGateway {
   int stopCalls = 0;
   int prepareCalls = 0;
   int? maxDurationUs;
+  int switchCalls = 0;
+  int suspendCalls = 0;
+  final discardedPaths = <String>[];
   final startedOperations = <String>[];
 
   void emit(MediaEvent event) => _events.add(event);
@@ -224,6 +254,22 @@ final class _FakeMediaGateway implements MediaGateway {
     return prepareResult == null
         ? const CaptureHandle(previewViewType: 'capture-preview')
         : prepareResult!.future;
+  }
+
+  @override
+  Future<CameraFacing> switchCamera() async {
+    switchCalls += 1;
+    return CameraFacing.front;
+  }
+
+  @override
+  Future<void> suspendCaptureForReview() async {
+    suspendCalls += 1;
+  }
+
+  @override
+  Future<void> discardStaged(String relativePath) async {
+    discardedPaths.add(relativePath);
   }
 
   @override

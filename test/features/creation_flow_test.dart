@@ -593,6 +593,12 @@ final class _FakeMedia implements MediaGateway {
   Future<CaptureHandle> prepareCapture() async =>
       const CaptureHandle(previewViewType: 'test-capture-preview');
   @override
+  Future<CameraFacing> switchCamera() async => CameraFacing.front;
+  @override
+  Future<void> suspendCaptureForReview() async {}
+  @override
+  Future<void> discardStaged(String relativePath) async {}
+  @override
   Future<void> startCapture(String operationId, {required int maxDurationUs}) =>
       throw UnimplementedError();
   @override

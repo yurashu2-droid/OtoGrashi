@@ -18,6 +18,7 @@ final class CaptureState {
   const CaptureState({
     this.phase = CapturePhase.idle,
     this.handle,
+    this.cameraFacing = CameraFacing.back,
     this.operationId,
     this.progress = 0,
     this.savedAssetId,
@@ -29,6 +30,7 @@ final class CaptureState {
 
   final CapturePhase phase;
   final CaptureHandle? handle;
+  final CameraFacing cameraFacing;
   final String? operationId;
   final double progress;
   final String? savedAssetId;
@@ -55,6 +57,7 @@ final class CaptureState {
   CaptureState copyWith({
     CapturePhase? phase,
     CaptureHandle? handle,
+    CameraFacing? cameraFacing,
     String? operationId,
     double? progress,
     String? savedAssetId,
@@ -63,11 +66,14 @@ final class CaptureState {
     String? message,
     bool? requiresExplicitResume,
     bool clearResult = false,
+    bool clearHandle = false,
+    bool clearOperation = false,
     bool clearError = false,
   }) => CaptureState(
     phase: phase ?? this.phase,
-    handle: handle ?? this.handle,
-    operationId: operationId ?? this.operationId,
+    handle: clearHandle ? null : handle ?? this.handle,
+    cameraFacing: cameraFacing ?? this.cameraFacing,
+    operationId: clearOperation ? null : operationId ?? this.operationId,
     progress: progress ?? this.progress,
     savedAssetId: clearResult ? null : savedAssetId ?? this.savedAssetId,
     capturedMedia: clearResult ? null : capturedMedia ?? this.capturedMedia,

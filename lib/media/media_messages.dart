@@ -6,6 +6,8 @@ enum RenderQuality { preview, full }
 
 enum MediaEventType { recording, progress, completed, interrupted, failed }
 
+enum CameraFacing { back, front }
+
 enum MediaCaptureErrorCode {
   permissionDenied,
   unavailable,
@@ -28,17 +30,26 @@ final class MediaCaptureException implements Exception {
 }
 
 final class CaptureHandle {
-  const CaptureHandle({required this.previewViewType});
+  const CaptureHandle({
+    required this.previewViewType,
+    this.cameraFacing = CameraFacing.back,
+  });
 
   factory CaptureHandle.fromJson(Map<String, Object?> json) {
     try {
-      return CaptureHandle(previewViewType: json['previewViewType'] as String);
+      return CaptureHandle(
+        previewViewType: json['previewViewType'] as String,
+        cameraFacing: CameraFacing.values.byName(
+          (json['cameraFacing'] as String?) ?? CameraFacing.back.name,
+        ),
+      );
     } on TypeError {
       throw const MediaContractException('Malformed capture handle.');
     }
   }
 
   final String previewViewType;
+  final CameraFacing cameraFacing;
 }
 
 class InspectedMedia {

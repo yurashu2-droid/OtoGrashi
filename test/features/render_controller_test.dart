@@ -292,6 +292,12 @@ Project _projectAtRevision(int revision) {
 }
 
 final class _FakeMediaGateway implements MediaGateway {
+  @override
+  Future<CameraFacing> switchCamera() async => CameraFacing.front;
+  @override
+  Future<void> suspendCaptureForReview() async {}
+  @override
+  Future<void> discardStaged(String relativePath) async {}
   final List<RenderRequest> requests = <RenderRequest>[];
   final List<String> cancelledOperationIds = <String>[];
   final Map<String, Completer<RenderedMedia>> _renders =

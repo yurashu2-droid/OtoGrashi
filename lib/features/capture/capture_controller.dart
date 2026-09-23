@@ -18,11 +18,13 @@ final class CaptureController extends ChangeNotifier {
   late final StreamSubscription<MediaEvent> _events;
   CaptureState _state = const CaptureState();
   Future<void>? _preparing;
+  bool _switchingCamera = false;
   bool _disposed = false;
   Future<void>? _release;
 
   CaptureState get state => _state;
   String? get operationId => _state.operationId;
+  bool get isSwitchingCamera => _switchingCamera;
 
   Future<void> prepare() {
     if (_preparing case final pending?) return pending;
@@ -44,7 +46,13 @@ final class CaptureController extends ChangeNotifier {
     try {
       final handle = await _gateway.prepareCapture();
       if (_disposed) return;
-      _set(_state.copyWith(phase: CapturePhase.ready, handle: handle));
+      _set(
+        _state.copyWith(
+          phase: CapturePhase.ready,
+          handle: handle,
+          cameraFacing: handle.cameraFacing,
+        ),
+      );
     } on MediaCaptureException catch (error) {
       _fail(error);
     } catch (error) {
@@ -54,6 +62,23 @@ final class CaptureController extends ChangeNotifier {
           error.toString(),
         ),
       );
+    }
+  }
+
+  Future<void> switchCamera() async {
+    if (_state.phase != CapturePhase.ready || _switchingCamera) return;
+    _switchingCamera = true;
+    notifyListeners();
+    try {
+      final facing = await _gateway.switchCamera();
+      if (!_disposed && _state.phase == CapturePhase.ready) {
+        _set(_state.copyWith(cameraFacing: facing, clearError: true));
+      }
+    } on MediaCaptureException catch (error) {
+      if (!_disposed) _set(_state.copyWith(message: error.message));
+    } finally {
+      _switchingCamera = false;
+      if (!_disposed) notifyListeners();
     }
   }
 
@@ -106,6 +131,7 @@ final class CaptureController extends ChangeNotifier {
           'The finalized recording belongs to another operation.',
         );
       }
+      await _gateway.suspendCaptureForReview();
       _set(
         _state.copyWith(
           phase: CapturePhase.completed,
@@ -146,6 +172,7 @@ final class CaptureController extends ChangeNotifier {
           ),
         );
       } else {
+        await _gateway.suspendCaptureForReview();
         _set(
           _state.copyWith(
             phase: CapturePhase.completed,
@@ -157,6 +184,49 @@ final class CaptureController extends ChangeNotifier {
       }
     } on MediaCaptureException catch (error) {
       if (_state.operationId == id) _fail(error);
+    }
+  }
+
+  Future<void> retake() async {
+    final media = _state.capturedMedia;
+    if (_state.phase != CapturePhase.completed || media == null) return;
+    _set(
+      _state.copyWith(
+        phase: CapturePhase.preparing,
+        clearResult: true,
+        clearOperation: true,
+        clearHandle: true,
+        clearError: true,
+        progress: 0,
+      ),
+    );
+    try {
+      await _gateway.discardStaged(media.relativePath);
+      await _prepare();
+    } on MediaCaptureException catch (error) {
+      _fail(error);
+    }
+  }
+
+  Future<void> chooseAnotherVideo() async {
+    final media = _state.capturedMedia;
+    if (_state.phase != CapturePhase.completed || media == null) return;
+    _set(
+      _state.copyWith(
+        phase: CapturePhase.importing,
+        clearResult: true,
+        clearOperation: true,
+        clearHandle: true,
+        clearError: true,
+        progress: 0,
+      ),
+    );
+    try {
+      await _gateway.discardStaged(media.relativePath);
+      _set(_state.copyWith(phase: CapturePhase.idle));
+      await importVideo();
+    } on MediaCaptureException catch (error) {
+      _fail(error);
     }
   }
 

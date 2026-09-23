@@ -45,7 +45,7 @@ struct CaptureLifecycle {
   private(set) var operationId: String?
 
   mutating func beginPreparing() throws {
-    guard phase == .idle || phase == .interrupted else {
+    guard phase == .idle || phase == .ready || phase == .interrupted else {
       throw CaptureServiceError.invalidState
     }
     operationId = nil
@@ -301,7 +301,8 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
             try self.lifecycle.finishPreparing()
             if !self.session.isRunning { self.session.startRunning() }
             completion(.success([
-              "previewViewType": MediaPlugin.previewViewType
+              "previewViewType": MediaPlugin.previewViewType,
+              "cameraFacing": self.currentCameraFacing()
             ]))
           } catch {
             if self.ownsAudioSession {
@@ -312,6 +313,65 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
             completion(.failure(error))
           }
         }
+      }
+    }
+  }
+
+  func switchCamera(completion: @escaping (Result<String, Error>) -> Void) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      guard self.lifecycle.phase == .ready, self.session.isRunning,
+        let oldInput = self.session.inputs
+          .compactMap({ $0 as? AVCaptureDeviceInput })
+          .first(where: { $0.device.hasMediaType(.video) })
+      else { completion(.failure(CaptureServiceError.invalidState)); return }
+      let target: AVCaptureDevice.Position = oldInput.device.position == .front ? .back : .front
+      guard let camera = AVCaptureDevice.default(
+        .builtInWideAngleCamera, for: .video, position: target
+      ) else { completion(.failure(CaptureServiceError.unavailable)); return }
+      do {
+        let newInput = try AVCaptureDeviceInput(device: camera)
+        self.session.beginConfiguration()
+        self.session.removeInput(oldInput)
+        if self.session.canAddInput(newInput) {
+          self.session.addInput(newInput)
+          self.session.commitConfiguration()
+          completion(.success(target == .front ? "front" : "back"))
+        } else {
+          self.session.addInput(oldInput)
+          self.session.commitConfiguration()
+          completion(.failure(CaptureServiceError.unavailable))
+        }
+      } catch {
+        completion(.failure(error))
+      }
+    }
+  }
+
+  func suspendForReview(completion: @escaping (Result<Void, Error>) -> Void) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      guard self.lifecycle.phase == .ready || self.lifecycle.phase == .idle else {
+        completion(.failure(CaptureServiceError.invalidState))
+        return
+      }
+      if self.session.isRunning { self.session.stopRunning() }
+      if self.ownsAudioSession {
+        self.audioSession.deactivateRecording()
+        self.ownsAudioSession = false
+      }
+      completion(.success(()))
+    }
+  }
+
+  func discardStaged(relativePath: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      do {
+        try self.store.discardStaged(relativePath: relativePath)
+        completion(.success(()))
+      } catch {
+        completion(.failure(error))
       }
     }
   }
@@ -697,6 +757,12 @@ final class CaptureService: NSObject, AVCaptureFileOutputRecordingDelegate,
     session.addInput(microphoneInput)
     session.addOutput(output)
     output.movieFragmentInterval = .invalid
+  }
+
+  private func currentCameraFacing() -> String {
+    let input = session.inputs.compactMap { $0 as? AVCaptureDeviceInput }
+      .first(where: { $0.device.hasMediaType(.video) })
+    return input?.device.position == .front ? "front" : "back"
   }
 
   private func payload(
