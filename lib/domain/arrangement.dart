@@ -184,6 +184,7 @@ final class Arrangement {
     required this.seed,
     required this.style,
     this.melodyTemplate = MelodyTemplate.none,
+    this.songRoles,
     required List<String> sourceAssetIds,
     required List<String> unusableAssetIds,
     required List<SoundEvent> events,
@@ -199,6 +200,15 @@ final class Arrangement {
         events.length > 64 ||
         videoEvents.length > 64) {
       throw const MediaContractException('Arrangement exceeds schema limits.');
+    }
+    if (songRoles != null &&
+        [
+          songRoles!.beat,
+          songRoles!.bass,
+          songRoles!.keys,
+          songRoles!.melody,
+        ].whereType<String>().any((id) => !sourceAssetIds.contains(id))) {
+      throw const MediaContractException('Song role source is not in project.');
     }
     if (sampleRate != 48000 || totalSamples != 720000) {
       throw const MediaContractException('Unsupported arrangement clock.');
@@ -288,6 +298,11 @@ final class Arrangement {
         melodyTemplate: MelodyTemplate.values.byName(
           json['melodyTemplate'] as String? ?? MelodyTemplate.none.name,
         ),
+        songRoles: json['songRoles'] is Map<Object?, Object?>
+            ? SongRoles.fromJson(
+                (json['songRoles'] as Map<Object?, Object?>).cast(),
+              )
+            : null,
         sourceAssetIds: sourceValues.cast<String>(),
         unusableAssetIds: unusableValues.cast<String>(),
         events: eventValues
@@ -322,6 +337,7 @@ final class Arrangement {
   final int seed;
   final ArrangementStyle style;
   final MelodyTemplate melodyTemplate;
+  final SongRoles? songRoles;
   final List<String> sourceAssetIds;
   final List<String> unusableAssetIds;
   final List<SoundEvent> events;
@@ -339,6 +355,7 @@ final class Arrangement {
     'style': style.name,
     if (melodyTemplate != MelodyTemplate.none)
       'melodyTemplate': melodyTemplate.name,
+    if (songRoles != null) 'songRoles': songRoles!.toJson(),
     'sourceAssetIds': sourceAssetIds,
     'unusableAssetIds': unusableAssetIds,
     'events': events.map((event) => event.toJson()).toList(),

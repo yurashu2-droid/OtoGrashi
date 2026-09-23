@@ -46,6 +46,64 @@ class CreationFlow extends StatefulWidget {
   State<CreationFlow> createState() => _CreationFlowState();
 }
 
+final class _SongRoleSummary extends StatelessWidget {
+  const _SongRoleSummary({required this.state});
+
+  final CreationState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final arrangement = state.project?.arrangement;
+    final roles =
+        arrangement != null &&
+            arrangement['melodyTemplate'] == state.melody.name
+        ? arrangement['songRoles']
+        : null;
+    if (roles is! Map) {
+      return Text(
+        '撮った音の担当を探しています…',
+        style: Theme.of(context).textTheme.bodySmall,
+      );
+    }
+    String name(Object? id) {
+      if (id is! String) return 'お休み';
+      for (final clip in state.clips) {
+        if (clip.id == id) return clip.label;
+      }
+      return 'お休み';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('撮った音の担当', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final entry in <String, Object?>{
+                '拍': roles['beat'],
+                'ベース風': roles['bass'],
+                'ピアノ風': roles['keys'],
+                '旋律': roles['melody'],
+              }.entries)
+                Chip(label: Text('${entry.key}  ${name(entry.value)}')),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'どの役割も、撮った音だけで鳴らしています',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _CreationFlowState extends State<CreationFlow> {
   var _captureOpened = false;
   late int _tabIndex = widget.startInLibrary ? 1 : 0;
@@ -979,7 +1037,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
             ),
             const SizedBox(height: 16),
             const Text(
-              'メロディをつける',
+              '曲のかたち',
               style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
             ),
             const SizedBox(height: 8),
@@ -1001,10 +1059,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               style: Theme.of(context).textTheme.bodySmall,
             ),
             if (state.melody != MelodyTemplate.none)
-              Text(
-                '伸びる声や長い音があると、その音で旋律をつくります',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+              _SongRoleSummary(state: state),
             const SizedBox(height: 12),
             OutlinedButton(
               onPressed: widget.controller.another,

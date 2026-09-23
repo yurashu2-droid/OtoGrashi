@@ -214,7 +214,7 @@ struct AudioRenderer {
   let accompanimentGain: Float
   private let reader = NativePCMReader()
 
-  init(originalGain: Float = 1, accompanimentGain: Float = 0.025) {
+  init(originalGain: Float = 1, accompanimentGain: Float = 0) {
     self.originalGain = max(0, min(originalGain.isFinite ? originalGain : 0, 1))
     self.accompanimentGain = max(
       0,

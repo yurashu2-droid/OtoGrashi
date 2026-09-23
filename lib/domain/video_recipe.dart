@@ -1,4 +1,5 @@
 import 'arrangement.dart';
+import 'melody_template.dart';
 
 enum VideoLayout { buildUp, stacked, sequentialFocus, photoDump }
 
@@ -188,21 +189,28 @@ final class VideoRecipe {
         'Video recipes require 3 to 6 sources.',
       );
     }
-    final visibleIds = ids
+    final usableIds = ids
         .where((id) => !arrangement.unusableAssetIds.contains(id))
         .toList(growable: false);
-    if (visibleIds.length < 3) {
+    if (usableIds.length < 3) {
       throw const MediaContractException(
         'Video recipes require 3 usable sources.',
       );
     }
+    final roles = arrangement.songRoles;
+    final visibleIds = <String>{
+      if (roles?.beat != null) roles!.beat!,
+      if (roles?.bass != null) roles!.bass!,
+      if (roles?.keys != null) roles!.keys!,
+      ...usableIds,
+    }.toList(growable: false);
     return VideoRecipe(
       layout: layout,
       clipCrops: ids
           .map((id) => ClipCrop(assetId: id, crop: NormalizedCrop.fullFrame))
           .toList(),
       captions: const <VideoCaption>[],
-      events: _buildScenes(visibleIds, layout, arrangement.events),
+      events: _buildScenes(visibleIds, layout, arrangement.events, roles),
     );
   }
 
@@ -298,6 +306,7 @@ List<VideoSceneEvent> _buildScenes(
   List<String> ids,
   VideoLayout layout,
   List<SoundEvent> sounds,
+  SongRoles? roles,
 ) {
   switch (layout) {
     case VideoLayout.buildUp:
@@ -307,7 +316,21 @@ List<VideoSceneEvent> _buildScenes(
         final end = start + Arrangement.barSamples;
         final visible = <String>[];
         if (bar < 3) {
-          visible.add(ids[bar]);
+          final roleId = switch (bar) {
+            0 => roles?.beat,
+            1 => roles?.bass,
+            _ => roles?.keys,
+          };
+          final sounding = sounds
+              .where(
+                (event) =>
+                    event.destinationStartSample < end &&
+                    event.destinationStartSample + event.durationSamples >
+                        start,
+              )
+              .map((event) => event.assetId)
+              .firstOrNull;
+          visible.add(roleId ?? sounding ?? ids[bar]);
         } else {
           visible.add(ids.first);
           final sounding = sounds

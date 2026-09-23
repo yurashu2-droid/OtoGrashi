@@ -41,113 +41,83 @@ Arrangement arrange({
   final template = _templates[style]!;
   final random = _XorShift32(seed);
   final events = <SoundEvent>[];
+  SongRoles? songRoles;
 
-  // Introduce each sound alone, then let its own rhythm build within the bar.
-  for (var bar = 0; bar < 3; bar++) {
-    final clip = usable[bar % usable.length];
-    for (var beat = 0; beat < bar + 2; beat++) {
-      events.add(
-        _event(
-          clip,
-          bar * Arrangement.barSamples + beat * Arrangement.beatSamples,
-          template,
-          random,
-          intro: true,
-        ),
-      );
-    }
-  }
-
-  final secondary = usable.length > 3
-      ? usable.sublist(3)
-      : const <AnalyzedClip>[];
-  var mixIndex = 0;
-  // Bars 4–7 combine sources using the style's explicit density and swing.
-  for (var bar = 3; bar < 7; bar++) {
-    // The bottom lane is a real repeating sound, rather than silent motion.
-    for (final beat in const [0, 2]) {
-      events.add(
-        _event(
-          usable.first,
-          bar * Arrangement.barSamples + beat * Arrangement.beatSamples,
-          template,
-          random,
-        ),
-      );
-    }
-    for (var step = 0; step < template.mixOffsets.length; step++) {
-      final clip = mixIndex < secondary.length
-          ? secondary[mixIndex]
-          : usable[random.nextInt(usable.length)];
-      final swing = step.isOdd ? template.swingSamples : 0;
-      events.add(
-        _event(
-          clip,
-          bar * Arrangement.barSamples + template.mixOffsets[step] + swing,
-          template,
-          random,
-        ),
-      );
-      mixIndex++;
-    }
-  }
-
-  // Bar 8 creates a recognizable pickup into the next 15-second loop.
-  for (var step = 0; step < template.outroOffsets.length; step++) {
-    final clip = usable[(step + random.nextInt(usable.length)) % usable.length];
-    events.add(
-      _event(
-        clip,
-        7 * Arrangement.barSamples + template.outroOffsets[step],
-        template,
-        random,
-        outro: true,
-      ),
+  if (melodyTemplate != MelodyTemplate.none) {
+    final song = _buildSongEvents(
+      usable,
+      style,
+      melodyTemplate,
+      template,
+      random,
     );
-  }
+    events.addAll(song.events);
+    songRoles = song.roles;
+  } else {
+    // Introduce each sound alone, then let its own rhythm build within the bar.
+    for (var bar = 0; bar < 3; bar++) {
+      final clip = usable[bar % usable.length];
+      for (var beat = 0; beat < bar + 2; beat++) {
+        events.add(
+          _event(
+            clip,
+            bar * Arrangement.barSamples + beat * Arrangement.beatSamples,
+            template,
+            random,
+            intro: true,
+          ),
+        );
+      }
+    }
 
-  final melodicSource =
-      usable
-          .where(
-            (clip) =>
-                clip.suggestedRole == SuggestedRole.sustain &&
-                clip.durationSamples >= 18000 &&
-                clip.rms >= 0.03,
-          )
-          .toList()
-        ..sort((a, b) => b.rms.compareTo(a.rms));
-  if (melodyTemplate != MelodyTemplate.none && melodicSource.isNotEmpty) {
-    final melodyEvents = <SoundEvent>[];
-    for (var step = 0; step < melodyTemplate.notes.length; step++) {
-      final note = melodyTemplate.notes[step];
-      final pitch = note.pitchSemitones;
-      if (pitch == null) continue;
-      final clip = melodicSource.first;
-      const duration = 18000;
-      final maxStart = clip.sourceStartSample + clip.durationSamples - duration;
-      final onset = clip.onsetSamples.firstOrNull ?? clip.sourceStartSample;
-      final sourceStart = onset.clamp(clip.sourceStartSample, maxStart).toInt();
-      melodyEvents.add(
-        SoundEvent(
-          assetId: clip.assetId,
-          sourceStartSample: sourceStart,
-          destinationStartSample:
-              3 * Arrangement.barSamples +
-              step * 45000 +
-              (note.delayed ? 11250 : 0),
-          durationSamples: duration,
-          gain: 0.62,
-          fades: const EventFades(fadeInSamples: 800, fadeOutSamples: 1200),
-          pitchSemitones: pitch,
+    final secondary = usable.length > 3
+        ? usable.sublist(3)
+        : const <AnalyzedClip>[];
+    var mixIndex = 0;
+    // Bars 4–7 combine sources using the style's explicit density and swing.
+    for (var bar = 3; bar < 7; bar++) {
+      // The bottom lane is a real repeating sound, rather than silent motion.
+      for (final beat in const [0, 2]) {
+        events.add(
+          _event(
+            usable.first,
+            bar * Arrangement.barSamples + beat * Arrangement.beatSamples,
+            template,
+            random,
+          ),
+        );
+      }
+      for (var step = 0; step < template.mixOffsets.length; step++) {
+        final clip = mixIndex < secondary.length
+            ? secondary[mixIndex]
+            : usable[random.nextInt(usable.length)];
+        final swing = step.isOdd ? template.swingSamples : 0;
+        events.add(
+          _event(
+            clip,
+            bar * Arrangement.barSamples + template.mixOffsets[step] + swing,
+            template,
+            random,
+          ),
+        );
+        mixIndex++;
+      }
+    }
+
+    // Bar 8 creates a recognizable pickup into the next 15-second loop.
+    for (var step = 0; step < template.outroOffsets.length; step++) {
+      final clip =
+          usable[(step + random.nextInt(usable.length)) % usable.length];
+      events.add(
+        _event(
+          clip,
+          7 * Arrangement.barSamples + template.outroOffsets[step],
+          template,
+          random,
+          outro: true,
         ),
       );
     }
-    // The busiest rhythm already uses 57 of the 64 event slots. Give the
-    // melody priority over one repeated pickup at the very end when needed.
-    while (events.length + melodyEvents.length > 64) {
-      events.removeLast();
-    }
-    events.addAll(melodyEvents);
   }
 
   final videoEvents = events
@@ -173,10 +143,221 @@ Arrangement arrange({
     seed: random.initialState,
     style: style,
     melodyTemplate: melodyTemplate,
+    songRoles: songRoles,
     sourceAssetIds: clips.map((clip) => clip.assetId).toList(),
     unusableAssetIds: unusable,
     events: events,
     videoEvents: videoEvents,
+  );
+}
+
+final class _SongEvents {
+  const _SongEvents(this.events, this.roles);
+  final List<SoundEvent> events;
+  final SongRoles roles;
+}
+
+_SongEvents _buildSongEvents(
+  List<AnalyzedClip> usable,
+  ArrangementStyle style,
+  MelodyTemplate song,
+  _ArrangementTemplate rhythm,
+  _XorShift32 random,
+) {
+  List<AnalyzedClip> ranked(Iterable<AnalyzedClip> clips) =>
+      clips.toList()..sort((a, b) => b.rms.compareTo(a.rms));
+
+  final beats = ranked(
+    usable.where((clip) => clip.suggestedRole == SuggestedRole.transient),
+  );
+  final beat =
+      beats.firstOrNull ??
+      ranked(
+        usable.where(
+          (clip) =>
+              clip.suggestedRole == SuggestedRole.texture &&
+              clip.onsetSamples.length >= 2,
+        ),
+      ).firstOrNull;
+  final sustained = ranked(
+    usable.where(
+      (clip) =>
+          clip.suggestedRole == SuggestedRole.sustain &&
+          clip.durationSamples >= 18000 &&
+          clip.rms >= 0.03,
+    ),
+  );
+  final bass = sustained.firstOrNull;
+  final otherLongSounds = ranked(
+    usable.where(
+      (clip) =>
+          clip.assetId != beat?.assetId &&
+          clip.assetId != bass?.assetId &&
+          clip.suggestedRole != SuggestedRole.transient &&
+          clip.durationSamples >= 18000 &&
+          clip.rms >= 0.03,
+    ),
+  );
+  final otherHits = ranked(
+    usable.where(
+      (clip) =>
+          clip.suggestedRole == SuggestedRole.transient &&
+          clip.assetId != beat?.assetId,
+    ),
+  );
+  final keys =
+      otherLongSounds.firstOrNull ??
+      otherHits.firstOrNull ??
+      sustained.skip(1).firstOrNull ??
+      bass;
+  final roles = SongRoles(
+    beat: beat?.assetId,
+    bass: bass?.assetId,
+    keys: keys?.assetId,
+    melody: bass?.assetId,
+  );
+
+  final events = <SoundEvent>[];
+  for (var bar = 0; bar < 8; bar++) {
+    final start = bar * Arrangement.barSamples;
+    if (bar == 0 && beat == null) {
+      events.add(
+        _songEvent(
+          usable.first,
+          start,
+          rhythm,
+          random,
+          durationCap: 18000,
+          gain: 0.48,
+          fadeIn: 300,
+          fadeOut: 1200,
+        ),
+      );
+    }
+    if (beat != null) {
+      final count = style == ArrangementStyle.lively ? 3 : 2;
+      for (final offset in song.beatOffsets.take(count)) {
+        events.add(
+          _songEvent(
+            beat,
+            start + offset,
+            rhythm,
+            random,
+            durationCap: 11000,
+            gain: 0.72,
+            fadeIn: 120,
+            fadeOut: 480,
+          ),
+        );
+      }
+    }
+    if (bar >= 1 && bass != null) {
+      final count = style == ArrangementStyle.sparse ? 1 : 2;
+      for (final offset in song.bassOffsets.take(count)) {
+        events.add(
+          _songEvent(
+            bass,
+            start + offset,
+            rhythm,
+            random,
+            durationCap: 22500,
+            gain: 0.53,
+            fadeIn: 900,
+            fadeOut: 2400,
+            pitch: bar.isEven ? -3 : -2,
+          ),
+        );
+      }
+    }
+    if (bar >= 2 && keys != null) {
+      final count = style == ArrangementStyle.sparse ? 1 : 2;
+      for (var index = 0; index < count; index++) {
+        events.add(
+          _songEvent(
+            keys,
+            start + song.keysOffsets[index],
+            rhythm,
+            random,
+            durationCap: 14000,
+            gain: 0.46,
+            fadeIn: 300,
+            fadeOut: 6800,
+            pitch: index.isEven ? 2 : 0,
+          ),
+        );
+      }
+    }
+    if (bar >= 3 && bar < 7 && bass != null) {
+      for (var half = 0; half < 2; half++) {
+        final note = song.notes[(bar - 3) * 2 + half];
+        final pitch = note.pitchSemitones;
+        if (pitch == null) continue;
+        events.add(
+          _songEvent(
+            bass,
+            start + half * 45000 + (note.delayed ? 11250 : 0),
+            rhythm,
+            random,
+            durationCap: 18000,
+            gain: 0.58,
+            fadeIn: 700,
+            fadeOut: 1500,
+            pitch: pitch,
+          ),
+        );
+      }
+    }
+  }
+
+  // Give every usable video a brief audible moment even if it has no
+  // suitable musical role. It remains its own recorded sound and image.
+  final used = events.map((event) => event.assetId).toSet();
+  var fill = 0;
+  for (final clip in usable) {
+    if (used.contains(clip.assetId)) continue;
+    events.add(
+      _songEvent(
+        clip,
+        2 * Arrangement.barSamples + fill * 11250,
+        rhythm,
+        random,
+        durationCap: 12000,
+        gain: 0.48,
+        fadeIn: 300,
+        fadeOut: 1200,
+      ),
+    );
+    fill++;
+  }
+  return _SongEvents(events, roles);
+}
+
+SoundEvent _songEvent(
+  AnalyzedClip clip,
+  int destinationStart,
+  _ArrangementTemplate rhythm,
+  _XorShift32 random, {
+  required int durationCap,
+  required double gain,
+  required int fadeIn,
+  required int fadeOut,
+  int pitch = 0,
+}) {
+  // Reuse the regular source-window choice so audible-region analysis can
+  // select both rhythm and song clips using the same source timing.
+  final selected = _event(clip, destinationStart, rhythm, random);
+  final duration = _min(selected.durationSamples, durationCap);
+  return SoundEvent(
+    assetId: clip.assetId,
+    sourceStartSample: selected.sourceStartSample,
+    destinationStartSample: destinationStart,
+    durationSamples: duration,
+    gain: gain,
+    fades: EventFades(
+      fadeInSamples: _min(fadeIn, duration ~/ 4),
+      fadeOutSamples: _min(fadeOut, duration ~/ 2),
+    ),
+    pitchSemitones: pitch,
   );
 }
 

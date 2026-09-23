@@ -613,6 +613,17 @@ void main() {
     expect(controller.state.style, ArrangementStyle.swaying);
 
     await tester.scrollUntilVisible(
+      find.text('はねる'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('はねる'));
+    await tester.pumpAndSettle();
+    expect(controller.state.melody, MelodyTemplate.hop);
+    expect(find.text('拍  合成素材 1'), findsOneWidget);
+    expect(find.text('ベース風  お休み'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
       find.text('これで完成'),
       220,
       scrollable: find.byType(Scrollable).first,

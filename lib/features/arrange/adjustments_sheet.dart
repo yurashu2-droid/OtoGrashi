@@ -35,7 +35,6 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
   final _waveforms = <String, Future<AudioWaveform>>{};
   var _cropWidth = 1.0;
   double? _pendingGain;
-  double? _pendingAccompaniment;
 
   ClipAsset? get _selectedClip => widget.controller.state.clips
       .where((clip) => clip.id == _assetId)
@@ -60,12 +59,6 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
       }
     }
     return .8;
-  }
-
-  double get _accompaniment {
-    final value =
-        widget.controller.state.project?.arrangement['accompanimentGain'];
-    return value is num ? value.toDouble().clamp(0, 1) : .25;
   }
 
   @override
@@ -100,15 +93,6 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
                   ? null
                   : (value) =>
                         unawaited(widget.controller.setGain(_assetId!, value)),
-            ),
-            Text('伴奏量', style: Theme.of(context).textTheme.titleMedium),
-            Slider(
-              value: _pendingAccompaniment ?? _accompaniment,
-              label: '${(_accompaniment * 100).round()}%',
-              onChanged: (value) =>
-                  setState(() => _pendingAccompaniment = value),
-              onChangeEnd: (value) =>
-                  unawaited(widget.controller.setAccompanimentGain(value)),
             ),
             const SizedBox(height: 8),
             Text('切り出し', style: Theme.of(context).textTheme.titleMedium),
