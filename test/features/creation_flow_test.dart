@@ -59,10 +59,106 @@ void main() {
     await tester.pump();
     expect(find.text('音を追加しています'), findsOneWidget);
     expect(controller.state.clips, isEmpty);
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(find.text('音を追加しています'), findsOneWidget);
 
     pending.complete((await _FakeDemo(count: 1).install(_UnusedAssets())).single);
     await tester.pumpAndSettle();
     expect(find.text('音を追加しています'), findsNothing);
+    expect(find.text('この音を使う'), findsNothing);
+    expect(controller.state.clips, hasLength(1));
+  });
+
+  testWidgets('failed addition leaves the chosen video available to retake', (
+    tester,
+  ) async {
+    final pending = Completer<ClipAsset>();
+    final media = _FakeMedia()
+      ..pickAction = (operationId) async => CapturedMedia(
+        operationId: operationId,
+        assetId: 'chosen',
+        relativePath: 'staging/chosen.mov',
+        durationUs: 3000000,
+        audioTrackStartUs: 0,
+        width: 1080,
+        height: 1920,
+        rotation: 0,
+      );
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _PendingImportAssets(pending.future),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+
+    await tester.tap(find.text('動画を選ぶ'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('この音を使う'));
+    await tester.pump();
+    pending.completeError(StateError('storage unavailable'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('この音を使う'), findsOneWidget);
+    expect(find.textContaining('もう一度試すか、撮り直してください'), findsOneWidget);
+    expect(media.discardedPaths, isEmpty);
+    await tester.tap(find.text('撮り直す'));
+    await tester.pumpAndSettle();
+    expect(media.discardedPaths, ['staging/chosen.mov']);
+    expect(find.textContaining('3秒撮る'), findsOneWidget);
+  });
+
+  testWidgets('failed addition can retry the same recorded video', (
+    tester,
+  ) async {
+    final asset = (await _FakeDemo(count: 1).install(_UnusedAssets())).single;
+    final assets = _RetryImportAssets(asset);
+    final media = _FakeMedia()
+      ..pickAction = (operationId) async => CapturedMedia(
+        operationId: operationId,
+        assetId: 'chosen',
+        relativePath: 'staging/chosen.mov',
+        durationUs: 3000000,
+        audioTrackStartUs: 0,
+        width: 1080,
+        height: 1920,
+        rotation: 0,
+      );
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: assets,
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+
+    await tester.tap(find.text('動画を選ぶ'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('この音を使う'));
+    await tester.pumpAndSettle();
+    expect(assets.attempts, 1);
+    expect(media.discardedPaths, isEmpty);
+
+    await tester.tap(find.text('この音を使う'));
+    await tester.pumpAndSettle();
+    expect(assets.attempts, 2);
+    expect(media.discardedPaths, ['staging/chosen.mov']);
+    expect(find.text('この音を使う'), findsNothing);
     expect(controller.state.clips, hasLength(1));
   });
 
@@ -802,9 +898,26 @@ final class _PendingImportAssets implements AssetRepository {
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
+final class _RetryImportAssets implements AssetRepository {
+  _RetryImportAssets(this.asset);
+  final ClipAsset asset;
+  var attempts = 0;
+
+  @override
+  Future<ClipAsset> importManagedStaging(String relativePath) async {
+    attempts += 1;
+    if (attempts == 1) throw StateError('temporary import failure');
+    return asset;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
 final class _FakeMedia implements MediaGateway {
   CapturedMedia? pickedVideo;
   Future<CapturedMedia?> Function(String)? pickAction;
+  final discardedPaths = <String>[];
   int prepareCalls = 0;
   int pickCalls = 0;
   final renderRequests = <RenderRequest>[];
@@ -855,7 +968,9 @@ final class _FakeMedia implements MediaGateway {
   @override
   Future<void> suspendCaptureForReview() async {}
   @override
-  Future<void> discardStaged(String relativePath) async {}
+  Future<void> discardStaged(String relativePath) async {
+    discardedPaths.add(relativePath);
+  }
   @override
   Future<void> startCapture(String operationId, {required int maxDurationUs}) =>
       throw UnimplementedError();

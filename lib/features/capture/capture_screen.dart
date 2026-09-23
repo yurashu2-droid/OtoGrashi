@@ -14,6 +14,8 @@ final class CaptureScreen extends StatefulWidget {
     required this.controller,
     this.presentation,
     this.onMediaReady,
+    this.isAdding = false,
+    this.addError,
     this.testFixture = false,
     super.key,
   });
@@ -21,6 +23,8 @@ final class CaptureScreen extends StatefulWidget {
   final CaptureController controller;
   final MediaPresentationGateway? presentation;
   final VoidCallback? onMediaReady;
+  final bool isAdding;
+  final String? addError;
   final bool testFixture;
 
   @override
@@ -272,14 +276,30 @@ final class _CaptureScreenState extends State<CaptureScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (widget.isAdding) ...[
+              const LinearProgressIndicator(),
+              const SizedBox(height: 8),
+              const Text('音を追加しています'),
+              const SizedBox(height: 8),
+            ],
+            if (widget.addError != null) ...[
+              Text(
+                widget.addError!,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+              const SizedBox(height: 8),
+            ],
             Row(
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () async {
-                      await _playback.pause();
-                      await widget.controller.retake();
-                    },
+                    onPressed: widget.isAdding
+                        ? null
+                        : () async {
+                            await _playback.pause();
+                            await widget.controller.retake();
+                          },
                     icon: const Icon(Icons.restart_alt_rounded),
                     label: const Text('撮り直す'),
                   ),
@@ -287,21 +307,23 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton(
-                    onPressed: widget.onMediaReady,
+                    onPressed: widget.isAdding ? null : widget.onMediaReady,
                     style: FilledButton.styleFrom(
                       backgroundColor: AppTokens.coral,
                       foregroundColor: AppTokens.ink,
                     ),
-                    child: const Text('この音を使う'),
+                    child: Text(widget.isAdding ? '追加中' : 'この音を使う'),
                   ),
                 ),
               ],
             ),
             TextButton(
-              onPressed: () async {
-                await _playback.pause();
-                await widget.controller.chooseAnotherVideo();
-              },
+              onPressed: widget.isAdding
+                  ? null
+                  : () async {
+                      await _playback.pause();
+                      await widget.controller.chooseAnotherVideo();
+                    },
               child: const Text('別の動画を選ぶ'),
             ),
           ],

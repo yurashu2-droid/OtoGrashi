@@ -16,6 +16,7 @@ import '../settings/settings_screen.dart';
 import '../../storage/project_repository.dart';
 import '../../features/capture/capture_controller.dart';
 import '../../features/capture/capture_screen.dart';
+import '../../features/capture/capture_state.dart';
 import '../../media/media_gateway.dart';
 import '../../media/media_presentation_gateway.dart';
 import '../../media/media_delivery_gateway.dart';
@@ -46,7 +47,6 @@ class CreationFlow extends StatefulWidget {
 
 class _CreationFlowState extends State<CreationFlow> {
   var _captureOpened = false;
-  var _importingMedia = false;
   late int _tabIndex = widget.startInLibrary ? 1 : 0;
 
   @override
@@ -59,28 +59,21 @@ class _CreationFlowState extends State<CreationFlow> {
   }
 
   Future<void> _openCapture({bool fromPhotos = false}) async {
-    if (_importingMedia) return;
-    final captured = await Navigator.of(context).push<CapturedMedia>(
+    await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => _CaptureRoute(
           media: widget.media,
           presentation: widget.controller.presentation,
           fromPhotos: fromPhotos,
+          onCommit: (captured) async {
+            final added = await widget.controller.addCaptured(captured);
+            if (added && mounted) unawaited(HapticFeedback.selectionClick());
+            return added;
+          },
         ),
         fullscreenDialog: true,
       ),
     );
-    if (captured == null || !mounted) return;
-    final previousCount = widget.controller.state.clips.length;
-    setState(() => _importingMedia = true);
-    try {
-      await widget.controller.addCaptured(captured);
-      if (mounted && widget.controller.state.clips.length > previousCount) {
-        unawaited(HapticFeedback.selectionClick());
-      }
-    } finally {
-      if (mounted) setState(() => _importingMedia = false);
-    }
   }
 
   Future<void> _openProject(Project project) async {
@@ -134,45 +127,12 @@ class _CreationFlowState extends State<CreationFlow> {
         _ => _creationContent(state),
       };
       return Scaffold(
-        body: Stack(
-          children: [
-            content,
-            if (_importingMedia) ...[
-              const ModalBarrier(dismissible: false, color: Color(0x33000000)),
-              Center(
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 18,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2.5),
-                        ),
-                        const SizedBox(width: 14),
-                        Text(
-                          '音を追加しています',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
+        body: content,
         bottomNavigationBar: content is _CollectScreen || _tabIndex == 1
             ? NavigationBar(
                 selectedIndex: _tabIndex,
-                onDestinationSelected: _importingMedia
-                    ? null
-                    : (value) => setState(() => _tabIndex = value),
+                onDestinationSelected: (value) =>
+                    setState(() => _tabIndex = value),
                 destinations: const [
                   NavigationDestination(
                     icon: Icon(Icons.add_circle_outline),
@@ -1480,10 +1440,12 @@ class _CaptureRoute extends StatefulWidget {
     required this.media,
     required this.presentation,
     required this.fromPhotos,
+    required this.onCommit,
   });
   final MediaGateway media;
   final MediaPresentationGateway presentation;
   final bool fromPhotos;
+  final Future<bool> Function(CapturedMedia) onCommit;
 
   @override
   State<_CaptureRoute> createState() => _CaptureRouteState();
@@ -1491,6 +1453,8 @@ class _CaptureRoute extends StatefulWidget {
 
 class _CaptureRouteState extends State<_CaptureRoute> {
   bool _committed = false;
+  bool _saving = false;
+  String? _saveError;
   late final CaptureController controller = CaptureController(
     widget.media,
     operationIdFactory: () =>
@@ -1500,6 +1464,7 @@ class _CaptureRouteState extends State<_CaptureRoute> {
   @override
   void initState() {
     super.initState();
+    controller.addListener(_clearStaleSaveError);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (widget.fromPhotos) {
@@ -1512,6 +1477,7 @@ class _CaptureRouteState extends State<_CaptureRoute> {
 
   @override
   void dispose() {
+    controller.removeListener(_clearStaleSaveError);
     final unselected = controller.state.capturedMedia;
     if (!_committed && unselected != null) {
       unawaited(_discardUnselected(unselected.relativePath));
@@ -1519,6 +1485,14 @@ class _CaptureRouteState extends State<_CaptureRoute> {
     unawaited(controller.releaseCapture());
     controller.dispose();
     super.dispose();
+  }
+
+  void _clearStaleSaveError() {
+    if (_saveError != null &&
+        controller.state.phase != CapturePhase.completed &&
+        mounted) {
+      setState(() => _saveError = null);
+    }
   }
 
   Future<void> _discardUnselected(String path) async {
@@ -1529,16 +1503,42 @@ class _CaptureRouteState extends State<_CaptureRoute> {
     }
   }
 
+  Future<void> _commit() async {
+    final captured = controller.state.capturedMedia;
+    if (_saving || captured == null) return;
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
+    bool saved;
+    try {
+      saved = await widget.onCommit(captured);
+    } catch (_) {
+      saved = false;
+    }
+    if (!mounted) return;
+    if (!saved) {
+      setState(() {
+        _saving = false;
+        _saveError = '追加できませんでした。もう一度試すか、撮り直してください。';
+      });
+      return;
+    }
+    _committed = true;
+    setState(() => _saving = false);
+    await WidgetsBinding.instance.endOfFrame;
+    if (mounted) Navigator.pop(context);
+  }
+
   @override
-  Widget build(BuildContext context) => CaptureScreen(
-    controller: controller,
-    presentation: widget.presentation,
-    onMediaReady: () {
-      final media = controller.state.capturedMedia;
-      if (media != null) {
-        _committed = true;
-        Navigator.pop(context, media);
-      }
-    },
+  Widget build(BuildContext context) => PopScope(
+    canPop: !_saving,
+    child: CaptureScreen(
+      controller: controller,
+      presentation: widget.presentation,
+      isAdding: _saving,
+      addError: _saveError,
+      onMediaReady: () => unawaited(_commit()),
+    ),
   );
 }

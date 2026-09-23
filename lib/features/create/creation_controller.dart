@@ -173,13 +173,30 @@ final class CreationController extends ChangeNotifier {
     }
   }
 
-  Future<void> addCaptured(CapturedMedia captured) async {
-    if (_disposed) return;
+  Future<bool> addCaptured(CapturedMedia captured) async {
+    if (_disposed) return false;
     try {
       final asset = await assets.importManagedStaging(captured.relativePath);
+      final previousCount = _state.clips.length;
       await addExisting(asset);
+      final added = _state.clips.length > previousCount;
+      if (!added) {
+        try {
+          await assets.deleteUnreferenced(asset.id);
+        } catch (_) {
+          // A failed cleanup must not hide the original project error.
+        }
+        return false;
+      }
+      try {
+        await media.discardStaged(captured.relativePath);
+      } catch (_) {
+        // The managed staging folder is cleaned on the next launch.
+      }
+      return true;
     } catch (error) {
       _set(_state.copyWith(phase: CreationPhase.failed, error: error));
+      return false;
     }
   }
 

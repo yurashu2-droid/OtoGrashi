@@ -15,6 +15,7 @@ import 'project_database.dart';
 /// deliberately has no shared-global selection update method.
 abstract interface class AssetRepository {
   Future<ClipAsset> importFile(String sourcePath);
+  /// Copies a capture into originals; the caller discards staging after commit.
   Future<ClipAsset> importManagedStaging(String relativePath);
   Future<ClipAsset?> load(String id);
   Future<List<ClipAsset>> list();
@@ -89,11 +90,9 @@ final class SqliteAssetRepository implements AssetRepository {
       throw InvalidAsset('Unsafe managed staging path: $relativePath');
     }
     final source = _resolveRelative(relativePath);
-    try {
-      return await importFile(source.path);
-    } finally {
-      if (await source.exists()) await source.delete();
-    }
+    // The capture route owns this staged file until its project update succeeds.
+    // Keeping it here lets the user retry or retake after an import failure.
+    return importFile(source.path);
   }
 
   @override

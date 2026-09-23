@@ -246,7 +246,7 @@ void main() {
       expect(asset.relativePath, stored);
     });
 
-    test('managed capture staging promotes to an immutable original', () async {
+    test('managed capture staging stays available until project commit', () async {
       final capture = File(
         p.join(database.stagingDirectory.path, 'capture.mov'),
       );
@@ -254,7 +254,7 @@ void main() {
 
       final asset = await assets.importManagedStaging('staging/capture.mov');
 
-      expect(await capture.exists(), isFalse);
+      expect(await capture.exists(), isTrue);
       expect(
         await File(await assets.resolvePath(asset.id)).readAsBytes(),
         <int>[6, 5, 4, 3],
@@ -264,6 +264,21 @@ void main() {
         assets.importManagedStaging('../outside.mov'),
         throwsA(isA<InvalidAsset>()),
       );
+    });
+
+    test('failed staged import keeps the recording for retry', () async {
+      final capture = File(
+        p.join(database.stagingDirectory.path, 'failed-capture.mov'),
+      );
+      await capture.writeAsBytes(<int>[6, 5, 4, 3]);
+      final rejecting = SqliteAssetRepository(database);
+
+      await expectLater(
+        rejecting.importManagedStaging('staging/failed-capture.mov'),
+        throwsA(isA<AssetInspectionUnavailable>()),
+      );
+
+      expect(await capture.readAsBytes(), <int>[6, 5, 4, 3]);
     });
 
     test(
