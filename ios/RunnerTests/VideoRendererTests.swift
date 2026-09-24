@@ -53,6 +53,39 @@ final class VideoRendererTests: XCTestCase {
     try preserveMovie(output, name: "everyday-mad")
   }
 
+  func testPerformancePanelsStayOnCanvas() {
+    for mode in ["mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"] {
+      for count in 1...18 {
+        let panels = VideoRenderer.performanceRects(count: count, mode: mode, width: 360, height: 640)
+        XCTAssertEqual(panels.count, count)
+        XCTAssertTrue(panels.allSatisfy { $0.width > 0 && $0.height > 0 &&
+          CGRect(x: 0, y: 0, width: 360, height: 640).contains($0) }, "\(mode) \(count)")
+      }
+    }
+  }
+
+  func testPerformanceModesRenderWithProductionValidation() async throws {
+    let directory = try evidenceDirectory()
+    for mode in ["mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"] {
+      let requestURL = directory.appendingPathComponent("native-\(mode).json")
+      // Missing fixtures are a failure, not a silently skipped feature test.
+      let request = try JSONDecoder().decode(VideoRenderRequestPayload.self, from: Data(contentsOf: requestURL))
+      let output = temporaryURL("performance-\(mode).mp4")
+      defer { try? FileManager.default.removeItem(at: output) }
+      let report = try await VideoRenderer(audioRenderer: AudioRenderer(accompanimentGain: 0)).render(
+        request: request,
+        assets: ["tap": fixtureURL("synthetic-tap.mp4"), "sustain": fixtureURL("synthetic-sustain.mp4"),
+          "texture": fixtureURL("synthetic-texture.mp4")], outputURL: output,
+        cancellation: CancellationToken(operationId: request.operationId))
+      XCTAssertEqual(report.frameCount, request.arrangement.totalSamples / 1600)
+      let validation = try await MediaValidator().validate(url: output, expectedWidth: 360,
+        expectedHeight: 640, expectedOnsetSample: nil, expectedTotalSamples: request.arrangement.totalSamples)
+      XCTAssertEqual(validation.durationUs, Int64(request.arrangement.totalSamples) * 1_000_000 / 48_000)
+      try preserveMovie(output, name: "performance-\(mode)")
+      try preserveReport(validation, name: "performance-\(mode)")
+    }
+  }
+
   private enum ProducerFailure: Error, Equatable { case audio }
 
   func testProducerErrorPrecedencePreservesFailuresButNotCancellationArtifacts() {

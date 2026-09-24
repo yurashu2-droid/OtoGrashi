@@ -117,9 +117,9 @@ enum EverydayAudioDSP {
   /// The passage advances at rate=1, with the same loop/reverse clock as video.
   static func render(
     _ input: [Float], count: Int, targetMidiNote: Double?,
-    reverse: Bool = false, pitchSteps: [PitchStep] = []
+    reverse: Bool = false, pitchSteps: [PitchStep] = [], hardTune: Bool = false
   ) throws -> [Float] {
-    guard count > 0, count <= 720_000, !input.isEmpty, input.count <= 720_000,
+    guard count > 0, count <= 1_440_000, !input.isEmpty, input.count <= 720_000,
       input.allSatisfy(\.isFinite), validSteps(pitchSteps, count: count),
       targetMidiNote == nil || (targetMidiNote!.isFinite && (24...100).contains(targetMidiNote!)),
       pitchSteps.isEmpty || targetMidiNote != nil
@@ -149,7 +149,7 @@ enum EverydayAudioDSP {
         markIndex += 1
       }
       let mark = marks[markIndex]
-      let hz = 440 * pow(2, (targetNote(at: cursor, base: note, steps: pitchSteps) - 69) / 12)
+      let hz = 440 * pow(2, (targetNote(at: cursor, base: note, steps: pitchSteps, transition: hardTune ? 96 : 720) - 69) / 12)
       let targetPeriod = Double(sampleRate) / hz
       if abs(mark.sample - position) <= Int(mark.period * 1.5),
         voice(at: position, frames: frames).amount > 0 {
@@ -289,12 +289,12 @@ enum EverydayAudioDSP {
     return marks
   }
 
-  private static func targetNote(at sample: Double, base: Double, steps: [PitchStep]) -> Double {
+  private static func targetNote(at sample: Double, base: Double, steps: [PitchStep], transition: Int = 720) -> Double {
     var current = base
     for step in steps {
       if Double(step.offsetSamples) > sample { break }
-      if step.offsetSamples > 0, sample < Double(step.offsetSamples + 720) {
-        let t = (sample - Double(step.offsetSamples)) / 720 // 15 ms portamento.
+      if step.offsetSamples > 0, sample < Double(step.offsetSamples + transition) {
+        let t = (sample - Double(step.offsetSamples)) / Double(transition) // Natural 15 ms; explicit tune mode 2 ms.
         let smooth = t * t * (3 - 2 * t)
         return current + (step.midiNote - current) * smooth
       }

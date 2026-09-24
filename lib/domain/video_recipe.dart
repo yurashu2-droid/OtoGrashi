@@ -120,11 +120,13 @@ final class VideoRecipe {
     required List<VideoSceneEvent> events,
     Map<String, String> clipNames = const <String, String>{},
     this.effects = VideoEffects.none,
+    this.totalSamples = 720000,
   }) : clipCrops = List<ClipCrop>.unmodifiable(clipCrops),
        captions = List<VideoCaption>.unmodifiable(captions),
        events = List<VideoSceneEvent>.unmodifiable(events),
        clipNames = Map<String, String>.unmodifiable(clipNames) {
-    if (clipCrops.length > 6 ||
+    if (!const [720000, 1440000].contains(totalSamples) ||
+        clipCrops.length > 6 ||
         captions.length > 12 ||
         events.length > maxScenes) {
       throw const MediaContractException('Video recipe exceeds schema limits.');
@@ -156,18 +158,16 @@ final class VideoRecipe {
               value.y > 1 ||
               value.destinationStartSample < 0 ||
               value.durationSamples <= 0 ||
-              value.destinationEndSample > ArrangementPayloadClock.totalSamples,
+              value.destinationEndSample > totalSamples,
         ) ||
         events.isEmpty ||
         events.first.destinationStartSample != 0 ||
-        events.last.destinationEndSample !=
-            ArrangementPayloadClock.totalSamples ||
+        events.last.destinationEndSample != totalSamples ||
         events.any(
           (value) =>
               value.destinationStartSample < 0 ||
               value.durationSamples <= 0 ||
-              value.destinationEndSample >
-                  ArrangementPayloadClock.totalSamples ||
+              value.destinationEndSample > totalSamples ||
               value.assetIds.isEmpty ||
               value.assetIds.length > 6 ||
               value.assetIds.toSet().length != value.assetIds.length ||
@@ -212,13 +212,18 @@ final class VideoRecipe {
     }.toList(growable: false);
     return VideoRecipe(
       layout: layout,
+      totalSamples: arrangement.totalSamples,
       clipCrops: ids
           .map((id) => ClipCrop(assetId: id, crop: NormalizedCrop.fullFrame))
           .toList(),
       captions: const <VideoCaption>[],
       events: arrangement.events.isEmpty
           ? _buildScenes(visibleIds, layout, arrangement.events, roles)
-          : _audioScenes(arrangement.events, visibleIds),
+          : _audioScenes(
+              arrangement.events,
+              visibleIds,
+              arrangement.totalSamples,
+            ),
       effects: arrangement.events.isEmpty
           ? VideoEffects.none
           : VideoEffects.mad,
@@ -245,6 +250,7 @@ final class VideoRecipe {
       final effectsJson = json['effects'];
       return VideoRecipe(
         layout: VideoLayout.values.byName(json['layout'] as String),
+        totalSamples: json['totalSamples'] as int? ?? 720000,
         clipCrops: cropValues
             .map(
               (value) =>
@@ -286,6 +292,7 @@ final class VideoRecipe {
   static const int schemaVersion = 1;
   static const int framesPerSecond = 30;
   final VideoLayout layout;
+  final int totalSamples;
   final List<ClipCrop> clipCrops;
   final List<VideoCaption> captions;
   final List<VideoSceneEvent> events;
@@ -293,7 +300,7 @@ final class VideoRecipe {
   final VideoEffects effects;
 
   static int nearestFrameForSample(int sample) {
-    if (sample < 0 || sample > ArrangementPayloadClock.totalSamples) {
+    if (sample < 0 || sample > 1440000) {
       throw const MediaContractException('Video sample is out of range.');
     }
     return (sample * framesPerSecond + 24000) ~/ 48000;
@@ -301,6 +308,7 @@ final class VideoRecipe {
 
   Map<String, Object?> toJson() => <String, Object?>{
     'schemaVersion': schemaVersion,
+    if (totalSamples != 720000) 'totalSamples': totalSamples,
     'layout': layout.name,
     'clipCrops': clipCrops.map((value) => value.toJson()).toList(),
     'captions': captions.map((value) => value.toJson()).toList(),
@@ -438,8 +446,12 @@ bool _validCrop(NormalizedCrop crop) =>
 
 // Scene boundaries are audio boundaries, not bars. A rest holds the last
 // picture; the renderer freezes it instead of inventing an unrelated sound.
-List<VideoSceneEvent> _audioScenes(List<SoundEvent> sounds, List<String> ids) {
-  final boundaries = <int>{0, ArrangementPayloadClock.totalSamples};
+List<VideoSceneEvent> _audioScenes(
+  List<SoundEvent> sounds,
+  List<String> ids,
+  int totalSamples,
+) {
+  final boundaries = <int>{0, totalSamples};
   for (final event in sounds) {
     boundaries.add(event.destinationStartSample);
     boundaries.add(event.destinationStartSample + event.durationSamples);

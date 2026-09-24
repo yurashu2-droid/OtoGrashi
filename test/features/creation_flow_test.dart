@@ -1342,7 +1342,7 @@ void main() {
     );
 
     expect(find.text('会話や長い音も、そのまま録ってみよう。'), findsOneWidget);
-    expect(find.text('いつもの音を、\n3つ集めよう。'), findsOneWidget);
+    expect(find.text('いつもの音が、\n音楽に変わる。'), findsOneWidget);
     expect(find.text('0/6'), findsOneWidget);
 
     await controller.startDemo();
@@ -1407,13 +1407,16 @@ void main() {
       }
 
       expect(find.text('$count/6'), findsOneWidget);
-      final hint = count < 3
-          ? 'あと${3 - count}つで作成OK · 全6つまで'
+      final hint = count == 0
+          ? '1本から作成OK · 全6つまで'
           : count < 6
           ? '作成OK · あと${6 - count}つ追加できます'
           : '作成OK · 追加はここまで';
       if (count == 0) {
-        expect(find.text('友達の声、リアクション、身近な音。3つで曲に、最大6つまで使えます。'), findsOneWidget);
+        expect(
+          find.text('声やリアクションは1本から。少ない素材は別の場面もパーツに。最大6本。'),
+          findsOneWidget,
+        );
       } else {
         expect(find.text(hint), findsOneWidget);
       }
@@ -1422,7 +1425,7 @@ void main() {
         of: find.text('この音で15秒をつくる  ↗'),
         matching: find.byType(FilledButton),
       );
-      expect(createButton, count >= 3 ? findsOneWidget : findsNothing);
+      expect(createButton, count >= 1 ? findsOneWidget : findsNothing);
       expect(tester.takeException(), isNull);
     }
 

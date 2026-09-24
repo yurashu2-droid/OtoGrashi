@@ -28,19 +28,19 @@ void main() {
     }
   });
 
-  test('256 events fit but 257 and mismatched video events are rejected', () {
+  test('512 events fit but 513 and mismatched video events are rejected', () {
     expect(
-      Arrangement.fromJson(_arrangement(256).toJson()).events,
-      hasLength(256),
+      Arrangement.fromJson(_arrangement(Arrangement.maxEvents).toJson()).events,
+      hasLength(Arrangement.maxEvents),
     );
-    final json = _arrangement(256).toJson();
+    final json = _arrangement(Arrangement.maxEvents).toJson();
     final audio = (json['events'] as List<Object?>).first;
     final video = (json['videoEvents'] as List<Object?>).first;
     expect(
       () => Arrangement.fromJson({
         ...json,
-        'events': List<Object?>.filled(257, audio),
-        'videoEvents': List<Object?>.filled(257, video),
+        'events': List<Object?>.filled(Arrangement.maxEvents + 1, audio),
+        'videoEvents': List<Object?>.filled(Arrangement.maxEvents + 1, video),
       }),
       throwsA(isA<MediaContractException>()),
     );
