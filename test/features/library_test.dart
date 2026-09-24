@@ -178,6 +178,58 @@ void main() {
     expect(reused?.label, '雨の音');
   });
 
+  testWidgets('small stock cards open preview with rename and reuse actions', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final assets = _LibraryAssets()..asset = _asset();
+    ClipAsset? reused;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LibraryScreen(
+          projects: _LibraryProjects(),
+          assets: assets,
+          presentation: _PreviewPresentation(),
+          initialTabIndex: 1,
+          onCreate: () {},
+          onAssetSelected: (asset) => reused = asset,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('聴く'), findsOneWidget);
+    await tester.tap(find.byTooltip('小さく表示'));
+    await tester.pumpAndSettle();
+    expect(find.text('聴く'), findsNothing);
+    expect(find.text('カタカタ'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('カタカタ'));
+    await tester.pumpAndSettle();
+    expect(find.text('ストックした元の動画と音'), findsOneWidget);
+    expect(find.text('名前を変更'), findsOneWidget);
+    expect(find.text('曲に使う'), findsOneWidget);
+
+    await tester.tap(find.text('名前を変更'));
+    await tester.pumpAndSettle();
+    expect(find.text('この音に名前をつける'), findsOneWidget);
+    await tester.enterText(find.byType(TextFormField), '雨の音');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(find.text('雨の音'), findsOneWidget);
+
+    await tester.tap(find.text('雨の音'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('曲に使う'));
+    expect(reused?.label, '雨の音');
+  });
+
   testWidgets('stock and video layouts fit a narrow screen with larger text', (
     tester,
   ) async {
