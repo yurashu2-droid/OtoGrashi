@@ -349,15 +349,17 @@ AudibleRegion _window(
   required int variation,
 }) {
   final regions = clip.audibleRegions;
-  if (regions.isEmpty)
+  if (regions.isEmpty) {
     return AudibleRegion(
       startSample: clip.sourceStartSample,
       durationSamples: clip.durationSamples,
     );
-  if (phrase)
+  }
+  if (phrase) {
     return regions.reduce(
       (a, b) => a.durationSamples >= b.durationSamples ? a : b,
     );
+  }
   // Repeated notes intentionally reuse the same syllable for a recognizable
   // hook; variations change on phrase boundaries rather than on every frame.
   return regions[variation.abs() % regions.length];

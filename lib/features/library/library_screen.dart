@@ -645,7 +645,12 @@ class _ProjectCardState extends State<_ProjectCard> {
                 FutureBuilder<Uint8List>(
                   future: _thumbnail,
                   builder: (context, snapshot) => snapshot.hasData
-                      ? Image.memory(snapshot.data!, fit: BoxFit.cover)
+                      ? Image.memory(
+                          snapshot.data!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) =>
+                              const _ProjectArtwork(),
+                        )
                       : const _ProjectArtwork(),
                 ),
                 const DecoratedBox(
@@ -988,7 +993,12 @@ class _AssetCardState extends State<_AssetCard> {
                   FutureBuilder<Uint8List>(
                     future: _thumbnail,
                     builder: (context, snapshot) => snapshot.hasData
-                        ? Image.memory(snapshot.data!, fit: BoxFit.cover)
+                        ? Image.memory(
+                            snapshot.data!,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) =>
+                                _thumbnailFallback(accent),
+                          )
                         : DecoratedBox(
                             decoration: BoxDecoration(
                               color: accent.withValues(alpha: .5),
@@ -1170,7 +1180,12 @@ class _AssetCardState extends State<_AssetCard> {
               FutureBuilder<Uint8List>(
                 future: _thumbnail,
                 builder: (context, snapshot) => snapshot.hasData
-                    ? Image.memory(snapshot.data!, fit: BoxFit.cover)
+                    ? Image.memory(
+                        snapshot.data!,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) =>
+                            _thumbnailFallback(accent),
+                      )
                     : _thumbnailFallback(accent),
               ),
             const DecoratedBox(

@@ -175,15 +175,17 @@ final class MediaPlaybackController extends ChangeNotifier
     if (id == null ||
         _disposed ||
         version != _attachmentVersion ||
-        (_busy && !force))
+        (_busy && !force)) {
       return;
+    }
     final request = ++_stateRequest;
     try {
       final state = await gateway.playbackState(id);
       if (_disposed ||
           version != _attachmentVersion ||
-          request != _stateRequest)
+          request != _stateRequest) {
         return;
+      }
       _position = state.position;
       if (state.duration > Duration.zero) _duration = state.duration;
       _playing = state.isPlaying;
@@ -199,8 +201,9 @@ final class MediaPlaybackController extends ChangeNotifier
     } catch (error) {
       if (_disposed ||
           version != _attachmentVersion ||
-          request != _stateRequest)
+          request != _stateRequest) {
         return;
+      }
       _ticker?.cancel();
       _playing = false;
       _loading = false;

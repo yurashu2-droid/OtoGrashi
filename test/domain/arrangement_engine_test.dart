@@ -751,52 +751,71 @@ void main() {
     );
   });
 
-  test('song roles require long audible spans while legacy analyses work', () {
-    AnalyzedClip analyzed(
-      String id,
-      SuggestedRole role,
-      int audibleLength,
-      double rms,
-    ) => AnalyzedClip(
-      assetId: id,
-      durationSamples: 144000,
-      sampleRate: 48000,
-      onsetSamples: const [],
-      audibleRegions: [
-        AudibleRegion(startSample: 48000, durationSamples: audibleLength),
-      ],
-      peak: .7,
-      rms: rms,
-      suggestedRole: role,
-    );
-    final song = arrange(
-      clips: [
-        _clip('tap', role: SuggestedRole.transient),
-        analyzed('short-voice', SuggestedRole.sustain, 8000, .4),
-        analyzed('long-voice', SuggestedRole.sustain, 24000, .2),
-        analyzed('short-room', SuggestedRole.texture, 8000, .4),
-        analyzed('long-room', SuggestedRole.texture, 16000, .2),
-      ],
-      style: ArrangementStyle.swaying,
-      melodyTemplate: MelodyTemplate.hop,
-      seed: 4,
-    );
-    expect(song.songRoles?.bass, 'long-voice');
-    expect(song.songRoles?.melody, isNull);
-    expect(song.songRoles?.keys, 'long-room');
+  test(
+    'song roles include short unpitched sounds while legacy analyses work',
+    () {
+      AnalyzedClip analyzed(
+        String id,
+        SuggestedRole role,
+        int audibleLength,
+        double rms,
+      ) => AnalyzedClip(
+        assetId: id,
+        durationSamples: 144000,
+        sampleRate: 48000,
+        onsetSamples: const [],
+        audibleRegions: [
+          AudibleRegion(startSample: 48000, durationSamples: audibleLength),
+        ],
+        peak: .7,
+        rms: rms,
+        suggestedRole: role,
+      );
+      final song = arrange(
+        clips: [
+          _clip('tap', role: SuggestedRole.transient),
+          analyzed('short-voice', SuggestedRole.sustain, 8000, .4),
+          analyzed('long-voice', SuggestedRole.sustain, 24000, .2),
+          analyzed('short-room', SuggestedRole.texture, 8000, .4),
+          analyzed('long-room', SuggestedRole.texture, 16000, .2),
+        ],
+        style: ArrangementStyle.swaying,
+        melodyTemplate: MelodyTemplate.hop,
+        seed: 4,
+      );
+      expect(song.songRoles?.bass, 'long-voice');
+      expect(song.songRoles?.melody, isNotNull);
+      expect(song.songRoles?.keys, isNotNull);
+      expect(song.events.map((event) => event.assetId).toSet(), {
+        'tap',
+        'short-voice',
+        'long-voice',
+        'short-room',
+        'long-room',
+      });
+      // Unknown F0 no longer means the source cannot carry a melody.
+      expect(
+        song.events.where((event) => event.targetMidiNote != null),
+        isNotEmpty,
+      );
+      expect(
+        song.events.where((event) => event.assetId == 'short-voice'),
+        isNotEmpty,
+      );
 
-    final legacy = arrange(
-      clips: [
-        _clip('tap', role: SuggestedRole.transient),
-        _clip('old-voice', role: SuggestedRole.sustain),
-        _clip('room', role: SuggestedRole.texture),
-      ],
-      style: ArrangementStyle.sparse,
-      melodyTemplate: MelodyTemplate.hop,
-      seed: 4,
-    );
-    expect(legacy.songRoles?.bass, 'old-voice');
-  });
+      final legacy = arrange(
+        clips: [
+          _clip('tap', role: SuggestedRole.transient),
+          _clip('old-voice', role: SuggestedRole.sustain),
+          _clip('room', role: SuggestedRole.texture),
+        ],
+        style: ArrangementStyle.sparse,
+        melodyTemplate: MelodyTemplate.hop,
+        seed: 4,
+      );
+      expect(legacy.songRoles?.bass, 'old-voice');
+    },
+  );
 
   test('seed zero has a stable golden arrangement JSON', () {
     final arrangement = arrange(
