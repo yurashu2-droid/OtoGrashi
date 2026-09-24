@@ -388,8 +388,8 @@ final class AudioRendererTests: XCTestCase {
     json["sourceAssetIds"] = ["fixture"]
     let event = (json["events"] as! [[String: Any]])[0]
     let video = (json["videoEvents"] as! [[String: Any]])[0]
-    json["events"] = Array(repeating: event, count: 65)
-    json["videoEvents"] = Array(repeating: video, count: 65)
+    json["events"] = Array(repeating: event, count: 161)
+    json["videoEvents"] = Array(repeating: video, count: 161)
     XCTAssertThrowsError(try decode(json)) { error in
       XCTAssertEqual(error as? AudioRenderError, .unsupportedContract)
     }
