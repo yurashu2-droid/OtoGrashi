@@ -14,7 +14,7 @@ enum EverydayAudioDSP {
 
   /// Interpolated YIN. Search the FIRST trough, including out-of-band lags,
   /// before accepting the range; otherwise high notes alias to lower octaves.
-  static func estimate(_ samples: [Float], start: Int = 0, count: Int? = nil) -> Pitch? {
+  static func estimate(_ samples: [Float], start: Int = 0, count: Int? = nil, threshold: Double = 0.10) -> Pitch? {
     let start = max(0, start)
     guard start < samples.count else { return nil }
     let n = min(count ?? 4096, samples.count - start)
@@ -48,7 +48,7 @@ enum EverydayAudioDSP {
     }
     var lag = 2
     while lag <= maxLag {
-      if cmnd[lag] < 0.10 {
+      if cmnd[lag] < threshold {
         while lag < maxLag && cmnd[lag + 1] < cmnd[lag] { lag += 1 }
         guard cmnd[lag + 1] >= cmnd[lag] else { return nil }
         let left = cmnd[lag - 1], mid = cmnd[lag], right = cmnd[lag + 1]
@@ -127,8 +127,9 @@ enum EverydayAudioDSP {
     let source = reverse ? Array(input.reversed()) : input
     let dry = repeatSource(source, count: count)
     guard let note = targetMidiNote, source.contains(where: { $0 != 0 }) else { return dry }
-    let frames = analyzeVoice(source)
-    let marks = pitchMarks(source, frames: frames)
+    let detector = detectorSignal(source)
+    let frames = analyzeVoice(detector)
+    let marks = pitchMarks(detector, frames: frames)
     guard !marks.isEmpty else {
       // No fundamental (whisper/noise/impact) is not a licence to replace the
       // recording with a synthetic vowel. Keep its attack and spectral texture.
@@ -202,27 +203,50 @@ enum EverydayAudioDSP {
     let period: Double
   }
 
+  private static func detectorSignal(_ source: [Float]) -> [Float] {
+    // Low-pass ONLY the detector: formants/noisy harmonics must not dominate
+    // local F0. The original full-band waveform still supplies every grain.
+    var smooth = source
+    var first = 0.0, second = 0.0
+    let alpha = 1 - exp(-2 * Double.pi * 800 / Double(sampleRate))
+    for i in source.indices {
+      first += alpha * (Double(source[i]) - first)
+      second += alpha * (first - second)
+      smooth[i] = Float(second)
+    }
+    return smooth
+  }
+
   private static func analyzeVoice(_ source: [Float]) -> [VoiceFrame] {
-    let window = min(3072, source.count)
+    let window = min(2048, source.count)
     var frames = [VoiceFrame]()
     for center in stride(from: 0, through: source.count, by: voiceHop) {
       let start = max(0, min(source.count - window, center - window / 2))
-      let pitch = estimate(source, start: start, count: window)
+      let pitch = estimate(source, start: start, count: window, threshold: 0.18)
       var amount = 0.0
-      if let pitch, pitch.confidence >= 0.86 {
+      if let pitch, pitch.confidence >= 0.82 {
         // A broad analysis window can see a neighboring vowel through a /s/.
         // Require periodicity AT this time before touching the consonant.
-        let lag = Int((Double(sampleRate) / pitch.hertz).rounded())
+        let expectedLag = Double(sampleRate) / pitch.hertz
+        let firstLag = max(2, Int(expectedLag * 0.9))
+        let lastLag = max(firstLag, Int(ceil(expectedLag * 1.1)))
         let lo = max(0, center - 480)
-        let hi = min(source.count - lag, center + 480)
-        var xy = 0.0, xx = 0.0, yy = 0.0
+        let hi = min(source.count - lastLag, center + 480)
+        var strongest = 0.0
         if hi > lo {
-          for i in lo..<hi {
-            let a = Double(source[i]), b = Double(source[i + lag])
-            xy += a * b; xx += a * a; yy += b * b
+          // A moving vowel's lag at this instant differs from the wider YIN
+          // window. Search a narrow neighborhood before calling it unvoiced.
+          for lag in firstLag...lastLag {
+            var xy = 0.0, xx = 0.0, yy = 0.0
+            for i in lo..<hi {
+              let a = Double(source[i]), b = Double(source[i + lag])
+              xy += a * b; xx += a * a; yy += b * b
+            }
+            strongest = max(strongest, xy / max(1e-12, sqrt(xx * yy)))
           }
-          let correlation = xy / max(1e-12, sqrt(xx * yy))
-          amount = max(0, min(1, (correlation - 0.65) / 0.25))
+          // Confidence decides WHETHER to tune, not how much off-key dry
+          // vowel to mix in. Interpolation below smooths only transitions.
+          amount = strongest >= 0.7 ? 1 : 0
         }
       }
       frames.append(VoiceFrame(pitch: amount > 0 ? pitch : nil, amount: amount))

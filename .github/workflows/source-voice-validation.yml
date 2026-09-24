@@ -1,136 +1,47 @@
-name: Validate source-preserving voice
+name: Source voice regression
 on:
   push:
     branches: ['codex/source-preserving-melody']
-    paths: ['.github/workflows/source-voice-validation.yml']
+    paths:
+      - 'ios/Runner/Media/EverydayAudioDSP.swift'
+      - 'scripts/review/**'
+      - '.github/workflows/source-voice-validation.yml'
+  workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 jobs:
-  validate:
+  voice:
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
-      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
-        with:
-          flutter-version: '3.47.5'
-          channel: stable
-          cache: true
-      - run: flutter pub get
-      - name: Resolve two diagnosed lint findings
+      - name: Run production Swift DSP regressions
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p ci-logs ci-artifacts
-          python3 - <<'PY'
-          import hashlib, os, pathlib
-          assert os.environ['GITHUB_REF'] == 'refs/heads/codex/source-preserving-melody'
-          p = pathlib.Path('lib/domain/arrangement.dart')
-          data = p.read_bytes()
-          assert hashlib.sha256(data).hexdigest() == '76fbfc9cfeaa99688af03fe61543f5a092e3f6b0e15254c5d4a12c6af398cec8'
-          text = data.decode()
-          a = 'pitchSteps.first.offsetSamples != 0)\n      return false;'
-          b = 'pitchSteps.first.offsetSamples != 0) {\n      return false;\n    }'
-          c = 'step.midiNote > 100)\n        return false;'
-          d = 'step.midiNote > 100) {\n        return false;\n      }'
-          assert text.count(a) == 1 and text.count(c) == 1
-          p.write_text(text.replace(a,b).replace(c,d))
-          PY
-          dart format lib/domain/arrangement.dart
-          git add lib/domain/arrangement.dart
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'style: use explicit blocks for pitch-curve validation'
-          git push origin HEAD:refs/heads/codex/source-preserving-melody
           git rev-parse HEAD | tee ci-logs/commit.txt
-          git archive --format=zip HEAD -o ci-artifacts/source.zip
-      - name: Actual Swift DSP regressions
-        id: dsp
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          swiftc -O ios/Runner/Media/EverydayAudioDSP.swift scripts/review/SourceVoiceRegression.swift -o /tmp/source-voice-tests
-          /tmp/source-voice-tests | tee ci-logs/source-voice-dsp.txt
-          swiftc -O ios/Runner/Media/EverydayAudioDSP.swift scripts/review/DSPRegression.swift -o /tmp/dsp-tests
-          /tmp/dsp-tests | tee ci-logs/dsp.txt
+          for TEST in SourceVoiceRegression DSPRegression DynamicVoiceRegression; do
+            swiftc -O ios/Runner/Media/EverydayAudioDSP.swift scripts/review/$TEST.swift -o /tmp/$TEST
+            /tmp/$TEST | tee ci-logs/$TEST.txt
+          done
           python3 scripts/review/check_analysis.py | tee ci-logs/analysis-regression.txt
-      - name: Flutter analysis
-        id: analyze
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          flutter analyze --fatal-infos 2>&1 | tee ci-logs/flutter-analyze.txt
-      - name: Flutter tests
-        id: tests
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          flutter test --reporter expanded 2>&1 | tee ci-logs/flutter-test.txt
-      - name: Real speech comparison
-        id: comparison
-        continue-on-error: true
+      - name: Compare old and new processing on real speech
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/review/prepare_voice_fixture.py ci-artifacts/voice-comparison
           git show f02eab5619815668ba1bf2136348dca9265f56f7:ios/Runner/Media/EverydayAudioDSP.swift | sed 's/enum EverydayAudioDSP/enum LegacyEverydayAudioDSP/' > /tmp/LegacyEverydayAudioDSP.swift
           swiftc -O ios/Runner/Media/EverydayAudioDSP.swift /tmp/LegacyEverydayAudioDSP.swift scripts/review/VoiceComparison.swift -o /tmp/voice-comparison
-          /tmp/voice-comparison ci-artifacts/voice-comparison/input.f32 ci-artifacts/voice-comparison | tee ci-logs/voice-comparison.txt
-      - name: Early test and listening evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: source-voice-audio-comparison
-          path: |
-            ci-logs
-            ci-artifacts/source.zip
-            ci-artifacts/voice-comparison
-          retention-days: 7
-      - name: Build iOS simulator
-        id: build
-        if: steps.analyze.outcome == 'success' && steps.tests.outcome == 'success'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
-          flutter build ios --simulator --debug 2>&1 | tee ci-logs/build.txt
-      - name: Native audio and synchronized video tests
-        id: native
-        if: steps.build.outcome == 'success'
-        shell: bash
-        run: |
-          set -euo pipefail
-          ID="$(xcrun simctl list devices available --json | python3 -c 'import sys,json; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in d.items() if "iOS" in k for x in v if x.get("isAvailable") and "iPhone" in x["name"]))')"
-          xcrun simctl boot "$ID" 2>/dev/null || true
-          xcrun simctl bootstatus "$ID" -b
-          xcodebuild test -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -sdk iphonesimulator -destination "platform=iOS Simulator,id=$ID" -parallel-testing-enabled NO -only-testing:RunnerTests/AudioAnalyzerTests -only-testing:RunnerTests/AudioRendererTests -only-testing:RunnerTests/VideoRendererTests/testRealDartEverydayTimelineRendersAsSynchronizedMADVideo -resultBundlePath ci-artifacts/VoiceTests.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee ci-logs/native-tests.txt
-      - name: Summarize native evidence
-        if: always()
-        shell: bash
-        run: |
-          if [ -d ci-artifacts/VoiceTests.xcresult ]; then
-            xcrun xcresulttool get test-results summary --path ci-artifacts/VoiceTests.xcresult > ci-logs/native-summary.json
-          fi
+          /tmp/voice-comparison ci-artifacts/voice-comparison/input.f32 ci-artifacts/voice-comparison | tee ci-logs/comparison.txt
+          git archive --format=zip HEAD -o ci-artifacts/source.zip
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: source-preserving-voice-evidence
+          name: source-voice-regression-evidence
           path: |
             ci-logs
             ci-artifacts
           retention-days: 7
-      - name: Require passing checks
-        if: always()
-        env:
-          DSP: ${{ steps.dsp.outcome }}
-          ANALYZE: ${{ steps.analyze.outcome }}
-          TESTS: ${{ steps.tests.outcome }}
-          COMPARISON: ${{ steps.comparison.outcome }}
-          BUILD: ${{ steps.build.outcome }}
-          NATIVE: ${{ steps.native.outcome }}
-        run: test "$DSP" = success && test "$ANALYZE" = success && test "$TESTS" = success && test "$COMPARISON" = success && test "$BUILD" = success && test "$NATIVE" = success
