@@ -516,7 +516,9 @@ class _CollectScreen extends StatelessWidget {
                 controller.isRelay
                     ? clipCount >= 6
                           ? 'みんなの音が集まりました'
-                          : '3人から作成OK · 次の人へスマホを渡そう'
+                          : clipCount >= 3
+                          ? '作成OK · 次の人へスマホを渡そう'
+                          : 'あと${3 - clipCount}人で作成OK · 次の人へスマホを渡そう'
                     : collectionHint,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
