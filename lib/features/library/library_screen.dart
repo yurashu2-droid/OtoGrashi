@@ -370,11 +370,39 @@ final class _SectionIntro extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 3),
+        const SizedBox(
+          width: 74,
+          height: 7,
+          child: CustomPaint(painter: _PencilUnderline()),
+        ),
+        const SizedBox(height: 1),
         Text(description, style: const TextStyle(color: AppTokens.mutedInk)),
       ],
     ),
   );
+}
+
+final class _PencilUnderline extends CustomPainter {
+  const _PencilUnderline();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final line = Path()
+      ..moveTo(2, 4)
+      ..quadraticBezierTo(18, 1, 34, 3)
+      ..quadraticBezierTo(53, 4, size.width - 2, 2);
+    canvas.drawPath(
+      line,
+      Paint()
+        ..color = AppTokens.coral.withValues(alpha: .72)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _PencilUnderline oldDelegate) => false;
 }
 
 final class _ProjectCard extends StatefulWidget {
@@ -462,6 +490,18 @@ class _ProjectCardState extends State<_ProjectCard> {
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: [Colors.transparent, Color(0x99000000)],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: -2,
+                  right: 25,
+                  child: Transform.rotate(
+                    angle: -.10,
+                    child: const SizedBox(
+                      width: 58,
+                      height: 17,
+                      child: ColoredBox(color: Color(0xCFFFEBC6)),
                     ),
                   ),
                 ),
