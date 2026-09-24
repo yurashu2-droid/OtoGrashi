@@ -189,9 +189,8 @@ _SongEvents _buildSongEvents(
   );
   // Prefer a measured, stable tone for the song's melody. A louder spoken
   // phrase with no stable fundamental can still be used as a rhythm layer.
-  final bass = sustained
-          .where((clip) => clip.fundamentalMidiNote != null)
-          .firstOrNull ??
+  final bass =
+      sustained.where((clip) => clip.fundamentalMidiNote != null).firstOrNull ??
       sustained.firstOrNull;
   final otherLongSounds = ranked(
     usable.where(
@@ -215,13 +214,14 @@ _SongEvents _buildSongEvents(
       otherHits.firstOrNull ??
       sustained.skip(1).firstOrNull ??
       bass;
+  final melody = bass?.fundamentalMidiNote == null ? null : bass;
   final roles = SongRoles(
     beat: beat?.assetId,
     bass: bass?.assetId,
     keys: keys?.assetId,
-    melody: bass?.assetId,
+    melody: melody?.assetId,
   );
-  final melodyRoot = bass?.fundamentalMidiNote?.roundToDouble();
+  final melodyRoot = melody?.fundamentalMidiNote?.roundToDouble();
 
   final events = <SoundEvent>[];
   for (var bar = 0; bar < 8; bar++) {
@@ -293,14 +293,14 @@ _SongEvents _buildSongEvents(
         );
       }
     }
-    if (bar >= 3 && bar < 7 && bass != null) {
+    if (bar >= 3 && bar < 7 && melody != null) {
       for (var half = 0; half < 2; half++) {
         final note = song.notes[(bar - 3) * 2 + half];
         final pitch = note.pitchSemitones;
         if (pitch == null) continue;
         events.add(
           _songEvent(
-            bass,
+            melody,
             start + half * 45000 + (note.delayed ? 11250 : 0),
             rhythm,
             random,
@@ -308,7 +308,7 @@ _SongEvents _buildSongEvents(
             gain: 0.58,
             fadeIn: 700,
             fadeOut: 1500,
-            pitch: _pitchForNote(bass, pitch, melodyRoot),
+            pitch: _pitchForNote(melody, pitch, melodyRoot),
           ),
         );
       }
@@ -340,16 +340,11 @@ _SongEvents _buildSongEvents(
 
 double _pitchForNote(AnalyzedClip clip, int relativeNote, double? root) {
   final fundamental = clip.fundamentalMidiNote;
-  if (root == null || fundamental == null) return relativeNote.toDouble();
+  if (root == null || fundamental == null) return 0;
   final shift = root + relativeNote - fundamental;
-  // The existing granular renderer has a three-semitone quality envelope.
-  // At a template extreme, preserve the phrase within that range, even when
-  // this leaves a few cents of the source's original tuning.
-  if (shift >= -3 && shift <= 3) return shift;
-  if ((fundamental - root).abs() <= 0.5) {
-    return shift.clamp(-3.0, 3.0).toDouble();
-  }
-  return relativeNote.toDouble();
+  // Beyond the renderer's quality range, keep the recorded tone intact rather
+  // than substitute an unrelated relative shift or an inaccurate clamped note.
+  return shift >= -3 && shift <= 3 ? shift : 0;
 }
 
 bool _hasAudibleSpan(AnalyzedClip clip, int minimumSamples) =>

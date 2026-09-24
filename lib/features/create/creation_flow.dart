@@ -788,7 +788,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '横にスワイプして選ぶ',
+                    'スワイプで選ぶ・音程は自動',
                     textAlign: TextAlign.end,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),

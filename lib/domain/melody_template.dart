@@ -1,7 +1,7 @@
 /// Original song patterns made only from the recorded clips. Each melody slot
 /// is half a bar at 128 BPM; null is a deliberate rest.
-/// Note steps become absolute notes when a stable recorded fundamental is
-/// available. Otherwise they remain relative to the recorded sound.
+/// Note steps become target notes only when a stable recorded fundamental is
+/// available and the required shift fits the renderer's quality range.
 enum MelodyTemplate { none, hop, wink, answer }
 
 extension MelodyTemplateDetails on MelodyTemplate {

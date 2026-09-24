@@ -94,10 +94,20 @@ void main() {
   test(
     'song templates assign recorded sounds to distinct roles and persist',
     () {
+      final measuredFixtures = [
+        threeFixtures[0],
+        _clip(
+          'hum',
+          role: SuggestedRole.sustain,
+          onsets: const [12000],
+          pitch: 57,
+        ),
+        threeFixtures[2],
+      ];
       for (final style in ArrangementStyle.values) {
         for (final melody in MelodyTemplate.values.skip(1)) {
           final arrangement = arrange(
-            clips: threeFixtures,
+            clips: measuredFixtures,
             style: style,
             melodyTemplate: melody,
             seed: 7,
@@ -112,7 +122,7 @@ void main() {
           expect(arrangement.events.every(_fitsDestination), isTrue);
           expect(
             arrangement.events.every(
-              (event) => _fitsSource(event, threeFixtures),
+              (event) => _fitsSource(event, measuredFixtures),
             ),
             isTrue,
           );
@@ -151,7 +161,7 @@ void main() {
 
       final patterns = MelodyTemplate.values.skip(1).map((melody) {
         final arranged = arrange(
-          clips: threeFixtures,
+          clips: measuredFixtures,
           style: ArrangementStyle.sparse,
           melodyTemplate: melody,
           seed: 7,
@@ -235,6 +245,53 @@ void main() {
     expect(arrangement.events.length, lessThanOrEqualTo(64));
   });
 
+  test(
+    'unmeasured sounds keep their original pitch and have no melody role',
+    () {
+      final arranged = arrange(
+        clips: threeFixtures,
+        style: ArrangementStyle.sparse,
+        melodyTemplate: MelodyTemplate.hop,
+        seed: 7,
+      );
+
+      expect(arranged.songRoles?.bass, 'hum');
+      expect(arranged.songRoles?.melody, isNull);
+      expect(
+        arranged.events.every((event) => event.pitchSemitones == 0),
+        isTrue,
+      );
+    },
+  );
+
+  test('a distant measured sound stays at its original pitch', () {
+    final arranged = arrange(
+      clips: [
+        _clip('tap', role: SuggestedRole.transient),
+        _clip('voice', pitch: 57),
+        _clip('other-tone', pitch: 65),
+      ],
+      style: ArrangementStyle.sparse,
+      melodyTemplate: MelodyTemplate.hop,
+      seed: 7,
+    );
+
+    expect(arranged.songRoles?.melody, 'voice');
+    expect(arranged.songRoles?.keys, 'other-tone');
+    expect(
+      arranged.events
+          .where((event) => event.assetId == 'other-tone')
+          .every((event) => event.pitchSemitones == 0),
+      isTrue,
+    );
+    expect(
+      arranged.events.any(
+        (event) => event.assetId == 'voice' && event.pitchSemitones != 0,
+      ),
+      isTrue,
+    );
+  });
+
   test('a measured sustained note follows each song melody automatically', () {
     final clips = [
       _clip('tap', role: SuggestedRole.transient),
@@ -263,10 +320,12 @@ void main() {
       for (var index = 0; index < expectedNotes.length; index++) {
         final actual = melodyEvents.elementAt(index);
         final target = 57 + expectedNotes[index].pitchSemitones!;
-        expect(
-          57.35 + actual.pitchSemitones,
-          closeTo(target, 0.351),
-        );
+        final requiredShift = target - 57.35;
+        if (requiredShift.abs() <= 3) {
+          expect(57.35 + actual.pitchSemitones, closeTo(target, 0.001));
+        } else {
+          expect(actual.pitchSemitones, 0);
+        }
       }
       expect(arranged.events.length, lessThanOrEqualTo(64));
       expect(arranged.videoEvents.length, arranged.events.length);
@@ -733,7 +792,7 @@ void main() {
       seed: 4,
     );
     expect(song.songRoles?.bass, 'long-voice');
-    expect(song.songRoles?.melody, 'long-voice');
+    expect(song.songRoles?.melody, isNull);
     expect(song.songRoles?.keys, 'long-room');
 
     final legacy = arrange(
