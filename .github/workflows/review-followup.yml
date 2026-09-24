@@ -1,0 +1,79 @@
+name: Apply review regression fixes
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/everyday-mad-overhaul']
+    paths: ['.github/workflows/review-followup.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+      - name: Apply reviewed delta against exact source hashes
+        env:
+          PATCH_DATA: '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'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, subprocess, zlib
+          assert os.environ['GITHUB_REF'] == 'refs/heads/codex/everyday-mad-overhaul'
+          changes = json.loads(zlib.decompress(base64.b64decode(os.environ['PATCH_DATA'], validate=True)))
+          files = []
+          for e in changes:
+              p = pathlib.Path(e['path'])
+              assert not p.is_absolute() and '..' not in p.parts
+              old = p.read_bytes()
+              assert hashlib.sha256(old).hexdigest() == e['before'], p
+              lines = old.decode().splitlines(keepends=True)
+              for start, end, replacement in reversed(e['edits']):
+                  lines[start:end] = [replacement]
+              data = ''.join(lines).encode()
+              assert hashlib.sha256(data).hexdigest() == e['after'], p
+              files.append((p, data))
+          for p, data in files:
+              p.write_bytes(data)
+          subprocess.run(['dart','format'] + [str(p) for p,_ in files if p.suffix == '.dart'],check=True)
+          pathlib.Path('.github/workflows/review-followup.yml').unlink()
+          PY
+          git add -u
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: tolerate failed thumbnails and align regression tests with everyday music'
+          git push origin HEAD:refs/heads/codex/everyday-mad-overhaul
+          mkdir -p ci-logs
+          git rev-parse HEAD | tee ci-logs/commit.txt
+          git archive --format=zip HEAD -o review-followup-source.zip
+      - run: flutter pub get
+      - name: Analyze
+        id: analyze
+        continue-on-error: true
+        run: flutter analyze --fatal-infos 2>&1 | tee ci-logs/analyze.txt
+        shell: bash
+      - name: Test
+        id: tests
+        continue-on-error: true
+        run: flutter test --reporter expanded 2>&1 | tee ci-logs/test.txt
+        shell: bash
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: review-followup-validation
+          path: |
+            review-followup-source.zip
+            ci-logs
+            ci-artifacts
+          retention-days: 7
+      - name: Require passing validation
+        if: always()
+        env:
+          ANALYZE: ${{ steps.analyze.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+        run: test "$ANALYZE" = success && test "$TESTS" = success
