@@ -283,6 +283,7 @@ final class AnalyzedClip {
     required this.rms,
     required this.suggestedRole,
     this.fundamentalMidiNote,
+    this.registerMidiNote,
     this.analysisVersion = 1,
   }) : onsetSamples = List<int>.unmodifiable(onsetSamples),
        audibleRegions = List<AudibleRegion>.unmodifiable(audibleRegions) {
@@ -326,6 +327,12 @@ final class AnalyzedClip {
         'Analysis levels must be finite and normalized.',
       );
     }
+    if (registerMidiNote != null &&
+        (!registerMidiNote!.isFinite ||
+            registerMidiNote! < 24 ||
+            registerMidiNote! > 100)) {
+      throw const MediaContractException('Voice register is out of range.');
+    }
     if (fundamentalMidiNote != null &&
         (!fundamentalMidiNote!.isFinite ||
             fundamentalMidiNote! < 24 ||
@@ -362,6 +369,7 @@ final class AnalyzedClip {
         rms: (json['rms'] as num).toDouble(),
         suggestedRole: role,
         fundamentalMidiNote: (json['fundamentalMidiNote'] as num?)?.toDouble(),
+        registerMidiNote: (json['registerMidiNote'] as num?)?.toDouble(),
         analysisVersion: json['analysisVersion'] as int,
       );
     } on TypeError {
@@ -381,6 +389,7 @@ final class AnalyzedClip {
   final double rms;
   final SuggestedRole suggestedRole;
   final double? fundamentalMidiNote;
+  final double? registerMidiNote;
 
   bool get isUsable => peak >= 0.001 || rms >= 0.0001;
 
@@ -400,6 +409,7 @@ final class AnalyzedClip {
     'rms': rms,
     'suggestedRole': suggestedRole.name,
     if (fundamentalMidiNote != null) 'fundamentalMidiNote': fundamentalMidiNote,
+    if (registerMidiNote != null) 'registerMidiNote': registerMidiNote,
   };
 }
 

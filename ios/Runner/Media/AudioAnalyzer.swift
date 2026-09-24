@@ -94,8 +94,10 @@ struct AnalyzedClip: Codable, Equatable {
   let rms: Double
   let suggestedRole: SuggestedRole
   /// Stable fundamental of a sustained, single-pitched recording, in MIDI notes.
-  /// Nil means that the recording must not be treated as a tuned instrument.
+  /// Nil includes changing speech; it does NOT disqualify a recording.
   let fundamentalMidiNote: Double?
+  /// Median voiced register, used only to choose a comfortable song octave.
+  let registerMidiNote: Double?
 
   init(
     assetId: String,
@@ -106,7 +108,8 @@ struct AnalyzedClip: Codable, Equatable {
     peak: Double,
     rms: Double,
     suggestedRole: SuggestedRole,
-    fundamentalMidiNote: Double? = nil
+    fundamentalMidiNote: Double? = nil,
+    registerMidiNote: Double? = nil
   ) throws {
     guard !assetId.isEmpty else { throw AudioAnalysisError.emptyAssetId }
     let (sourceEndSample, sourceEndOverflow) = sourceStartSample
@@ -125,6 +128,8 @@ struct AnalyzedClip: Codable, Equatable {
       }),
       peak.isFinite, rms.isFinite,
       (0...1).contains(peak), (0...1).contains(rms),
+      registerMidiNote == nil ||
+        (registerMidiNote!.isFinite && (24...100).contains(registerMidiNote!)),
       fundamentalMidiNote == nil ||
         (fundamentalMidiNote!.isFinite && (24...100).contains(fundamentalMidiNote!))
     else { throw AudioAnalysisError.unsupportedContract }
@@ -140,6 +145,7 @@ struct AnalyzedClip: Codable, Equatable {
     self.rms = rms
     self.suggestedRole = suggestedRole
     self.fundamentalMidiNote = fundamentalMidiNote
+    self.registerMidiNote = registerMidiNote
   }
 
   init(from decoder: Decoder) throws {
@@ -160,7 +166,8 @@ struct AnalyzedClip: Codable, Equatable {
       peak: container.decode(Double.self, forKey: .peak),
       rms: container.decode(Double.self, forKey: .rms),
       suggestedRole: container.decode(SuggestedRole.self, forKey: .suggestedRole),
-      fundamentalMidiNote: container.decodeIfPresent(Double.self, forKey: .fundamentalMidiNote)
+      fundamentalMidiNote: container.decodeIfPresent(Double.self, forKey: .fundamentalMidiNote),
+      registerMidiNote: container.decodeIfPresent(Double.self, forKey: .registerMidiNote)
     )
   }
 }
@@ -174,6 +181,7 @@ struct SignalMetrics: Equatable {
   let audibleRegions: [AudibleRegion]
   let suggestedRole: SuggestedRole
   let fundamentalMidiNote: Double?
+  let registerMidiNote: Double?
 }
 
 struct AudioAnalyzer {
@@ -205,7 +213,8 @@ struct AudioAnalyzer {
       peak: metrics.peak,
       rms: metrics.rms,
       suggestedRole: metrics.suggestedRole,
-      fundamentalMidiNote: metrics.fundamentalMidiNote
+      fundamentalMidiNote: metrics.fundamentalMidiNote,
+      registerMidiNote: metrics.registerMidiNote
     )
   }
 
@@ -360,7 +369,8 @@ struct AudioAnalyzer {
       onsetSamples: onsets,
       audibleRegions: audibleRegions,
       suggestedRole: role,
-      fundamentalMidiNote: stableClipNote
+      fundamentalMidiNote: stableClipNote,
+      registerMidiNote: EverydayAudioDSP.registerNote(samples)
     )
   }
 

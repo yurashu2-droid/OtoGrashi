@@ -64,7 +64,13 @@ void main() {
       final notes = result.events
           .where((e) => e.treatment == SoundTreatment.tuned)
           .toList();
-      expect(notes.length, 148);
+      expect(
+        notes.fold<int>(
+          0,
+          (n, e) => n + (e.pitchSteps.isEmpty ? 1 : e.pitchSteps.length),
+        ),
+        148,
+      );
       expect(
         notes.any((e) => e.durationSamples > e.effectiveSourceDurationSamples),
         isTrue,
@@ -82,8 +88,15 @@ void main() {
         expect(v.reverse, a.reverse);
       }
       expect(
-        notes.map((e) => e.targetMidiNote).toSet(),
-        midiScoreNotes.expand((p) => p).map((n) => n[2].toDouble()).toSet(),
+        notes
+            .expand(
+              (e) => e.pitchSteps.isEmpty
+                  ? [e.targetMidiNote!]
+                  : e.pitchSteps.map((p) => p.midiNote),
+            )
+            .map((n) => n.round() % 12)
+            .toSet(),
+        midiScoreNotes.expand((p) => p).map((n) => n[2] % 12).toSet(),
       );
     },
   );

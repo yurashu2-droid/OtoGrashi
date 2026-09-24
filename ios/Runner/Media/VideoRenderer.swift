@@ -733,7 +733,13 @@ struct VideoRenderer {
           cropped = cropped.transformed(by: CGAffineTransform(a: -1, b: 0, c: 0, d: 1,
             tx: cropped.extent.minX + cropped.extent.maxX, ty: 0))
         }
-        let age = current.map { sample - $0.destinationStartSample } ?? 48_000
+        let audioEvent = current.flatMap { v in request.arrangement.events.first {
+          $0.assetId == v.assetId && $0.destinationStartSample == v.destinationStartSample &&
+            $0.durationSamples == v.durationSamples &&
+            $0.effectiveSourceDurationSamples == v.effectiveSourceDurationSamples &&
+            $0.sourceStartSample == v.sourceVideoStartTime.numerator
+        }}
+        let age = audioEvent.map { Self.musicalAccentAge(event: $0, sample: sample) } ?? 48_000
         let punch: CGFloat = request.video.effects.enabled.contains("beatPunch")
           ? 1 + 0.09 * CGFloat(max(0, 1 - Double(age) / 7_200)) : 1
         let scale = max(tile.width / cropped.extent.width, tile.height / cropped.extent.height) * punch
@@ -846,6 +852,14 @@ struct VideoRenderer {
         )
       }
     }
+  }
+
+  /// A beat can change inside a continuous spoken phrase. Animate that beat
+  /// without seeking the source video back to the start of the sentence.
+  static func musicalAccentAge(event: SoundEventPayload, sample: Int) -> Int {
+    let offset = max(0, sample - event.destinationStartSample)
+    let onset = event.pitchSteps?.last(where: { $0.offsetSamples <= offset })?.offsetSamples ?? 0
+    return offset - onset
   }
 
   static func buildUpTileCount(

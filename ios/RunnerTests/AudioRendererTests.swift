@@ -3,7 +3,7 @@ import XCTest
 @testable import Runner
 
 final class AudioRendererTests: XCTestCase {
-  func testEverydayNoiseAndMovingVoiceAreRetunedWithExactDuration() throws {
+  func testEverydayNoiseRetainsIdentityAndMovingVoiceIsRetuned() throws {
     var state: UInt32 = 91
     let noise = (0..<24_000).map { _ -> Float in
       state = state &* 1_664_525 &+ 1_013_904_223
@@ -18,10 +18,54 @@ final class AudioRendererTests: XCTestCase {
         let output = try EverydayAudioDSP.render(source, count: 36_000, targetMidiNote: target)
         XCTAssertEqual(output.count, 36_000)
         XCTAssertTrue(output.allSatisfy(\.isFinite))
-        let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(Array(output[8_000..<16_000])))
-        XCTAssertEqual(pitch.midiNote, target, accuracy: 0.2)
+        if source == noise {
+          let prefix = Array(output.prefix(noise.count))
+          let ab = zip(noise, prefix).reduce(0.0) { $0 + Double($1.0 * $1.1) }
+          let aa = noise.reduce(0.0) { $0 + Double($1 * $1) }
+          let bb = prefix.reduce(0.0) { $0 + Double($1 * $1) }
+          XCTAssertGreaterThan(ab / sqrt(aa * bb), 0.8)
+        } else {
+          let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(Array(output[8_000..<16_000])))
+          XCTAssertEqual(pitch.midiNote, target, accuracy: 0.2)
+        }
       }
     }
+  }
+
+  func testContinuousPitchStepsDoNotRestartVowelsAndRejectOverlaps() throws {
+    let input = (0..<48000).map { Float(0.25 * sin(2 * Double.pi * 220 * Double($0) / 48000)) }
+    let steps = [
+      EverydayAudioDSP.NoteStep(offsetSamples: 0, durationSamples: 24000, midiNote: 57),
+      EverydayAudioDSP.NoteStep(offsetSamples: 24000, durationSamples: 24000, midiNote: 60),
+    ]
+    let output = try EverydayAudioDSP.render(input, count: 48000, targetMidiNote: 57, pitchSteps: steps)
+    XCTAssertEqual(output.count, input.count)
+    XCTAssertEqual(try XCTUnwrap(EverydayAudioDSP.estimate(output, start: 12000)).midiNote, 57, accuracy: 0.2)
+    XCTAssertEqual(try XCTUnwrap(EverydayAudioDSP.estimate(output, start: 36000)).midiNote, 60, accuracy: 0.2)
+    XCTAssertLessThan(abs(output[24000] - output[23999]), 0.1)
+    XCTAssertFalse(EverydayAudioDSP.validSteps([
+      .init(offsetSamples: 0, durationSamples: 24000, midiNote: 57),
+      .init(offsetSamples: 100, durationSamples: 24000, midiNote: 60),
+    ], count: 48000))
+  }
+
+  func testPitchAutomationPayloadRoundTripsAndRejectsOverlaps() throws {
+    var json = validJSON(sourceDuration: 48000, destinationStart: 0,
+      eventDuration: 48000, fadeIn: 72, fadeOut: 240, loopMode: "once")
+    var audio = (json["events"] as! [[String: Any]])[0]
+    var video = (json["videoEvents"] as! [[String: Any]])[0]
+    audio["sourceDurationSamples"] = 48000
+    video["sourceDurationSamples"] = 48000
+    audio["targetMidiNote"] = 57.0
+    audio["pitchSteps"] = [
+      ["offsetSamples": 0, "durationSamples": 24000, "midiNote": 57.0],
+      ["offsetSamples": 24000, "durationSamples": 24000, "midiNote": 60.0],
+    ]
+    json["events"] = [audio]; json["videoEvents"] = [video]
+    XCTAssertEqual(try decode(json).events[0].pitchSteps?.count, 2)
+    audio["pitchSteps"] = [["offsetSamples": 47999, "durationSamples": 2, "midiNote": 57.0]]
+    json["events"] = [audio]
+    XCTAssertThrowsError(try decode(json))
   }
 
   func testSourceRangeAndTargetPitchContractMustMatchVideo() throws {

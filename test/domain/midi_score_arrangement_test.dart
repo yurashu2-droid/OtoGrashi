@@ -42,8 +42,13 @@ void main() {
     );
     expect(result.templateId, 'score-image-3part-128bpm-8bar');
     expect(
-      result.events.where((e) => e.treatment == SoundTreatment.tuned),
-      hasLength(148),
+      result.events
+          .where((e) => e.treatment == SoundTreatment.tuned)
+          .fold<int>(
+            0,
+            (n, e) => n + (e.pitchSteps.isEmpty ? 1 : e.pitchSteps.length),
+          ),
+      148,
     );
     expect(result.songRoles?.melody, 'high');
     expect(result.songRoles?.bass, 'low');
@@ -99,8 +104,13 @@ void main() {
         seed: 9,
       );
       expect(
-        result.events.where((e) => e.treatment == SoundTreatment.tuned),
-        hasLength(148),
+        result.events
+            .where((e) => e.treatment == SoundTreatment.tuned)
+            .fold<int>(
+              0,
+              (n, e) => n + (e.pitchSteps.isEmpty ? 1 : e.pitchSteps.length),
+            ),
+        148,
       );
       expect(
         result.events.every(

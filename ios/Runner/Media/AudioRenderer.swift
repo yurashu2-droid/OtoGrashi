@@ -28,12 +28,22 @@ struct SoundEventPayload: Codable, Equatable {
   let pitchSemitones: Double?
   var sourceDurationSamples: Int? = nil
   var targetMidiNote: Double? = nil
+  var pitchSteps: [EverydayAudioDSP.NoteStep]? = nil
   var reverse: Bool? = nil
   var treatment: String? = nil
 
   var effectiveSourceDurationSamples: Int { sourceDurationSamples ?? durationSamples }
   var isReversed: Bool { reverse ?? false }
   var effectivePitchSemitones: Double { pitchSemitones ?? 0 }
+
+  /// A phrase with a different second beat must not reuse the first phrase's
+  /// PCM, even when the file, source window and first note are identical.
+  var musicalCacheKey: String {
+    let automation = (pitchSteps ?? []).map {
+      "\($0.offsetSamples):\($0.durationSamples):\($0.midiNote)"
+    }.joined(separator: ",")
+    return "\(automation)|\(assetId)|\(sourceStartSample)|\(effectiveSourceDurationSamples)|\(durationSamples)|\(targetMidiNote.map(String.init(describing:)) ?? "dry")|\(isReversed)|\(effectivePitchSemitones)"
+  }
 }
 
 enum VideoLoopModePayload: String, Codable, Hashable {
@@ -173,6 +183,8 @@ struct ArrangementPayload: Decodable, Equatable {
         sourceEnd > event.sourceStartSample,
         event.sourceStartSample >= 0,
         (1...Self.totalSamples).contains(event.effectiveSourceDurationSamples),
+        EverydayAudioDSP.validSteps(event.pitchSteps ?? [], count: event.durationSamples),
+        (event.pitchSteps?.isEmpty ?? true) || event.sourceDurationSamples != nil,
         event.targetMidiNote == nil || (event.targetMidiNote!.isFinite && (24...100).contains(event.targetMidiNote!)),
         (event.targetMidiNote == nil && !event.isReversed) || event.sourceDurationSamples != nil,
         ["original", "phrase", "rhythm", "tuned"].contains(event.treatment ?? "original"),
@@ -289,7 +301,7 @@ struct AudioRenderer {
         guard event.sourceStartSample >= trackRange.startSample,
           event.sourceStartSample + sourceDuration <= trackRange.endSample
         else { throw AudioRenderError.sourceOutOfBounds }
-        let key = "\(event.assetId)|\(event.sourceStartSample)|\(sourceDuration)|\(event.durationSamples)|\(event.targetMidiNote.map(String.init(describing:)) ?? "dry")|\(event.isReversed)|\(event.effectivePitchSemitones)"
+        let key = event.musicalCacheKey
         let processed: [Float]
         if let cached = musicalFragments[key] {
           processed = cached
@@ -301,8 +313,8 @@ struct AudioRenderer {
           do {
             let shaped = try EverydayAudioDSP.render(leveled,
               count: event.durationSamples, targetMidiNote: event.targetMidiNote,
-              reverse: event.isReversed)
-            processed = event.targetMidiNote == nil && event.effectivePitchSemitones != 0
+              reverse: event.isReversed, pitchSteps: event.pitchSteps ?? [])
+            processed = event.targetMidiNote == nil && (event.pitchSteps?.isEmpty ?? true) && event.effectivePitchSemitones != 0
               ? try pitchPreservingDuration(shaped, semitones: event.effectivePitchSemitones,
                   cancellation: cancellation, latencyCache: &pitchLatencies) : shaped
           } catch let error as AudioRenderError { throw error }

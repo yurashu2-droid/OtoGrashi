@@ -36,8 +36,8 @@ Arrangement arrangeEveryday({
       final order = _longest(b).compareTo(_longest(a));
       return order != 0 ? order : a.assetId.compareTo(b.assetId);
     });
-  final measured = usable.where((c) => c.fundamentalMidiNote != null).toList()
-    ..sort((a, b) => a.fundamentalMidiNote!.compareTo(b.fundamentalMidiNote!));
+  final measured = usable.where((c) => _register(c) != null).toList()
+    ..sort((a, b) => _register(a)!.compareTo(_register(b)!));
   final beat =
       usable
           .where((c) => c.suggestedRole == SuggestedRole.transient)
@@ -64,6 +64,7 @@ Arrangement arrangeEveryday({
   final events = <SoundEvent>[];
   final mirror = <SoundEvent, bool>{};
   var serial = 0;
+  final sourceCursors = <String, int>{};
 
   void add(
     AnalyzedClip clip,
@@ -75,21 +76,32 @@ Arrangement arrangeEveryday({
     bool reverse = false,
     int variation = 0,
     bool flip = false,
+    bool flow = false,
+    List<PitchStep> pitchSteps = const <PitchStep>[],
   }) {
     if (start >= 720000 || wanted <= 0) return;
     final region = _window(
       clip,
-      phrase: treatment == SoundTreatment.phrase,
+      phrase: treatment == SoundTreatment.phrase || flow,
       variation: variation,
     );
-    final available = region.durationSamples;
     final desired = math.min(wanted, 720000 - start);
+    final cursorKey = '${clip.assetId}:${region.startSample}';
+    var offset = flow ? (sourceCursors[cursorKey] ?? 0) : 0;
+    // Continue the sentence at phrase boundaries. Rewind only when the next
+    // phrase no longer fits, rather than looping a tiny leftover tail.
+    if (offset + math.min(desired, region.durationSamples) >
+        region.durationSamples) {
+      offset = 0;
+    }
+    final available = region.durationSamples - offset;
     final duration = treatment == SoundTreatment.phrase
         ? math.min(desired, available)
         : desired;
     // Tuned one-shots can hold a note, but always loop inside the selected
     // source range. Long natural phrases are never squeezed into note slots.
     final sourceDuration = math.min(available, duration);
+    if (flow) sourceCursors[cursorKey] = offset + sourceDuration;
     final fadeIn = math.min(
       treatment == SoundTreatment.phrase ? 240 : 72,
       duration ~/ 4,
@@ -100,13 +112,14 @@ Arrangement arrangeEveryday({
     );
     final event = SoundEvent(
       assetId: clip.assetId,
-      sourceStartSample: region.startSample,
+      sourceStartSample: region.startSample + offset,
       sourceDurationSamples: sourceDuration,
       destinationStartSample: start,
       durationSamples: duration,
       gain: gain,
       fades: EventFades(fadeInSamples: fadeIn, fadeOutSamples: fadeOut),
       targetMidiNote: note,
+      pitchSteps: List<PitchStep>.unmodifiable(pitchSteps),
       reverse: reverse,
       treatment: treatment,
     );
@@ -140,29 +153,93 @@ Arrangement arrangeEveryday({
       if (leads.any((c) => c.assetId == clip.assetId)) continue;
       final lane = clip.suggestedRole == SuggestedRole.transient
           ? 2
-          : (clip.fundamentalMidiNote ?? 64) < 60
+          : (_register(clip) ?? 64) < 60
           ? 1
           : 0;
       lanes[lane].add(clip);
     }
     for (var lane = 0; lane < 3; lane++) {
       final notes = midiScoreNotes[lane];
-      for (var index = 0; index < notes.length; index++) {
-        final note = notes[index];
-        final start = (note[0] * 720000 / 15360).round();
-        final end = ((note[0] + note[1]) * 720000 / 15360).round();
-        add(
-          lanes[lane][index % lanes[lane].length],
-          start,
-          end - start,
-          note: note[2].toDouble(),
-          gain: lane == 0 ? .55 : .38,
-          variation: index ~/ 8,
-        );
+      final pitches = notes.map((n) => n[2]).toList()..sort();
+      final nativeNote = _register(leads[lane]) ?? (lane == 1 ? 50 : 57);
+      // ONE octave for a whole part, never independently wrap each note. This
+      // preserves the score's melody direction while avoiding chipmunk voices.
+      final octave = _registerOctave(
+        pitches[pitches.length ~/ 2].toDouble(),
+        nativeNote,
+        minimum: pitches.first,
+        maximum: pitches.last,
+      );
+      if (lane == 0) {
+        final group = <List<int>>[];
+        void flush() {
+          if (group.isEmpty) return;
+          final start = (group.first[0] * 720000 / 15360).round();
+          final steps = group.map((n) {
+            final onset = (n[0] * 720000 / 15360).round();
+            final end = ((n[0] + n[1]) * 720000 / 15360).round();
+            return PitchStep(
+              offsetSamples: onset - start,
+              durationSamples: end - onset,
+              midiNote: (n[2] + octave).toDouble(),
+            );
+          }).toList();
+          add(
+            melody,
+            start,
+            steps.last.offsetSamples + steps.last.durationSamples,
+            note: steps.first.midiNote,
+            gain: .55,
+            flow: true,
+            pitchSteps: steps,
+          );
+          group.clear();
+        }
+
+        for (final n in notes) {
+          if (group.isNotEmpty) {
+            final end = ((n[0] + n[1]) * 720000 / 15360).round();
+            final start = (group.first[0] * 720000 / 15360).round();
+            final gap =
+                ((n[0] - group.last[0] - group.last[1]) * 720000 / 15360)
+                    .round();
+            if (gap > 1920 || end - start > 45000) flush();
+          }
+          group.add(n);
+        }
+        flush();
+      } else {
+        for (var index = 0; index < notes.length; index++) {
+          final n = notes[index];
+          final start = (n[0] * 720000 / 15360).round();
+          final end = ((n[0] + n[1]) * 720000 / 15360).round();
+          add(
+            lanes[lane][index % lanes[lane].length],
+            start,
+            end - start,
+            note: (n[2] + octave).toDouble(),
+            gain: .32,
+            variation: index ~/ 8,
+          );
+        }
       }
     }
   } else {
-    final root = (melody.fundamentalMidiNote?.round() ?? 60).clamp(60, 72);
+    // Center the nine-semitone motif around the speaker's register. The old
+    // minimum MIDI 60 forced low voices more than an octave upward.
+    final root = ((_register(melody)?.round() ?? 57) - 4).clamp(40, 76);
+    final bassOctave = _registerOctave(
+      (root - 12).toDouble(),
+      _register(bass) ?? root.toDouble(),
+      minimum: root - 12,
+      maximum: root - 7,
+    );
+    final keysOctave = _registerOctave(
+      (root + 5).toDouble(),
+      _register(keys) ?? root.toDouble(),
+      minimum: root + 4,
+      maximum: root + 7,
+    );
     final motif = switch (melodyTemplate) {
       MelodyTemplate.wink => const [0, 7, 4, 9, 7, 2, 4, 0],
       MelodyTemplate.answer => const [0, 0, 4, 7, 2, 2, 7, 4],
@@ -196,7 +273,7 @@ Arrangement arrangeEveryday({
           bass,
           start,
           bar.isEven ? 72000 : 42000,
-          note: (root - 12 + (bar % 4 == 3 ? 5 : 0)).toDouble(),
+          note: (root - 12 + bassOctave + (bar % 4 == 3 ? 5 : 0)).toDouble(),
           gain: .38,
         );
       }
@@ -206,33 +283,54 @@ Arrangement arrangeEveryday({
             keys,
             start + 22500 + hit * 45000,
             24000,
-            note: (root + (hit == 0 ? 7 : 4)).toDouble(),
+            note: (root + keysOctave + (hit == 0 ? 7 : 4)).toDouble(),
             gain: .34,
             variation: hit,
           );
         }
-        final steps = style == ArrangementStyle.sparse
-            ? 4
-            : style == ArrangementStyle.lively && bar >= 6
-            ? 16
-            : 8;
-        final stepSamples = 90000 ~/ steps;
-        for (var step = 0; step < steps; step++) {
-          if (melodyTemplate == MelodyTemplate.wink && step % 4 == 3) continue;
-          final lead =
-              melodyTemplate == MelodyTemplate.answer && step >= steps ~/ 2
+        // Half-bar phrases keep syllables readable. Notes are pitch automation
+        // over ONE advancing waveform; only the explicit echoes below retrigger.
+        for (var part = 0; part < 2; part++) {
+          final lead = melodyTemplate == MelodyTemplate.answer && part == 1
               ? usable[(usable.indexOf(melody) + 1) % usable.length]
               : melody;
-          final degree = motif[(step + bar + (seed & 3)) % motif.length];
-          final held = step == 0 && bar.isEven;
-          add(
-            lead,
-            start + step * stepSamples,
-            held ? 36000 : math.max(2400, stepSamples - 480),
-            note: (root + degree).toDouble(),
-            gain: .51,
-            variation: bar ~/ 2,
+          final leadOctave = _registerOctave(
+            (root + 4).toDouble(),
+            _register(lead) ?? (root + 4).toDouble(),
+            minimum: root,
+            maximum: root + 9,
           );
+          final stepsPerPhrase = style == ArrangementStyle.sparse ? 1 : 2;
+          final stepSamples = 45000 ~/ stepsPerPhrase;
+          final steps = <PitchStep>[];
+          for (var step = 0; step < stepsPerPhrase; step++) {
+            if (melodyTemplate == MelodyTemplate.wink &&
+                part == 1 &&
+                step == 1) {
+              continue;
+            }
+            final degree =
+                motif[(part * stepsPerPhrase + step + bar + (seed & 3)) %
+                    motif.length];
+            steps.add(
+              PitchStep(
+                offsetSamples: step * stepSamples,
+                durationSamples: stepSamples,
+                midiNote: (root + leadOctave + degree).toDouble(),
+              ),
+            );
+          }
+          if (steps.isNotEmpty) {
+            add(
+              lead,
+              start + part * 45000,
+              steps.last.offsetSamples + steps.last.durationSamples,
+              note: steps.first.midiNote,
+              gain: .51,
+              flow: true,
+              pitchSteps: steps,
+            );
+          }
         }
       }
     }
@@ -298,6 +396,7 @@ Arrangement arrangeEveryday({
         gain: e.gain * (duck ? .62 : 1),
         fades: e.fades,
         targetMidiNote: e.targetMidiNote,
+        pitchSteps: e.pitchSteps,
         reverse: e.reverse,
         treatment: e.treatment,
       ),
@@ -321,7 +420,7 @@ Arrangement arrangeEveryday({
   return Arrangement(
     templateId: midi
         ? 'score-image-3part-128bpm-8bar'
-        : 'everyday-${style.name}-${melodyTemplate.name}-v2',
+        : 'everyday-${style.name}-${melodyTemplate.name}-v3',
     templateVersion: 1,
     analysisVersion: 1,
     rendererVersion: 1,
@@ -356,11 +455,65 @@ AudibleRegion _window(
     );
   }
   if (phrase) {
-    return regions.reduce(
-      (a, b) => a.durationSamples >= b.durationSamples ? a : b,
+    // Audible regions are energy-ranked, not chronological. Short pauses are
+    // part of a sentence: retaining them is better than looping a lone vowel.
+    // The source still advances at 1x, including the actual recorded silence.
+    final ordered = regions.toList()
+      ..sort((a, b) => a.startSample.compareTo(b.startSample));
+    var start = ordered.first.startSample;
+    var end = start + ordered.first.durationSamples;
+    var audible = ordered.first.durationSamples;
+    var bestStart = start;
+    var bestEnd = end;
+    var bestAudible = audible;
+    for (final region in ordered.skip(1)) {
+      final regionEnd = region.startSample + region.durationSamples;
+      if (region.startSample - end <= 16800) {
+        audible += math.max(0, regionEnd - math.max(end, region.startSample));
+        end = math.max(end, regionEnd);
+      } else {
+        start = region.startSample;
+        end = regionEnd;
+        audible = region.durationSamples;
+      }
+      if (audible > bestAudible) {
+        bestStart = start;
+        bestEnd = end;
+        bestAudible = audible;
+      }
+    }
+    return AudibleRegion(
+      startSample: bestStart,
+      durationSamples: bestEnd - bestStart,
     );
   }
   // Repeated notes intentionally reuse the same syllable for a recognizable
   // hook; variations change on phrase boundaries rather than on every frame.
   return regions[variation.abs() % regions.length];
+}
+
+/// A register hint is not a stable source F0; rendering always remeasures PCM.
+double? _register(AnalyzedClip clip) =>
+    clip.registerMidiNote ?? clip.fundamentalMidiNote;
+
+// Select one legal octave for a complete phrase/part; never fold its notes
+// independently, which could turn an ascending melody into a descending one.
+int _registerOctave(
+  double center,
+  double nativeNote, {
+  required num minimum,
+  required num maximum,
+}) {
+  var best = 0;
+  var distance = double.infinity;
+  for (var octave = -48; octave <= 48; octave += 12) {
+    if (minimum + octave < 24 || maximum + octave > 100) continue;
+    final candidate = (center + octave - nativeNote).abs();
+    if (candidate < distance ||
+        (candidate == distance && octave.abs() < best.abs())) {
+      distance = candidate;
+      best = octave;
+    }
+  }
+  return best;
 }

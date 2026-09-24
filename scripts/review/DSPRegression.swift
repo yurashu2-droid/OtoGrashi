@@ -34,7 +34,15 @@ import Foundation
         let p = EverydayAudioDSP.estimate(Array(output[8000..<16000]))
         let actual = p?.midiNote ?? -1000
         check(output.count == 36000 && output.allSatisfy(\.isFinite), "\(name) target \(target): exact length / finite")
-        check(abs(actual - target) < 0.2, "\(name) target \(target): measured MIDI \(actual)")
+        if name == "noise" {
+          let aa = input.reduce(0.0) { $0 + Double($1 * $1) }
+          let prefix = Array(output.prefix(input.count))
+          let bb = prefix.reduce(0.0) { $0 + Double($1 * $1) }
+          let ab = zip(input, prefix).reduce(0.0) { $0 + Double($1.0 * $1.1) }
+          check(ab / sqrt(aa * bb) > 0.8, "noise target \(target): original texture, not an oscillator")
+        } else {
+          check(abs(actual - target) < 0.2, "\(name) target \(target): measured MIDI \(actual)")
+        }
       }
     }
     let original: [Float] = [0.1, 0.2, 0.3, 0.4]
