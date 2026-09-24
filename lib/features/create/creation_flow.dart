@@ -346,42 +346,62 @@ class _CollectScreen extends StatelessWidget {
       ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+          padding: EdgeInsets.fromLTRB(
+            20,
+            state.clips.isEmpty ? 12 : 8,
+            20,
+            28,
+          ),
           children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Transform.rotate(
-                angle: -0.035,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  color: AppTokens.paper,
-                  child: const Text(
-                    'STEP 1  /  音の採集ノート',
-                    style: TextStyle(
-                      color: AppTokens.ink,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.1,
+            if (state.clips.isEmpty) ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Transform.rotate(
+                  angle: -0.035,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    color: AppTokens.paper,
+                    child: const Text(
+                      'STEP 1  /  音の採集ノート',
+                      style: TextStyle(
+                        color: AppTokens.ink,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.1,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 18),
-            Text(
-              state.clips.isEmpty
-                  ? 'いつもの音を、\n3つ集めよう。'
-                  : '${state.clips.length}つの音が\n集まりました。',
-              style: Theme.of(context).textTheme.displaySmall,
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'コップ、蛇口、キーボード。身のまわりの音が15秒の動画になります。',
-              style: TextStyle(color: AppTokens.mutedInk, height: 1.5),
-            ),
-            const SizedBox(height: 22),
+              const SizedBox(height: 18),
+              Text(
+                'いつもの音を、\n3つ集めよう。',
+                style: Theme.of(context).textTheme.displaySmall,
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'コップ、蛇口、キーボード。身のまわりの音が15秒の動画になります。',
+                style: TextStyle(color: AppTokens.mutedInk, height: 1.5),
+              ),
+              const SizedBox(height: 22),
+            ] else ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${state.clips.length}つの音が集まりました',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: AppTokens.ink,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
             Row(
               children: [
                 for (var index = 0; index < 3; index++) ...[
@@ -405,7 +425,7 @@ class _CollectScreen extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 22),
+            SizedBox(height: state.clips.isEmpty ? 22 : 12),
             if (state.clips.isEmpty)
               Container(
                 padding: const EdgeInsets.symmetric(

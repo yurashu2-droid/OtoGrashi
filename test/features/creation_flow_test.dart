@@ -1049,8 +1049,59 @@ void main() {
     expect(tester.getSize(button).height, greaterThanOrEqualTo(44));
   });
 
+  testWidgets('collected clips bring the third card into the first screen', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+
+    expect(find.text('家の中の短い音を、まず3つ。'), findsOneWidget);
+    expect(find.text('いつもの音を、\n3つ集めよう。'), findsOneWidget);
+
+    await controller.startDemo();
+    await tester.pumpAndSettle();
+
+    expect(find.text('家の中の短い音を、まず3つ。'), findsNothing);
+    expect(find.text('STEP 1  /  音の採集ノート'), findsNothing);
+    expect(find.byType(NavigationBar), findsOneWidget);
+    final createButton = find.ancestor(
+      of: find.text('この音で15秒をつくる  ↗'),
+      matching: find.byType(FilledButton),
+    );
+    expect(createButton, findsOneWidget);
+    final thirdCard = find.ancestor(
+      of: find.text('合成素材 3'),
+      matching: find.byType(Card),
+    );
+    final cardRect = tester.getRect(thirdCard);
+    final createRect = tester.getRect(createButton);
+    final visibleAboveCreateButton = (createRect.top - cardRect.top).clamp(
+      0.0,
+      cardRect.height,
+    );
+    expect(visibleAboveCreateButton, greaterThanOrEqualTo(96));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('capture Task 7 visual QA screens', (tester) async {
-    tester.view.physicalSize = const Size(390, 844);
+    tester.view.physicalSize = const Size(375, 812);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
