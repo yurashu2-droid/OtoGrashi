@@ -95,12 +95,12 @@ void main() {
 
 Arrangement _arrangement(int count) {
   final events = List<SoundEvent>.generate(count, (index) {
-    final start = index * 2_500;
+    final start = index * 1_000;
     return SoundEvent(
       assetId: 'one',
       sourceStartSample: 0,
       destinationStartSample: start,
-      durationSamples: 2_500,
+      durationSamples: 1_000,
       gain: 0.5,
       fades: const EventFades(fadeInSamples: 120, fadeOutSamples: 120),
       pitchSemitones: index.isEven ? -12 : 12,

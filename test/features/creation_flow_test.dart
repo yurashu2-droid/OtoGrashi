@@ -799,7 +799,7 @@ void main() {
       }
       expect(controller.state.phase, CreationPhase.readyToCreate);
       await controller.removeClip(clips[1].id);
-      expect(controller.state.phase, CreationPhase.collecting);
+      expect(controller.state.phase, CreationPhase.readyToCreate);
       expect(projects.project!.clipIds, [clips[0].id, clips[2].id]);
       await controller.addExisting(clips[3]);
       await controller.createPreview();
