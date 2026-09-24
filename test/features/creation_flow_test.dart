@@ -121,8 +121,9 @@ void main() {
       await tester.pumpAndSettle();
     }
     expect(find.text('3/6人'), findsOneWidget);
-    expect(find.text('作成OK · 次の人へスマホを渡そう'), findsOneWidget);
-    final create = find.text('この音で15秒をつくる  ↗');
+    expect(find.text('曲にするか、次の人へ渡そう'), findsOneWidget);
+    expect(find.byTooltip('次の人を撮る'), findsOneWidget);
+    final create = find.text('15秒の曲にする ↗');
     expect(create, findsOneWidget);
     expect(tester.getRect(create).bottom, lessThan(812));
     final thirdCard = find.ancestor(

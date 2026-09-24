@@ -517,7 +517,7 @@ class _CollectScreen extends StatelessWidget {
                     ? clipCount >= 6
                           ? 'みんなの音が集まりました'
                           : clipCount >= 3
-                          ? '作成OK · 次の人へスマホを渡そう'
+                          ? '曲にするか、次の人へ渡そう'
                           : 'あと${3 - clipCount}人で作成OK · 次の人へスマホを渡そう'
                     : collectionHint,
                 textAlign: TextAlign.center,
@@ -612,34 +612,35 @@ class _CollectScreen extends StatelessWidget {
               ),
               const SizedBox(height: 8),
             ],
-            Row(
-              children: [
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: state.clips.length >= 6 ? null : onCapture,
-                    icon: const Icon(Icons.videocam_outlined),
-                    label: const Text('今撮る'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppTokens.coral,
-                      foregroundColor: AppTokens.ink,
+            if (!controller.isRelay || clipCount < 3)
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: state.clips.length >= 6 ? null : onCapture,
+                      icon: const Icon(Icons.videocam_outlined),
+                      label: const Text('今撮る'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppTokens.coral,
+                        foregroundColor: AppTokens.ink,
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 148,
-                  child: OutlinedButton.icon(
-                    onPressed: state.clips.length >= 6 ? null : onPhotos,
-                    icon: const Icon(Icons.photo_library_outlined),
-                    label: const Text('動画を選ぶ'),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(0, 56),
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 148,
+                    child: OutlinedButton.icon(
+                      onPressed: state.clips.length >= 6 ? null : onPhotos,
+                      icon: const Icon(Icons.photo_library_outlined),
+                      label: const Text('動画を選ぶ'),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 56),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
             if (state.phase == CreationPhase.preparing) ...[
               const SizedBox(height: 16),
               const LinearProgressIndicator(),
@@ -661,14 +662,41 @@ class _CollectScreen extends StatelessWidget {
               top: false,
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                child: FilledButton(
-                  onPressed: controller.createPreview,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppTokens.ink,
-                    foregroundColor: Colors.white,
-                  ),
-                  child: const Text('この音で15秒をつくる  ↗'),
-                ),
+                child: controller.isRelay && clipCount < 6
+                    ? Row(
+                        children: [
+                          IconButton.outlined(
+                            onPressed: onPhotos,
+                            tooltip: '動画を選ぶ',
+                            icon: const Icon(Icons.photo_library_outlined),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton.filledTonal(
+                            onPressed: onCapture,
+                            tooltip: '次の人を撮る',
+                            icon: const Icon(Icons.videocam_outlined),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: FilledButton(
+                              onPressed: controller.createPreview,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: AppTokens.ink,
+                                foregroundColor: Colors.white,
+                              ),
+                              child: const Text('15秒の曲にする ↗'),
+                            ),
+                          ),
+                        ],
+                      )
+                    : FilledButton(
+                        onPressed: controller.createPreview,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppTokens.ink,
+                          foregroundColor: Colors.white,
+                        ),
+                        child: const Text('この音で15秒をつくる  ↗'),
+                      ),
               ),
             )
           : null,
