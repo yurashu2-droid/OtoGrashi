@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: codex/mad-performance-modes
-      - name: Compact performance selection and preserve behavior assertions
+      - name: Correct compact settings expression
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -22,16 +22,12 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('test/features/creation_flow_test.dart');s=p.read_text();a='await controller.removeClip(clips[1].id);\n      expect(controller.state.phase, CreationPhase.collecting);';b='await controller.removeClip(clips[1].id);\n      expect(controller.state.phase, CreationPhase.readyToCreate);';assert a in s or b in s;s=s.replace(a,b);p.write_text(s)
-          p=Path('test/domain/midi_event_contract_test.dart');s=p.read_text();s=s.replace('index * 2_500','index * 1_000').replace('durationSamples: 2_500','durationSamples: 1_000');p.write_text(s)
-          p=Path('lib/features/create/creation_flow.dart');s=p.read_text()
-          old='            PerformanceControls(\n'+ '\n'.join('              '+line for line in ['mode: state.performanceMode,','seconds: state.durationSeconds,','onMode: widget.controller.selectPerformance,','onDuration: widget.controller.selectDuration,'])+'\n            ),'
-          new='            TextButton.icon(icon: const Icon(Icons.tune_rounded), label: Text(\'演出と長さ · ${PerformanceControls.labels[state.performanceMode]!.$1} · ${state.durationSeconds}秒\'), onPressed: () => showModalBottomSheet<void>(context: context, isScrollControlled: true, builder: (sheetContext) => SafeArea(child: SingleChildScrollView(padding: const EdgeInsets.symmetric(horizontal: 20), child: AnimatedBuilder(animation: widget.controller, builder: (context, _) => PerformanceControls(mode: widget.controller.state.performanceMode, seconds: widget.controller.state.durationSeconds, onMode: widget.controller.selectPerformance, onDuration: widget.controller.selectDuration)))))),),'
-          assert old in s or new in s;s=s.replace(old,new);p.write_text(s)
+          p=Path('lib/features/create/creation_flow.dart');s=p.read_text();old='selectDuration)))))),),';new='selectDuration))))),),';assert old in s or new in s;s=s.replace(old,new);p.write_text(s)
           PY
-          git add lib/features/create/creation_flow.dart test/features/creation_flow_test.dart test/domain/midi_event_contract_test.dart
+          git add lib/features/create/creation_flow.dart
           if ! git diff --cached --quiet; then
-            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: compact effect settings and align tests with one-source and 512-event support [skip ci]'
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: compact settings builder expression [skip ci]'
             git push origin HEAD:refs/heads/codex/mad-performance-modes
           fi
+          gh run watch 36074501764 --repo yurashu2-droid/OtoGrashi --interval 10 || true
           gh run rerun 36074501764 --repo yurashu2-droid/OtoGrashi
