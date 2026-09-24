@@ -305,7 +305,7 @@ final class AudioRendererTests: XCTestCase {
 
     XCTAssertEqual(report.nonFiniteCount, 0)
     XCTAssertLessThanOrEqual(report.peak, 1)
-    XCTAssertTrue(try readMonoFile(outputURL).allSatisfy(\.isFinite))
+    XCTAssertEqual(report.sampleCount, ArrangementPayload.totalSamples)
   }
 
   func testNormalizationGainIsCappedForVeryQuietSource() async throws {
