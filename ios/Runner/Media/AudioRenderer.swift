@@ -435,21 +435,41 @@ struct AudioRenderer {
 
       var rendered: [Float] = []
       rendered.reserveCapacity(frameCount)
+      var consecutiveEmptyRenders = 0
       while rendered.count < frameCount {
         if cancellation?.isCancelled == true { throw AudioRenderError.cancelled }
         let requested = AVAudioFrameCount(
           min(Self.pitchRenderChunkSamples, frameCount - rendered.count)
         )
         let status = try engine.renderOffline(requested, to: output)
-        guard status == .success,
-          output.frameLength > 0,
-          output.frameLength <= requested,
-          let outputChannel = output.floatChannelData?[0]
-        else { throw AudioRenderError.pitchProcessingFailed }
-        rendered.append(contentsOf: UnsafeBufferPointer(
-          start: outputChannel,
-          count: Int(output.frameLength)
-        ))
+        guard output.frameLength <= requested else {
+          throw AudioRenderError.pitchProcessingFailed
+        }
+        switch status {
+        case .success, .cannotDoInCurrentContext:
+          // A non-success status can still carry rendered frames. Advance by
+          // frameLength, then retry temporary context failures on the next call.
+          if output.frameLength > 0 {
+            guard let outputChannel = output.floatChannelData?[0] else {
+              throw AudioRenderError.pitchProcessingFailed
+            }
+            rendered.append(contentsOf: UnsafeBufferPointer(
+              start: outputChannel,
+              count: Int(output.frameLength)
+            ))
+            consecutiveEmptyRenders = 0
+          } else {
+            consecutiveEmptyRenders += 1
+            if consecutiveEmptyRenders >= 16 {
+              throw AudioRenderError.pitchProcessingFailed
+            }
+          }
+        case .insufficientDataFromInputNode, .error:
+          // This graph uses a player node, never the input node.
+          throw AudioRenderError.pitchProcessingFailed
+        @unknown default:
+          throw AudioRenderError.pitchProcessingFailed
+        }
       }
       return rendered
     } catch let error as AudioRenderError {
