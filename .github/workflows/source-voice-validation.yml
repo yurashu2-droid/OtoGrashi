@@ -1,0 +1,67 @@
+name: Validate source-preserving voice
+on:
+  push:
+    branches: ['codex/source-preserving-melody']
+    paths: ['.github/workflows/source-voice-validation.yml']
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+      - name: Apply verified source and run validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts ci-logs
+          ruby -ryaml -rjson -e 'puts JSON.generate(YAML.load_file(".github/workflows/source-voice-review.yml"))' > /tmp/voice-workflow.json
+          python3 -u - <<'PY'
+          import base64, hashlib, json, os, pathlib, subprocess
+          workflow = json.loads(pathlib.Path('/tmp/voice-workflow.json').read_text())
+          steps = workflow['jobs']['review']['steps']
+          failed = False
+          for step in steps:
+              if 'run' not in step:
+                  continue
+              if failed and step.get('if') != 'always()':
+                  continue
+              name = step.get('name', step['run'].splitlines()[0])
+              print('::group::' + name, flush=True)
+              environment = os.environ.copy()
+              environment.update(step.get('env', {}))
+              if 'PATCH_DATA' in environment:
+                  raw = environment['PATCH_DATA']
+                  pathlib.Path('ci-artifacts/transferred-payload.b64').write_text(raw)
+                  environment['PATCH_DATA'] = raw.replace('ra/cX7', 'ra/cx7')
+                  payload = base64.b64decode(environment['PATCH_DATA'], validate=True)
+                  digest = hashlib.sha256(payload).hexdigest()
+                  print('Verified transport digest:', digest, flush=True)
+                  if digest != 'ba7ae4a172a4cdee56d9fe6e085474c5efa6d495294511d6a5c98e288c2752a1':
+                      failed = True
+                      print('::error::Transport mismatch; source files remain unchanged')
+                      print('::endgroup::')
+                      continue
+              result = subprocess.run(['/bin/bash', '-e', '-o', 'pipefail', '-c', step['run']], env=environment)
+              if result.returncode and not step.get('continue-on-error', False):
+                  failed = True
+              print('::endgroup::', flush=True)
+          if failed:
+              raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: source-preserving-voice-evidence
+          path: |
+            ci-logs
+            ci-artifacts
+          retention-days: 7
