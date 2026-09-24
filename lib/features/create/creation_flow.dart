@@ -1075,7 +1075,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
                 );
               },
             ),
-            TextButton.icon(icon: const Icon(Icons.tune_rounded), label: Text('演出と長さ · ${PerformanceControls.labels[state.performanceMode]!.$1} · ${state.durationSeconds}秒'), onPressed: () => showModalBottomSheet<void>(context: context, isScrollControlled: true, builder: (sheetContext) => SafeArea(child: SingleChildScrollView(padding: const EdgeInsets.symmetric(horizontal: 20), child: AnimatedBuilder(animation: widget.controller, builder: (context, _) => PerformanceControls(mode: widget.controller.state.performanceMode, seconds: widget.controller.state.durationSeconds, onMode: widget.controller.selectPerformance, onDuration: widget.controller.selectDuration)))))),),
+            TextButton.icon(icon: const Icon(Icons.tune_rounded), label: Text('演出と長さ · ${PerformanceControls.labels[state.performanceMode]!.$1} · ${state.durationSeconds}秒'), onPressed: () => showModalBottomSheet<void>(context: context, isScrollControlled: true, builder: (sheetContext) => SafeArea(child: SingleChildScrollView(padding: const EdgeInsets.symmetric(horizontal: 20), child: AnimatedBuilder(animation: widget.controller, builder: (context, _) => PerformanceControls(mode: widget.controller.state.performanceMode, seconds: widget.controller.state.durationSeconds, onMode: widget.controller.selectPerformance, onDuration: widget.controller.selectDuration))))),),
             if (state.melody == MelodyTemplate.midiScore) ...[
               const SizedBox(height: 8),
               Text(
