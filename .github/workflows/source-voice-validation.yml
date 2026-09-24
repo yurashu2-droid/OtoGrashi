@@ -18,45 +18,104 @@ jobs:
           flutter-version: '3.47.5'
           channel: stable
           cache: true
-      - name: Apply verified source and run validation
+      - run: flutter pub get
+      - name: Resolve two diagnosed lint findings
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ci-artifacts ci-logs
-          ruby -ryaml -rjson -e 'puts JSON.generate(YAML.load_file(".github/workflows/source-voice-review.yml"))' > /tmp/voice-workflow.json
-          python3 -u - <<'PY'
-          import base64, hashlib, json, os, pathlib, subprocess
-          workflow = json.loads(pathlib.Path('/tmp/voice-workflow.json').read_text())
-          steps = workflow['jobs']['review']['steps']
-          failed = False
-          for step in steps:
-              if 'run' not in step:
-                  continue
-              if failed and step.get('if') != 'always()':
-                  continue
-              name = step.get('name', step['run'].splitlines()[0])
-              print('::group::' + name, flush=True)
-              environment = os.environ.copy()
-              environment.update(step.get('env', {}))
-              if 'PATCH_DATA' in environment:
-                  raw = environment['PATCH_DATA']
-                  pathlib.Path('ci-artifacts/transferred-payload.b64').write_text(raw)
-                  environment['PATCH_DATA'] = raw.replace('ra/cX7', 'ra/cx7')
-                  payload = base64.b64decode(environment['PATCH_DATA'], validate=True)
-                  digest = hashlib.sha256(payload).hexdigest()
-                  print('Verified transport digest:', digest, flush=True)
-                  if digest != 'ba7ae4a172a4cdee56d9fe6e085474c5efa6d495294511d6a5c98e288c2752a1':
-                      failed = True
-                      print('::error::Transport mismatch; source files remain unchanged')
-                      print('::endgroup::')
-                      continue
-              result = subprocess.run(['/bin/bash', '-e', '-o', 'pipefail', '-c', step['run']], env=environment)
-              if result.returncode and not step.get('continue-on-error', False):
-                  failed = True
-              print('::endgroup::', flush=True)
-          if failed:
-              raise SystemExit(1)
+          mkdir -p ci-logs ci-artifacts
+          python3 - <<'PY'
+          import hashlib, os, pathlib
+          assert os.environ['GITHUB_REF'] == 'refs/heads/codex/source-preserving-melody'
+          p = pathlib.Path('lib/domain/arrangement.dart')
+          data = p.read_bytes()
+          assert hashlib.sha256(data).hexdigest() == '76fbfc9cfeaa99688af03fe61543f5a092e3f6b0e15254c5d4a12c6af398cec8'
+          text = data.decode()
+          a = 'pitchSteps.first.offsetSamples != 0)\n      return false;'
+          b = 'pitchSteps.first.offsetSamples != 0) {\n      return false;\n    }'
+          c = 'step.midiNote > 100)\n        return false;'
+          d = 'step.midiNote > 100) {\n        return false;\n      }'
+          assert text.count(a) == 1 and text.count(c) == 1
+          p.write_text(text.replace(a,b).replace(c,d))
           PY
+          dart format lib/domain/arrangement.dart
+          git add lib/domain/arrangement.dart
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'style: use explicit blocks for pitch-curve validation'
+          git push origin HEAD:refs/heads/codex/source-preserving-melody
+          git rev-parse HEAD | tee ci-logs/commit.txt
+          git archive --format=zip HEAD -o ci-artifacts/source.zip
+      - name: Actual Swift DSP regressions
+        id: dsp
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          swiftc -O ios/Runner/Media/EverydayAudioDSP.swift scripts/review/SourceVoiceRegression.swift -o /tmp/source-voice-tests
+          /tmp/source-voice-tests | tee ci-logs/source-voice-dsp.txt
+          swiftc -O ios/Runner/Media/EverydayAudioDSP.swift scripts/review/DSPRegression.swift -o /tmp/dsp-tests
+          /tmp/dsp-tests | tee ci-logs/dsp.txt
+          python3 scripts/review/check_analysis.py | tee ci-logs/analysis-regression.txt
+      - name: Flutter analysis
+        id: analyze
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter analyze --fatal-infos 2>&1 | tee ci-logs/flutter-analyze.txt
+      - name: Flutter tests
+        id: tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test --reporter expanded 2>&1 | tee ci-logs/flutter-test.txt
+      - name: Real speech comparison
+        id: comparison
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/review/prepare_voice_fixture.py ci-artifacts/voice-comparison
+          git show f02eab5619815668ba1bf2136348dca9265f56f7:ios/Runner/Media/EverydayAudioDSP.swift | sed 's/enum EverydayAudioDSP/enum LegacyEverydayAudioDSP/' > /tmp/LegacyEverydayAudioDSP.swift
+          swiftc -O ios/Runner/Media/EverydayAudioDSP.swift /tmp/LegacyEverydayAudioDSP.swift scripts/review/VoiceComparison.swift -o /tmp/voice-comparison
+          /tmp/voice-comparison ci-artifacts/voice-comparison/input.f32 ci-artifacts/voice-comparison | tee ci-logs/voice-comparison.txt
+      - name: Early test and listening evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: source-voice-audio-comparison
+          path: |
+            ci-logs
+            ci-artifacts/source.zip
+            ci-artifacts/voice-comparison
+          retention-days: 7
+      - name: Build iOS simulator
+        id: build
+        if: steps.analyze.outcome == 'success' && steps.tests.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
+          flutter build ios --simulator --debug 2>&1 | tee ci-logs/build.txt
+      - name: Native audio and synchronized video tests
+        id: native
+        if: steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ID="$(xcrun simctl list devices available --json | python3 -c 'import sys,json; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in d.items() if "iOS" in k for x in v if x.get("isAvailable") and "iPhone" in x["name"]))')"
+          xcrun simctl boot "$ID" 2>/dev/null || true
+          xcrun simctl bootstatus "$ID" -b
+          xcodebuild test -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -sdk iphonesimulator -destination "platform=iOS Simulator,id=$ID" -parallel-testing-enabled NO -only-testing:RunnerTests/AudioAnalyzerTests -only-testing:RunnerTests/AudioRendererTests -only-testing:RunnerTests/VideoRendererTests/testRealDartEverydayTimelineRendersAsSynchronizedMADVideo -resultBundlePath ci-artifacts/VoiceTests.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee ci-logs/native-tests.txt
+      - name: Summarize native evidence
+        if: always()
+        shell: bash
+        run: |
+          if [ -d ci-artifacts/VoiceTests.xcresult ]; then
+            xcrun xcresulttool get test-results summary --path ci-artifacts/VoiceTests.xcresult > ci-logs/native-summary.json
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -65,3 +124,13 @@ jobs:
             ci-logs
             ci-artifacts
           retention-days: 7
+      - name: Require passing checks
+        if: always()
+        env:
+          DSP: ${{ steps.dsp.outcome }}
+          ANALYZE: ${{ steps.analyze.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          COMPARISON: ${{ steps.comparison.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          NATIVE: ${{ steps.native.outcome }}
+        run: test "$DSP" = success && test "$ANALYZE" = success && test "$TESTS" = success && test "$COMPARISON" = success && test "$BUILD" = success && test "$NATIVE" = success
