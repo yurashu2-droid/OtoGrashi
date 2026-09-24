@@ -73,19 +73,21 @@ class _ClipCardState extends State<ClipCard> {
     final textScale = MediaQuery.textScalerOf(context).scale(16) / 16;
     final accent = _clipAccent(index);
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 14),
+      color: const Color(0xFFFFFEFB),
+      elevation: 2,
+      shadowColor: const Color(0x228D6B5B),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: Color(0xFFE9DDD4)),
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: Color(0xFFE7DCD2)),
       ),
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
-        height: 156 + (textScale - 1).clamp(0, 2) * 56,
+        height: 160 + (textScale - 1).clamp(0, 2) * 56,
         child: Row(
           children: [
             SizedBox(
-              width: 112,
+              width: 122,
               height: double.infinity,
               child: Stack(
                 fit: StackFit.expand,
@@ -99,34 +101,67 @@ class _ClipCardState extends State<ClipCard> {
                               clip.label.startsWith('合成素材'),
                         ),
                   Material(
-                    color: const Color(0x22000000),
+                    color: const Color(0x11000000),
                     child: InkWell(
                       onTap: widget.onPreview,
-                      child: const Center(
-                        child: Icon(
-                          Icons.play_circle_fill_rounded,
-                          color: Colors.white,
-                          size: 42,
+                      child: const Align(
+                        alignment: Alignment.bottomLeft,
+                        child: Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Icon(
+                            Icons.play_circle_fill_rounded,
+                            color: Colors.white,
+                            size: 38,
+                            shadows: [
+                              Shadow(color: Color(0x77000000), blurRadius: 6),
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
                   Positioned(
-                    left: 7,
-                    top: 7,
+                    left: 8,
+                    top: 8,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        color: AppTokens.paper,
-                        borderRadius: BorderRadius.circular(12),
+                        color: accent,
+                        shape: BoxShape.circle,
+                      ),
+                      child: SizedBox(
+                        width: 27,
+                        height: 27,
+                        child: Center(
+                          child: Text(
+                            '${index + 1}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 7,
+                    bottom: 11,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: const Color(0xCC211C1A),
+                        borderRadius: BorderRadius.circular(4),
                       ),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
+                          horizontal: 5,
                           vertical: 2,
                         ),
                         child: Text(
-                          '${index + 1}',
-                          style: const TextStyle(fontWeight: FontWeight.w800),
+                          duration,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                          ),
                         ),
                       ),
                     ),
@@ -199,11 +234,15 @@ class _ClipCardState extends State<ClipCard> {
                           ),
                       ],
                     ),
-                    Text(
-                      duration,
-                      style: Theme.of(context).textTheme.bodySmall,
+                    Container(
+                      width: 30,
+                      height: 3,
+                      margin: const EdgeInsets.only(bottom: 7),
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.8),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
                     ),
-                    const SizedBox(height: 3),
                     Expanded(
                       child: _ClipWaveform(
                         key: ValueKey('clip-waveform-${clip.id}'),
@@ -285,7 +324,7 @@ class _ClipWaveform extends StatelessWidget {
     child: Tooltip(
       message: '$clipNameを聴く',
       child: Material(
-        color: const Color(0xFFF8F2EC),
+        color: const Color(0xFFFFF8F1),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(9),
           side: BorderSide(color: accent.withValues(alpha: 0.2)),
