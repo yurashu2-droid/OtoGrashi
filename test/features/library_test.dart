@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:otogurashi/domain/arrangement.dart';
@@ -9,6 +13,7 @@ import 'package:otogurashi/features/library/library_screen.dart';
 import 'package:otogurashi/media/media_delivery_gateway.dart';
 import 'package:otogurashi/media/media_presentation_gateway.dart';
 import 'package:otogurashi/storage/asset_repository.dart';
+import 'package:otogurashi/storage/project_database.dart';
 import 'package:otogurashi/storage/project_repository.dart';
 
 void main() {
@@ -103,12 +108,12 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('作品'), findsOneWidget);
-      expect(find.text('音の引き出し'), findsOneWidget);
+      expect(find.text('つくった曲'), findsOneWidget);
+      expect(find.text('音のストック'), findsOneWidget);
       expect(find.text('まだ作品がありません'), findsOneWidget);
       expect(find.text('撮影・取り込みへ'), findsOneWidget);
 
-      await tester.tap(find.text('音の引き出し'));
+      await tester.tap(find.text('音のストック'));
       await tester.pumpAndSettle();
       expect(find.text('素材はまだありません'), findsOneWidget);
     },
@@ -128,7 +133,158 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('再生'), findsNothing);
-    expect(find.text('再編集'), findsOneWidget);
+    expect(find.text('続きをつくる'), findsOneWidget);
+  });
+
+  testWidgets('stocked sound can be previewed, renamed, and reused', (
+    tester,
+  ) async {
+    final assets = _LibraryAssets()..asset = _asset();
+    final projects = _LibraryProjects();
+    final presentation = _PreviewPresentation();
+    ClipAsset? reused;
+    Widget screen() => MaterialApp(
+      home: LibraryScreen(
+        projects: projects,
+        assets: assets,
+        presentation: presentation,
+        initialTabIndex: 1,
+        onCreate: () {},
+        onAssetSelected: (asset) => reused = asset,
+      ),
+    );
+    await tester.pumpWidget(screen());
+    await tester.pumpAndSettle();
+
+    expect(find.text('カタカタ'), findsOneWidget);
+    expect(find.text('3.0秒 · 0作品で使用'), findsOneWidget);
+    final referenceLoads = assets.referenceLoads;
+    await tester.pumpWidget(screen());
+    expect(assets.referenceLoads, referenceLoads);
+    await tester.tap(find.text('聴く'));
+    await tester.pumpAndSettle();
+    expect(find.text('ストックした元の動画と音'), findsOneWidget);
+    await tester.tap(find.byTooltip('閉じる'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('音の名前を変更'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), '雨の音');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(find.text('雨の音'), findsOneWidget);
+
+    await tester.tap(find.text('曲に使う'));
+    expect(reused?.label, '雨の音');
+  });
+
+  testWidgets('stock and video layouts fit a narrow screen with larger text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final assets = _LibraryAssets()
+      ..asset = _asset().withLabel('長い録音の名前 カタカタカタカタ');
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: LibraryScreen(
+          projects: _LibraryProjects(),
+          assets: assets,
+          presentation: _PreviewPresentation(),
+          initialTabIndex: 1,
+          onCreate: () {},
+          onAssetSelected: (_) {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    final version = CompletedExport(
+      id: 'export',
+      projectId: 'project',
+      sourceRevision: 1,
+      relativePath: 'renders/project/1/full.mp4',
+      createdAt: DateTime.utc(2026, 9, 24),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: CompletedVideoScreen(
+          project: _project(),
+          export: version,
+          versions: [version],
+          presentation: _UnusedPresentation(),
+          delivery: _RecordingDelivery(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('completed project opens the saved video from its poster', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    final setup = await tester.runAsync(() async {
+      final root = await Directory.systemTemp.createTemp('otogurashi-library-');
+      final database = await ProjectDatabase.open(root);
+      final projects = SqliteProjectRepository(database);
+      final project = await projects.create('雨の日の曲');
+      await projects.recordCompletedExport(
+        projectId: project.id,
+        sourceRevision: project.revision,
+        relativePath: 'renders/finished.mp4',
+      );
+      return (root, database, projects);
+    });
+    final (root, database, projects) = setup!;
+    addTearDown(() async {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      database.close();
+      await root.delete(recursive: true);
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: LibraryScreen(
+          projects: projects,
+          assets: _LibraryAssets(),
+          presentation: _PreviewPresentation(),
+          delivery: _RecordingDelivery(),
+          onCreate: () {},
+          onProjectSelected: (_) async {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('完成'), findsOneWidget);
+    expect(find.text('完成版 1本を保存中'), findsOneWidget);
+    await tester.tap(find.text('動画を見る'));
+    await tester.pumpAndSettle();
+    expect(find.byType(CompletedVideoScreen), findsOneWidget);
+    expect(find.text('雨の日の曲'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('a completed video can be saved and shared again', (
@@ -168,9 +324,7 @@ void main() {
     await tester.tap(find.text('シェアする'));
     await tester.pump();
     expect(delivery.shared, path);
-    await tester.tap(find.text('完成版 2'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('完成版 1').last);
+    await tester.tap(find.text('完成版 1'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('シェアする'));
     await tester.pump();
@@ -178,9 +332,22 @@ void main() {
   });
 }
 
-final class _UnusedPresentation implements MediaPresentationGateway {
+class _UnusedPresentation implements MediaPresentationGateway {
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+final class _PreviewPresentation extends _UnusedPresentation {
+  @override
+  Future<Uint8List> thumbnail(String relativePath) async => base64Decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2ZcXcAAAAASUVORK5CYII=',
+  );
+
+  @override
+  Future<AudioWaveform> waveform(String relativePath) async => AudioWaveform(
+    durationUs: 3_000_000,
+    levels: const [.1, .3, .8, .4, .1, .6, .9, .5, .2],
+  );
 }
 
 final class _RecordingDelivery implements MediaDeliveryGateway {
@@ -210,6 +377,19 @@ Project _project() => Project(
   updatedAt: DateTime.utc(2026, 9, 22),
 );
 
+ClipAsset _asset() => const ClipAsset(
+  id: 'asset',
+  relativePath: 'assets/keyboard.mov',
+  durationUs: 3_000_000,
+  selectionStartUs: 0,
+  selectionDurationUs: 3_000_000,
+  width: 1080,
+  height: 1920,
+  rotation: 0,
+  sha256: 'abc',
+  label: 'カタカタ',
+);
+
 final class _LibraryProjects implements ProjectRepository {
   Project? project;
 
@@ -236,9 +416,12 @@ final class _LibraryProjects implements ProjectRepository {
 }
 
 final class _LibraryAssets implements AssetRepository {
+  ClipAsset? asset;
+  int referenceLoads = 0;
+
   @override
-  Future<ClipAsset> rename(String assetId, String label) =>
-      throw UnimplementedError();
+  Future<ClipAsset> rename(String assetId, String label) async =>
+      asset = asset!.withLabel(label);
 
   @override
   Future<ClipAsset> importFile(String sourcePath) => throw UnimplementedError();
@@ -251,13 +434,16 @@ final class _LibraryAssets implements AssetRepository {
   Future<ClipAsset?> load(String id) async => null;
 
   @override
-  Future<List<ClipAsset>> list() async => const [];
+  Future<List<ClipAsset>> list() async => asset == null ? const [] : [asset!];
 
   @override
   Future<void> deleteUnreferenced(String assetId) async {}
 
   @override
-  Future<List<String>> referencingProjectIds(String assetId) async => const [];
+  Future<List<String>> referencingProjectIds(String assetId) async {
+    referenceLoads++;
+    return const [];
+  }
 
   @override
   Future<String> resolvePath(String assetId) => throw UnimplementedError();

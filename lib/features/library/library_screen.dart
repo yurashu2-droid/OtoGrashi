@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -10,6 +11,7 @@ import '../../media/media_presentation_gateway.dart';
 import '../../storage/asset_repository.dart';
 import '../../storage/project_repository.dart';
 import '../export/completed_video_screen.dart';
+import '../export/media_playback.dart';
 
 typedef ProjectSelected = Future<void> Function(Project project);
 
@@ -52,6 +54,7 @@ class _LibraryScreenState extends State<LibraryScreen>
   List<Project> _projects = const <Project>[];
   List<ClipAsset> _assets = const <ClipAsset>[];
   List<CompletedExport> _exports = const <CompletedExport>[];
+  int _reloadGeneration = 0;
   Object? _error;
 
   @override
@@ -80,6 +83,7 @@ class _LibraryScreenState extends State<LibraryScreen>
         _projects = projects;
         _assets = assets;
         _exports = exports;
+        _reloadGeneration++;
         _loading = false;
         _error = null;
       });
@@ -95,13 +99,13 @@ class _LibraryScreenState extends State<LibraryScreen>
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('作品と素材'),
+      title: const Text('音の記録'),
       centerTitle: true,
       bottom: TabBar(
         controller: _tabs,
         tabs: const [
-          Tab(text: '作品'),
-          Tab(text: '音の引き出し'),
+          Tab(text: 'つくった曲'),
+          Tab(text: '音のストック'),
         ],
       ),
       actions: [
@@ -132,6 +136,8 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (_projects.isEmpty) {
       return _EmptyState(
         message: 'まだ作品がありません',
+        description: '集めた音から、はじめての曲をつくろう。',
+        icon: Icons.movie_creation_outlined,
         actionLabel: '撮影・取り込みへ',
         onPressed: widget.onCreate,
       );
@@ -141,9 +147,19 @@ class _LibraryScreenState extends State<LibraryScreen>
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
         children: [
+          _SectionIntro(
+            title: 'つくった曲',
+            count: _projects.length,
+            description: '完成した動画も、制作中の曲もここに。',
+          ),
+          const SizedBox(height: 12),
           for (final project in _projects)
             _ProjectCard(
               project: project,
+              draftPath: _assets
+                  .where((asset) => project.clipIds.contains(asset.id))
+                  .firstOrNull
+                  ?.relativePath,
               completed: _exports
                   .where((item) => item.projectId == project.id)
                   .toList(growable: false),
@@ -181,28 +197,56 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (_assets.isEmpty) {
       return _EmptyState(
         message: '素材はまだありません',
+        description: '気になった音を撮って、ここに集めよう。',
+        icon: Icons.graphic_eq_rounded,
         actionLabel: '撮影・取り込みへ',
         onPressed: widget.onCreate,
       );
     }
     return RefreshIndicator(
       onRefresh: _reload,
-      child: ListView.separated(
+      child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
-        itemCount: _assets.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 10),
+        itemCount: _assets.length + 1,
         itemBuilder: (context, index) {
-          final asset = _assets[index];
+          if (index == 0) {
+            return _SectionIntro(
+              title: '音のストック',
+              count: _assets.length,
+              description: '聴き直して、名前をつけて、次の曲にも。',
+            );
+          }
+          final asset = _assets[index - 1];
           return _AssetCard(
+            key: ValueKey(asset.id),
             asset: asset,
-            index: index,
-            projects: widget.assets.referencingProjectIds(asset.id),
-            onRename: () => _renameAsset(context, asset, index),
-            onTap: widget.onAssetSelected == null
+            index: index - 1,
+            presentation: widget.presentation,
+            loadReferences: () => widget.assets.referencingProjectIds(asset.id),
+            reloadGeneration: _reloadGeneration,
+            onRename: () => _renameAsset(context, asset, index - 1),
+            onPreview: widget.presentation == null
+                ? null
+                : () => _previewAsset(context, asset, index - 1),
+            onReuse: widget.onAssetSelected == null
                 ? null
                 : () => widget.onAssetSelected!(asset),
           );
         },
+      ),
+    );
+  }
+
+  void _previewAsset(BuildContext context, ClipAsset asset, int index) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTokens.surfaceColor,
+      showDragHandle: true,
+      builder: (_) => _AssetPreviewSheet(
+        asset: asset,
+        title: _soundName(asset, index),
+        presentation: widget.presentation!,
       ),
     );
   }
@@ -290,9 +334,53 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 }
 
-final class _ProjectCard extends StatelessWidget {
+final class _SectionIntro extends StatelessWidget {
+  const _SectionIntro({
+    required this.title,
+    required this.count,
+    required this.description,
+  });
+
+  final String title;
+  final int count;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Flexible(
+              child: Text(
+                title,
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              '$count',
+              style: const TextStyle(
+                color: AppTokens.coral,
+                fontWeight: FontWeight.w900,
+                fontSize: 24,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 3),
+        Text(description, style: const TextStyle(color: AppTokens.mutedInk)),
+      ],
+    ),
+  );
+}
+
+final class _ProjectCard extends StatefulWidget {
   const _ProjectCard({
     required this.project,
+    required this.draftPath,
     required this.completed,
     required this.presentation,
     required this.onView,
@@ -301,6 +389,7 @@ final class _ProjectCard extends StatelessWidget {
   });
 
   final Project project;
+  final String? draftPath;
   final List<CompletedExport> completed;
   final MediaPresentationGateway? presentation;
   final VoidCallback? onView;
@@ -308,113 +397,628 @@ final class _ProjectCard extends StatelessWidget {
   final VoidCallback onDelete;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(14),
+  State<_ProjectCard> createState() => _ProjectCardState();
+}
+
+class _ProjectCardState extends State<_ProjectCard> {
+  Future<Uint8List>? _thumbnail;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadThumbnail();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ProjectCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.completed.firstOrNull?.relativePath !=
+            widget.completed.firstOrNull?.relativePath ||
+        oldWidget.draftPath != widget.draftPath ||
+        oldWidget.presentation != widget.presentation) {
+      _loadThumbnail();
+    }
+  }
+
+  void _loadThumbnail() {
+    final path = widget.completed.firstOrNull?.relativePath ?? widget.draftPath;
+    _thumbnail = path == null || widget.presentation == null
+        ? null
+        : widget.presentation!.thumbnail(path);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final project = widget.project;
+    final finished = widget.completed.isNotEmpty;
+    final editedAt = project.updatedAt.toLocal();
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      color: const Color(0xFFFFFEFB),
+      elevation: 2,
+      shadowColor: const Color(0x228D6B5B),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(15),
+        side: const BorderSide(color: Color(0xFFE7DCD2)),
+      ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  project.title.isEmpty ? '無題の作品' : project.title,
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-              ),
-              PopupMenuButton<String>(
-                tooltip: '作品の操作',
-                onSelected: (value) {
-                  if (value == 'delete') onDelete();
-                },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'delete', child: Text('削除')),
-                ],
-              ),
-            ],
-          ),
-          if (completed.isNotEmpty && presentation != null) ...[
-            const SizedBox(height: 8),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: SizedBox(
-                height: 174,
-                child: FutureBuilder<Uint8List>(
-                  future: presentation!.thumbnail(completed.first.relativePath),
+          SizedBox(
+            height: 192,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                FutureBuilder<Uint8List>(
+                  future: _thumbnail,
                   builder: (context, snapshot) => snapshot.hasData
-                      ? Image.memory(
-                          snapshot.data!,
-                          fit: BoxFit.cover,
-                          width: double.infinity,
-                        )
-                      : const ColoredBox(
-                          color: AppTokens.paper,
+                      ? Image.memory(snapshot.data!, fit: BoxFit.cover)
+                      : const _ProjectArtwork(),
+                ),
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.transparent, Color(0x99000000)],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 14,
+                  top: 14,
+                  child: _StatusPill(
+                    text: finished ? '完成' : '制作中',
+                    color: finished ? AppTokens.coral : AppTokens.lavender,
+                  ),
+                ),
+                if (finished && widget.onView != null)
+                  Positioned.fill(
+                    child: Semantics(
+                      button: true,
+                      label: '完成動画を見る',
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: widget.onView,
                           child: Center(
-                            child: Icon(Icons.movie_outlined, size: 38),
+                            child: Container(
+                              width: 58,
+                              height: 58,
+                              decoration: const BoxDecoration(
+                                color: Color(0xEFFFFFFF),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.play_arrow_rounded,
+                                size: 32,
+                                color: AppTokens.ink,
+                              ),
+                            ),
                           ),
                         ),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  left: 15,
+                  right: 15,
+                  bottom: 13,
+                  child: Text(
+                    '${editedAt.month}月${editedAt.day}日 · ${project.clipIds.length}つの音',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      shadows: [Shadow(color: Colors.black45, blurRadius: 3)],
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
-          ],
-          Text('${project.clipIds.length}素材・編集 ${project.revision}回目'),
-          if (completed.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text('完成版 ${completed.length}件を保存中'),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(15, 10, 12, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        project.title.isEmpty ? '無題の作品' : project.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleLarge
+                            ?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    PopupMenuButton<String>(
+                      tooltip: '作品の操作',
+                      onSelected: (value) {
+                        if (value == 'delete') widget.onDelete();
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'delete', child: Text('削除')),
+                      ],
+                    ),
+                  ],
+                ),
+                if (finished)
+                  Text(
+                    '完成版 ${widget.completed.length}本を保存中',
+                    style: const TextStyle(color: AppTokens.mutedInk),
+                  ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    if (finished && widget.onView != null) ...[
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: widget.onView,
+                          icon: const Icon(Icons.play_arrow_rounded),
+                          label: const Text('動画を見る'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppTokens.coral,
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size(0, 48),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: widget.onOpen,
+                        icon: Icon(
+                          finished ? Icons.tune_rounded : Icons.edit_outlined,
+                        ),
+                        label: Text(finished ? '再編集' : '続きをつくる'),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 48),
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-          const SizedBox(height: 10),
-          if (completed.isNotEmpty && onView != null) ...[
-            FilledButton.icon(
-              onPressed: onView,
-              icon: const Icon(Icons.play_arrow_rounded),
-              label: const Text('完成動画を見る'),
-            ),
-            const SizedBox(height: 8),
-          ],
-          OutlinedButton.icon(
-            onPressed: onOpen,
-            icon: const Icon(Icons.tune),
-            label: const Text('再編集'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+final class _ProjectArtwork extends StatelessWidget {
+  const _ProjectArtwork();
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: const BoxDecoration(
+      gradient: LinearGradient(colors: [Color(0xFFD7C5EA), Color(0xFF9B78C8)]),
+    ),
+    child: Center(
+      child: Transform.rotate(
+        angle: -0.09,
+        child: const Icon(
+          Icons.graphic_eq_rounded,
+          size: 116,
+          color: Color(0xAAFFFFFF),
+        ),
       ),
     ),
   );
 }
 
-final class _AssetCard extends StatelessWidget {
+final class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.text, required this.color});
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(5),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: AppTokens.ink,
+          fontWeight: FontWeight.w800,
+          fontSize: 12,
+        ),
+      ),
+    ),
+  );
+}
+
+final class _AssetCard extends StatefulWidget {
   const _AssetCard({
     required this.asset,
     required this.index,
-    required this.projects,
-    required this.onTap,
+    required this.presentation,
+    required this.loadReferences,
+    required this.reloadGeneration,
+    required this.onPreview,
+    required this.onReuse,
     required this.onRename,
+    super.key,
   });
 
   final ClipAsset asset;
   final int index;
-  final Future<List<String>> projects;
-  final VoidCallback? onTap;
+  final MediaPresentationGateway? presentation;
+  final Future<List<String>> Function() loadReferences;
+  final int reloadGeneration;
+  final VoidCallback? onPreview;
+  final VoidCallback? onReuse;
   final VoidCallback onRename;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: ListTile(
-      onTap: onTap,
-      leading: const CircleAvatar(child: Icon(Icons.graphic_eq)),
-      title: Text(_soundName(asset, index)),
-      subtitle: FutureBuilder<List<String>>(
-        future: projects,
-        builder: (context, snapshot) => Text(
-          '${(asset.selectionDurationUs / 1000000).toStringAsFixed(1)}秒・'
-          '${snapshot.data?.length ?? 0}作品で使用中',
+  State<_AssetCard> createState() => _AssetCardState();
+}
+
+class _AssetCardState extends State<_AssetCard> {
+  Future<Uint8List>? _thumbnail;
+  Future<AudioWaveform>? _waveform;
+  late Future<List<String>> _projects = widget.loadReferences();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMedia();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AssetCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.asset.relativePath != widget.asset.relativePath ||
+        oldWidget.presentation != widget.presentation) {
+      _loadMedia();
+    }
+    if (oldWidget.asset.id != widget.asset.id ||
+        oldWidget.reloadGeneration != widget.reloadGeneration) {
+      _projects = widget.loadReferences();
+    }
+  }
+
+  void _loadMedia() {
+    final gateway = widget.presentation;
+    _thumbnail = gateway?.thumbnail(widget.asset.relativePath);
+    _waveform = gateway?.waveform(widget.asset.relativePath);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final asset = widget.asset;
+    final accent = switch (widget.index % 3) {
+      0 => AppTokens.coral,
+      1 => const Color(0xFF9B78C8),
+      _ => const Color(0xFFE9A347),
+    };
+    final name = _soundName(asset, widget.index);
+    return Card(
+      margin: const EdgeInsets.only(top: 12),
+      color: const Color(0xFFFFFEFB),
+      elevation: 2,
+      shadowColor: const Color(0x228D6B5B),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: Color(0xFFE7DCD2)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        height:
+            166 +
+            (MediaQuery.textScalerOf(context).scale(16) - 16).clamp(0, 30),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 112,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  FutureBuilder<Uint8List>(
+                    future: _thumbnail,
+                    builder: (context, snapshot) => snapshot.hasData
+                        ? Image.memory(snapshot.data!, fit: BoxFit.cover)
+                        : DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: accent.withValues(alpha: .5),
+                            ),
+                            child: const Icon(
+                              Icons.graphic_eq_rounded,
+                              color: Colors.white,
+                              size: 48,
+                            ),
+                          ),
+                  ),
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: _StatusPill(
+                      text: '${widget.index + 1}',
+                      color: accent,
+                    ),
+                  ),
+                  Positioned(
+                    bottom: 7,
+                    left: 7,
+                    right: 7,
+                    child: TextButton.icon(
+                      onPressed: widget.onPreview,
+                      icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                      label: const Text('聴く'),
+                      style: TextButton.styleFrom(
+                        backgroundColor: const Color(0xEFFFFFFF),
+                        foregroundColor: AppTokens.ink,
+                        minimumSize: const Size(0, 44),
+                        padding: EdgeInsets.zero,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 6, 7, 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: widget.onRename,
+                          tooltip: '音の名前を変更',
+                          icon: const Icon(Icons.edit_outlined, size: 19),
+                        ),
+                      ],
+                    ),
+                    FutureBuilder<List<String>>(
+                      future: _projects,
+                      builder: (context, snapshot) => Text(
+                        '${(asset.selectionDurationUs / 1000000).toStringAsFixed(1)}秒 · ${snapshot.data?.length ?? 0}作品で使用',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppTokens.mutedInk,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF8F1),
+                          borderRadius: BorderRadius.circular(7),
+                        ),
+                        child: FutureBuilder<AudioWaveform>(
+                          future: _waveform,
+                          builder: (context, snapshot) => snapshot.hasData
+                              ? CustomPaint(
+                                  painter: _StockWaveformPainter(
+                                    waveform: snapshot.data!,
+                                    color: accent,
+                                    selectionStartUs: asset.selectionStartUs,
+                                    selectionDurationUs:
+                                        asset.selectionDurationUs,
+                                  ),
+                                  child: const SizedBox.expand(),
+                                )
+                              : Center(
+                                  child: Icon(
+                                    Icons.graphic_eq_rounded,
+                                    size: 19,
+                                    color: accent,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        onPressed: widget.onReuse,
+                        icon: const Icon(
+                          Icons.add_circle_outline_rounded,
+                          size: 18,
+                        ),
+                        label: const Text('曲に使う'),
+                        style: TextButton.styleFrom(
+                          minimumSize: const Size(0, 44),
+                          padding: const EdgeInsets.symmetric(horizontal: 5),
+                          foregroundColor: AppTokens.ink,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
-      trailing: IconButton(
-        onPressed: onRename,
-        tooltip: '音の名前を変更',
-        icon: const Icon(Icons.edit_outlined),
+    );
+  }
+}
+
+final class _StockWaveformPainter extends CustomPainter {
+  const _StockWaveformPainter({
+    required this.waveform,
+    required this.color,
+    required this.selectionStartUs,
+    required this.selectionDurationUs,
+  });
+  final AudioWaveform waveform;
+  final Color color;
+  final int selectionStartUs;
+  final int selectionDurationUs;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final levels = waveform.levels;
+    final count = size.width.floor().clamp(1, 48);
+    final step = size.width / count;
+    for (var i = 0; i < count; i++) {
+      final start = i * levels.length ~/ count;
+      final end = ((i + 1) * levels.length ~/ count).clamp(
+        start + 1,
+        levels.length,
+      );
+      var level = 0.0;
+      for (var j = start; j < end; j++) {
+        if (levels[j] > level) level = levels[j];
+      }
+      final height = 3 + level * (size.height - 9);
+      final timeUs = (i + .5) * waveform.durationUs / count;
+      final selected =
+          timeUs >= selectionStartUs &&
+          timeUs <= selectionStartUs + selectionDurationUs;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset((i + .5) * step, size.height / 2),
+            width: (step * .65).clamp(1, 3),
+            height: height,
+          ),
+          const Radius.circular(2),
+        ),
+        Paint()
+          ..color = selected
+              ? color
+              : AppTokens.mutedInk.withValues(alpha: .32),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _StockWaveformPainter oldDelegate) =>
+      oldDelegate.waveform != waveform ||
+      oldDelegate.color != color ||
+      oldDelegate.selectionStartUs != selectionStartUs ||
+      oldDelegate.selectionDurationUs != selectionDurationUs;
+}
+
+final class _AssetPreviewSheet extends StatefulWidget {
+  const _AssetPreviewSheet({
+    required this.asset,
+    required this.title,
+    required this.presentation,
+  });
+  final ClipAsset asset;
+  final String title;
+  final MediaPresentationGateway presentation;
+
+  @override
+  State<_AssetPreviewSheet> createState() => _AssetPreviewSheetState();
+}
+
+class _AssetPreviewSheetState extends State<_AssetPreviewSheet> {
+  late final playback = MediaPlaybackController(widget.presentation);
+
+  @override
+  void dispose() {
+    unawaited(playback.pause());
+    playback.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FractionallySizedBox(
+    heightFactor: .8,
+    child: SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  tooltip: '閉じる',
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            const Text('ストックした元の動画と音'),
+            const SizedBox(height: 12),
+            Expanded(
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: 9 / 16,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(13),
+                    child: NativeMovieView(
+                      relativePath: widget.asset.relativePath,
+                      segments: [
+                        PlaybackSegment(
+                          relativePath: widget.asset.relativePath,
+                          startUs: widget.asset.selectionStartUs,
+                          durationUs: widget.asset.selectionDurationUs,
+                        ),
+                      ],
+                      gateway: widget.presentation,
+                      controller: playback,
+                      fallback: const ColoredBox(color: AppTokens.ink),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            AnimatedBuilder(
+              animation: playback,
+              builder: (context, _) => Row(
+                children: [
+                  IconButton.filledTonal(
+                    onPressed: playback.toggle,
+                    tooltip: playback.isPlaying ? '一時停止' : '再生',
+                    icon: Icon(
+                      playback.isPlaying
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    '${(widget.asset.selectionDurationUs / 1000000).toStringAsFixed(1)}秒の音',
+                  ),
+                  const Spacer(),
+                  if (playback.error != null) const Text('再生できませんでした'),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     ),
   );
@@ -431,11 +1035,15 @@ String _soundName(ClipAsset asset, int index) {
 final class _EmptyState extends StatelessWidget {
   const _EmptyState({
     required this.message,
+    required this.description,
+    required this.icon,
     required this.actionLabel,
     required this.onPressed,
   });
 
   final String message;
+  final String description;
+  final IconData icon;
   final String actionLabel;
   final VoidCallback onPressed;
 
@@ -446,9 +1054,27 @@ final class _EmptyState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.inventory_2_outlined, size: 52),
+          Container(
+            width: 106,
+            height: 106,
+            decoration: const BoxDecoration(
+              color: AppTokens.paper,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, size: 52, color: AppTokens.coral),
+          ),
           const SizedBox(height: 14),
-          Text(message, style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            message,
+            style: Theme.of(context).textTheme.titleLarge,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 5),
+          Text(
+            description,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppTokens.mutedInk),
+          ),
           const SizedBox(height: 14),
           FilledButton(onPressed: onPressed, child: Text(actionLabel)),
         ],

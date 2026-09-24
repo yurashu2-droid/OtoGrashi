@@ -129,7 +129,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('作品と素材'), findsOneWidget);
+    expect(find.text('音の記録'), findsOneWidget);
     expect(find.text('友達との曲'), findsOneWidget);
     expect(find.text('自分の音でつくる'), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
