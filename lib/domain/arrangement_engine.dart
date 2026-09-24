@@ -1,5 +1,6 @@
 import 'arrangement.dart';
 import 'melody_template.dart';
+import 'midi_score_data.dart';
 
 Arrangement arrange({
   required List<AnalyzedClip> clips,
@@ -43,7 +44,11 @@ Arrangement arrange({
   final events = <SoundEvent>[];
   SongRoles? songRoles;
 
-  if (melodyTemplate != MelodyTemplate.none) {
+  if (melodyTemplate == MelodyTemplate.midiScore) {
+    final score = _buildMidiScoreEvents(usable);
+    events.addAll(score.events);
+    songRoles = score.roles;
+  } else if (melodyTemplate != MelodyTemplate.none) {
     final song = _buildSongEvents(
       usable,
       style,
@@ -136,7 +141,9 @@ Arrangement arrange({
       .toList(growable: false);
 
   return Arrangement(
-    templateId: template.id,
+    templateId: melodyTemplate == MelodyTemplate.midiScore
+        ? 'score-image-3part-128bpm-8bar'
+        : template.id,
     templateVersion: 1,
     analysisVersion: 1,
     rendererVersion: 1,
@@ -155,6 +162,177 @@ final class _SongEvents {
   const _SongEvents(this.events, this.roles);
   final List<SoundEvent> events;
   final SongRoles roles;
+}
+
+_SongEvents _buildMidiScoreEvents(List<AnalyzedClip> usable) {
+  // The MIDI has three pitched parts. Prefer measured sustained sounds for
+  // melody and bass, while allowing any audible recording to play a part.
+  final measured = usable
+      .where((clip) => clip.fundamentalMidiNote != null)
+      .toList();
+  final tonal = measured
+      .where((clip) => clip.suggestedRole != SuggestedRole.transient)
+      .toList();
+  final pitched = (tonal.isNotEmpty ? tonal : measured)
+    ..sort((a, b) => a.fundamentalMidiNote!.compareTo(b.fundamentalMidiNote!));
+  final byLength = usable.toList()
+    ..sort((a, b) => _longestAudible(b).compareTo(_longestAudible(a)));
+  final bass = pitched.firstOrNull ?? byLength.first;
+  final melody = pitched.length > 1
+      ? pitched.last
+      : pitched.firstOrNull ?? byLength.first;
+  final pianoCandidates =
+      usable
+          .where(
+            (clip) =>
+                clip.assetId != bass.assetId && clip.assetId != melody.assetId,
+          )
+          .toList()
+        ..sort((a, b) {
+          int suitability(AnalyzedClip clip) =>
+              (clip.suggestedRole == SuggestedRole.transient ? 100 : 0) +
+              (clip.fundamentalMidiNote == null
+                  ? 30
+                  : (clip.fundamentalMidiNote! - 58).abs().round());
+          return suitability(a).compareTo(suitability(b));
+        });
+  final piano =
+      pianoCandidates.firstOrNull ??
+      (byLength.where((clip) => clip.assetId != melody.assetId).firstOrNull ??
+          melody);
+  final leads = [melody, bass, piano];
+  final roles = SongRoles(
+    melody: melody.assetId,
+    bass: bass.assetId,
+    keys: piano.assetId,
+  );
+
+  // Extra user recordings share the closest suitable part, replacing a lead
+  // on some notes. This keeps the original 148 note onsets and all 3–6 videos.
+  final lanes = <List<AnalyzedClip>>[
+    [melody],
+    [bass],
+    [piano],
+  ];
+  for (final clip in usable) {
+    if (leads.any((lead) => lead.assetId == clip.assetId)) continue;
+    final lane = clip.suggestedRole == SuggestedRole.transient
+        ? 2
+        : clip.fundamentalMidiNote == null
+        ? 2
+        : clip.fundamentalMidiNote! < 60
+        ? 1
+        : 0;
+    lanes[lane].add(clip);
+  }
+
+  // Choose one song-wide key shift and one octave for each part. Optimize
+  // against the measured lead sounds so all notes fit within ±12 when possible.
+  var bestKey = 0;
+  var bestOctaves = <int>[0, 0, 0];
+  var bestCost = double.infinity;
+  for (var key = -12; key <= 12; key++) {
+    final octaves = <int>[];
+    var cost = 0.0;
+    for (var lane = 0; lane < 3; lane++) {
+      final fundamental = leads[lane].fundamentalMidiNote;
+      if (fundamental == null) {
+        octaves.add(0);
+        continue;
+      }
+      var laneCost = double.infinity;
+      var laneOctave = 0;
+      for (final octave in const [-24, -12, 0, 12, 24]) {
+        var candidate = 0.0;
+        for (final note in midiScoreNotes[lane]) {
+          final shift = note[2] + key + octave - fundamental;
+          final over = shift.abs() > 12 ? shift.abs() - 12 : 0.0;
+          candidate += over * 1000 + shift.abs() * 0.01;
+        }
+        candidate += octave.abs() * 0.02;
+        if (candidate < laneCost) {
+          laneCost = candidate;
+          laneOctave = octave;
+        }
+      }
+      octaves.add(laneOctave);
+      cost += laneCost;
+    }
+    cost += key.abs() * 0.05;
+    if (cost < bestCost) {
+      bestCost = cost;
+      bestKey = key;
+      bestOctaves = octaves;
+    }
+  }
+
+  final events = <SoundEvent>[];
+  for (var lane = 0; lane < 3; lane++) {
+    final notes = midiScoreNotes[lane];
+    for (var index = 0; index < notes.length; index++) {
+      final note = notes[index];
+      final clip = lanes[lane][index % lanes[lane].length];
+      // 32 beats * 480 ticks map exactly to 720,000 samples. Round each
+      // boundary independently to preserve starts, rests and overlaps.
+      final destinationStart = (note[0] * 720000 / 15360).round();
+      final noteEnd = ((note[0] + note[1]) * 720000 / 15360).round();
+      final region = _bestScoreRegion(clip, noteEnd - destinationStart);
+      final sourceStart = region?.startSample ?? clip.sourceStartSample;
+      final available = region?.durationSamples ?? clip.durationSamples;
+      final duration = _min(noteEnd - destinationStart, available);
+      final fundamental = clip.fundamentalMidiNote;
+      var pitch = 0.0;
+      if (fundamental != null) {
+        pitch = note[2] + bestKey + bestOctaves[lane] - fundamental;
+        // For an extra sound with a different register, keep the MIDI pitch
+        // class while choosing its closest audible octave.
+        while (pitch > 12) {
+          pitch -= 12;
+        }
+        while (pitch < -12) {
+          pitch += 12;
+        }
+      }
+      final fade = _min(240, duration ~/ 4);
+      events.add(
+        SoundEvent(
+          assetId: clip.assetId,
+          sourceStartSample: sourceStart,
+          destinationStartSample: destinationStart,
+          durationSamples: duration,
+          gain: lane == 0
+              ? 0.55
+              : lane == 1
+              ? 0.48
+              : 0.43,
+          fades: EventFades(fadeInSamples: fade, fadeOutSamples: fade),
+          pitchSemitones: pitch,
+        ),
+      );
+    }
+  }
+  events.sort(
+    (a, b) => a.destinationStartSample.compareTo(b.destinationStartSample),
+  );
+  return _SongEvents(events, roles);
+}
+
+int _longestAudible(AnalyzedClip clip) => clip.audibleRegions.isEmpty
+    ? clip.durationSamples
+    : clip.audibleRegions
+          .map((region) => region.durationSamples)
+          .reduce((a, b) => a > b ? a : b);
+
+AudibleRegion? _bestScoreRegion(AnalyzedClip clip, int desired) {
+  if (clip.audibleRegions.isEmpty) return null;
+  // The first fitting region preserves the analyzed ordering; otherwise use
+  // the longest region and shorten only that note's sounding duration.
+  return clip.audibleRegions
+          .where((region) => region.durationSamples >= desired)
+          .firstOrNull ??
+      clip.audibleRegions.reduce(
+        (a, b) => a.durationSamples >= b.durationSamples ? a : b,
+      );
 }
 
 _SongEvents _buildSongEvents(

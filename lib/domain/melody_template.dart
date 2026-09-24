@@ -2,7 +2,7 @@
 /// is half a bar at 128 BPM; null is a deliberate rest.
 /// Note steps become target notes only when a stable recorded fundamental is
 /// available and the required shift fits the renderer's quality range.
-enum MelodyTemplate { none, hop, wink, answer }
+enum MelodyTemplate { none, hop, wink, answer, midiScore }
 
 extension MelodyTemplateDetails on MelodyTemplate {
   String get label => switch (this) {
@@ -10,6 +10,7 @@ extension MelodyTemplateDetails on MelodyTemplate {
     MelodyTemplate.hop => 'はねる',
     MelodyTemplate.wink => 'スキップ',
     MelodyTemplate.answer => 'かけあい',
+    MelodyTemplate.midiScore => '3パート楽譜',
   };
 
   String get description => switch (this) {
@@ -17,6 +18,7 @@ extension MelodyTemplateDetails on MelodyTemplate {
     MelodyTemplate.hop => 'まっすぐな拍に、上がって戻る旋律',
     MelodyTemplate.wink => '裏拍と休符で、跳ねる曲',
     MelodyTemplate.answer => '刻む拍に、短い音が返事する曲',
+    MelodyTemplate.midiScore => '提供されたMIDIの旋律・低音・ピアノを撮った音で演奏',
   };
 
   /// Sample offsets in one 90,000-sample bar. The third beat is used by the
@@ -26,6 +28,7 @@ extension MelodyTemplateDetails on MelodyTemplate {
     MelodyTemplate.hop => const [0, 45000, 67500],
     MelodyTemplate.wink => const [0, 33750, 67500],
     MelodyTemplate.answer => const [0, 22500, 67500],
+    MelodyTemplate.midiScore => const [],
   };
 
   List<int> get bassOffsets => switch (this) {
@@ -33,6 +36,7 @@ extension MelodyTemplateDetails on MelodyTemplate {
     MelodyTemplate.hop => const [0, 45000],
     MelodyTemplate.wink => const [0, 56250],
     MelodyTemplate.answer => const [0, 45000],
+    MelodyTemplate.midiScore => const [],
   };
 
   List<int> get keysOffsets => switch (this) {
@@ -40,6 +44,7 @@ extension MelodyTemplateDetails on MelodyTemplate {
     MelodyTemplate.hop => const [22500, 67500],
     MelodyTemplate.wink => const [11250, 56250],
     MelodyTemplate.answer => const [33750, 78750],
+    MelodyTemplate.midiScore => const [],
   };
 
   List<MelodyNote> get notes => switch (this) {
@@ -74,6 +79,8 @@ extension MelodyTemplateDetails on MelodyTemplate {
       MelodyNote(2),
       MelodyNote(0),
     ],
+    // The dedicated MIDI branch uses all 148 notes in midi_score_data.dart.
+    MelodyTemplate.midiScore => const [],
   };
 }
 

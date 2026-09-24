@@ -105,7 +105,10 @@ void main() {
         threeFixtures[2],
       ];
       for (final style in ArrangementStyle.values) {
-        for (final melody in MelodyTemplate.values.skip(1)) {
+        for (final melody in MelodyTemplate.values.where(
+          (value) =>
+              value != MelodyTemplate.none && value != MelodyTemplate.midiScore,
+        )) {
           final arrangement = arrange(
             clips: measuredFixtures,
             style: style,
@@ -159,24 +162,31 @@ void main() {
         }
       }
 
-      final patterns = MelodyTemplate.values.skip(1).map((melody) {
-        final arranged = arrange(
-          clips: measuredFixtures,
-          style: ArrangementStyle.sparse,
-          melodyTemplate: melody,
-          seed: 7,
-        );
-        return arranged.events
-            .map(
-              (event) => [
-                event.assetId,
-                event.destinationStartSample,
-                event.pitchSemitones,
-              ],
-            )
-            .toList()
-            .toString();
-      }).toSet();
+      final patterns = MelodyTemplate.values
+          .where(
+            (value) =>
+                value != MelodyTemplate.none &&
+                value != MelodyTemplate.midiScore,
+          )
+          .map((melody) {
+            final arranged = arrange(
+              clips: measuredFixtures,
+              style: ArrangementStyle.sparse,
+              melodyTemplate: melody,
+              seed: 7,
+            );
+            return arranged.events
+                .map(
+                  (event) => [
+                    event.assetId,
+                    event.destinationStartSample,
+                    event.pitchSemitones,
+                  ],
+                )
+                .toList()
+                .toString();
+          })
+          .toSet();
       expect(patterns.length, 3);
 
       final noMelody = arrange(
@@ -211,7 +221,7 @@ void main() {
         isTrue,
       );
 
-      oldEvents.first['pitchSemitones'] = 4;
+      oldEvents.first['pitchSemitones'] = 13;
       expect(
         () => Arrangement.fromJson({...oldJson, 'events': oldEvents}),
         throwsA(isA<MediaContractException>()),
@@ -298,7 +308,10 @@ void main() {
       _clip('voice', pitch: 57.35),
       _clip('room', role: SuggestedRole.texture),
     ];
-    for (final song in MelodyTemplate.values.skip(1)) {
+    for (final song in MelodyTemplate.values.where(
+      (value) =>
+          value != MelodyTemplate.none && value != MelodyTemplate.midiScore,
+    )) {
       final arranged = arrange(
         clips: clips,
         style: ArrangementStyle.sparse,
@@ -407,7 +420,7 @@ void main() {
     }
   });
 
-  test('persisted arrangement rejects more than six assets or 64 events', () {
+  test('persisted arrangement rejects more than six assets or 160 events', () {
     final valid = arrange(
       clips: threeFixtures,
       style: ArrangementStyle.lively,
@@ -426,8 +439,8 @@ void main() {
     expect(
       () => Arrangement.fromJson({
         ...valid,
-        'events': List<Object?>.filled(65, audio),
-        'videoEvents': List<Object?>.filled(65, video),
+        'events': List<Object?>.filled(161, audio),
+        'videoEvents': List<Object?>.filled(161, video),
       }),
       throwsA(isA<MediaContractException>()),
     );
