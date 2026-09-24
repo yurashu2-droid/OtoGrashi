@@ -90,7 +90,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('1つの音が'), findsOneWidget);
+    expect(find.text('1/6'), findsOneWidget);
     expect(find.text('typing'), findsOneWidget);
     expect(find.text('cup'), findsNothing);
     expect(find.text('自分の音でつくる'), findsNothing);
