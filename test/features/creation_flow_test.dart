@@ -475,6 +475,86 @@ void main() {
     },
   );
 
+  test('quick melody choices render only the final audio and video', () async {
+    final projects = _MemoryProjects();
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: projects,
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    await controller.createPreview();
+    await Future<void>.delayed(Duration.zero);
+    final previousRenderCount = media.renderRequests.length;
+    expect(controller.state.preview, isNotNull);
+
+    final winkSaved = Completer<void>();
+    final answerSaved = Completer<void>();
+    controller.addListener(() {
+      final choice = controller.state.project?.arrangement['melodyTemplate'];
+      if (choice == 'wink' && !winkSaved.isCompleted) winkSaved.complete();
+      if (choice == 'answer' && !answerSaved.isCompleted) {
+        answerSaved.complete();
+      }
+    });
+    controller.selectMelody(MelodyTemplate.wink);
+    expect(controller.state.preview, isNull);
+    expect(controller.state.phase, CreationPhase.preparing);
+    await winkSaved.future;
+    controller.selectMelody(MelodyTemplate.answer);
+    await answerSaved.future;
+
+    expect(projects.project!.arrangement['melodyTemplate'], 'answer');
+    expect(media.renderRequests, hasLength(previousRenderCount));
+    await Future<void>.delayed(const Duration(milliseconds: 220));
+    expect(media.renderRequests, hasLength(previousRenderCount + 1));
+    expect(
+      media.renderRequests.last.arrangement.melodyTemplate,
+      MelodyTemplate.answer,
+    );
+    expect(controller.state.preview, isNotNull);
+    expect(controller.state.preview!.revision, projects.project!.revision);
+  });
+
+  test('melody change during a save keeps the next revision valid', () async {
+    final projects = _MemoryProjects();
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: projects,
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    await controller.createPreview();
+    final saving = Completer<void>();
+    final releaseSave = Completer<void>();
+    projects
+      ..saveStarted = saving
+      ..saveGate = releaseSave;
+
+    controller.selectMelody(MelodyTemplate.wink);
+    await saving.future;
+    controller.selectMelody(MelodyTemplate.answer);
+    projects.saveGate = null;
+    releaseSave.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 220));
+
+    expect(controller.state.phase, CreationPhase.ready);
+    expect(projects.project!.arrangement['melodyTemplate'], 'answer');
+    expect(controller.state.project!.revision, projects.project!.revision);
+    expect(
+      media.renderRequests.last.arrangement.melodyTemplate,
+      MelodyTemplate.answer,
+    );
+  });
+
   test(
     'new creation starts empty and removed clips stay out of its recipe',
     () async {
@@ -1223,6 +1303,8 @@ final class _PendingDemo implements DemoAssetSource {
 final class _MemoryProjects implements ProjectRepository {
   Project? project;
   var createCount = 0;
+  Completer<void>? saveStarted;
+  Completer<void>? saveGate;
 
   @override
   Future<Project> create(String title) async {
@@ -1238,6 +1320,9 @@ final class _MemoryProjects implements ProjectRepository {
   Future<void> save(Project project, {required int expectedRevision}) async {
     expect(this.project?.revision, expectedRevision);
     this.project = project;
+    saveStarted?.complete();
+    saveStarted = null;
+    await saveGate?.future;
   }
 
   @override

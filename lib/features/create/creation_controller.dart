@@ -159,6 +159,7 @@ final class CreationController extends ChangeNotifier {
   CreationState _state = const CreationState();
   Future<void> _mutationTail = Future<void>.value();
   final Map<String, _CachedAnalysis> _analysisCache = {};
+  Timer? _previewRenderTimer;
   var _analysisEpoch = 0;
   var _requestVersion = 0;
   var _disposed = false;
@@ -354,6 +355,7 @@ final class CreationController extends ChangeNotifier {
         project.videoRecipe['events'] is! List) {
       return;
     }
+    _previewRenderTimer?.cancel();
     _set(_state.copyWith(phase: CreationPhase.rendering, clearError: true));
     _render.open(project);
     _render.generate(RenderQuality.preview);
@@ -367,8 +369,25 @@ final class CreationController extends ChangeNotifier {
 
   void selectMelody(MelodyTemplate melody) {
     if (_disposed || melody == _state.melody) return;
-    _set(_state.copyWith(melody: melody, compareOriginal: false));
-    unawaited(_requestArrangement(style: _state.style, seed: _state.seed));
+    _previewRenderTimer?.cancel();
+    final project = _state.project;
+    if (project != null) _render.open(project);
+    _set(
+      _state.copyWith(
+        melody: melody,
+        compareOriginal: false,
+        phase: CreationPhase.preparing,
+        clearPreview: true,
+        clearError: true,
+      ),
+    );
+    unawaited(
+      _requestArrangement(
+        style: _state.style,
+        seed: _state.seed,
+        debouncePreview: true,
+      ),
+    );
   }
 
   Future<void> createPreview() => _disposed
@@ -551,15 +570,24 @@ final class CreationController extends ChangeNotifier {
   Future<void> _requestArrangement({
     required ArrangementStyle style,
     required int seed,
+    bool debouncePreview = false,
   }) {
     if (_disposed) return Future<void>.value();
+    _previewRenderTimer?.cancel();
     final version = ++_requestVersion;
-    final work = _mutationTail.then((_) => _arrange(version, style, seed));
+    final work = _mutationTail.then(
+      (_) => _arrange(version, style, seed, debouncePreview),
+    );
     _mutationTail = work.catchError((Object _) {});
     return work;
   }
 
-  Future<void> _arrange(int version, ArrangementStyle style, int seed) async {
+  Future<void> _arrange(
+    int version,
+    ArrangementStyle style,
+    int seed,
+    bool debouncePreview,
+  ) async {
     if (_disposed || version != _requestVersion) return;
     final project = _state.project;
     if (project == null || _state.clips.length < 3) return;
@@ -602,7 +630,16 @@ final class CreationController extends ChangeNotifier {
         updatedAt: DateTime.now().toUtc(),
       );
       await projects.save(updated, expectedRevision: project.revision);
-      if (_disposed || version != _requestVersion) return;
+      if (_disposed) return;
+      if (version != _requestVersion) {
+        // The saved revision still has to reach state before the queued choice
+        // can save its own revision against the repository.
+        if (_state.project?.id == project.id &&
+            _state.project?.revision == project.revision) {
+          _set(_state.copyWith(project: updated));
+        }
+        return;
+      }
       _set(
         _state.copyWith(
           phase: CreationPhase.rendering,
@@ -611,7 +648,20 @@ final class CreationController extends ChangeNotifier {
         ),
       );
       _render.open(updated);
-      _render.generate(RenderQuality.preview);
+      if (debouncePreview) {
+        // Rendering a full 15-second movie for every quick choice is expensive.
+        // The saved arrangement and its video recipe remain paired while the
+        // short pause lets the next choice replace this render.
+        _previewRenderTimer = Timer(const Duration(milliseconds: 180), () {
+          if (!_disposed &&
+              version == _requestVersion &&
+              _state.project?.revision == updated.revision) {
+            _render.generate(RenderQuality.preview);
+          }
+        });
+      } else {
+        _render.generate(RenderQuality.preview);
+      }
     } catch (error) {
       if (!_disposed && version == _requestVersion) {
         _set(_state.copyWith(phase: CreationPhase.failed, error: error));
@@ -787,6 +837,7 @@ final class CreationController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _previewRenderTimer?.cancel();
     _clearAnalysisCache();
     _render
       ..removeListener(_onRenderState)
