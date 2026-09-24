@@ -1,0 +1,23 @@
+name: Performance Dart toolchain
+on:
+  push:
+    branches: ['codex/mad-performance-modes']
+    paths: ['.github/workflows/performance-toolchain.yml']
+permissions:
+  contents: read
+jobs:
+  toolchain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+      - run: tar -czf dart-sdk.tar.gz -C "$FLUTTER_ROOT/bin/cache" dart-sdk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: performance-dart-sdk
+          path: dart-sdk.tar.gz
+          retention-days: 3
