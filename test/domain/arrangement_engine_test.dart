@@ -761,6 +761,37 @@ void main() {
     );
   });
 
+  test('sustained voice keeps the beginning of its audible phrase', () {
+    final arranged = arrange(
+      clips: [
+        _clip('tap', role: SuggestedRole.transient),
+        AnalyzedClip(
+          assetId: 'voice',
+          durationSamples: 144000,
+          sampleRate: 48000,
+          onsetSamples: const [84000, 90000],
+          audibleRegions: const [
+            AudibleRegion(startSample: 72000, durationSamples: 36000),
+          ],
+          peak: .7,
+          rms: .2,
+          suggestedRole: SuggestedRole.sustain,
+        ),
+        _clip('room', role: SuggestedRole.texture),
+      ],
+      style: ArrangementStyle.sparse,
+      seed: 3,
+    );
+    final voiceEvents = arranged.events.where(
+      (event) => event.assetId == 'voice',
+    );
+    expect(voiceEvents, isNotEmpty);
+    expect(
+      voiceEvents.every((event) => event.sourceStartSample == 72000),
+      isTrue,
+    );
+  });
+
   test('song roles require long audible spans while legacy analyses work', () {
     AnalyzedClip analyzed(
       String id,

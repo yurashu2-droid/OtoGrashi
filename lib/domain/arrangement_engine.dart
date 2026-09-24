@@ -443,7 +443,12 @@ SoundEvent _event(
   // Analysis supplies a loud-window fallback when it finds no sharp onset.
   // Older analyses may lack that anchor; the selection start is safer than a
   // random point that can land in a quiet tail.
-  final sourceStart = candidates.isNotEmpty
+  // For a voice-like sustained sound, begin with the audible phrase instead
+  // of the strongest onset, which may be in the middle of a short word.
+  final sourceStart =
+      clip.suggestedRole == SuggestedRole.sustain && region != null
+      ? _min(region.startSample, maxSourceStart)
+      : candidates.isNotEmpty
       ? candidates[random.nextInt(candidates.length)]
       : region == null
       ? clip.sourceStartSample
