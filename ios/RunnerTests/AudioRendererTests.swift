@@ -3,7 +3,7 @@ import XCTest
 @testable import Runner
 
 final class AudioRendererTests: XCTestCase {
-  func testEverydayNoiseAndMovingVoiceAreRetunedWithExactDuration() throws {
+  func testMovingVoiceIsRetunedButNoiseKeepsItsOriginalTexture() throws {
     var state: UInt32 = 91
     let noise = (0..<24_000).map { _ -> Float in
       state = state &* 1_664_525 &+ 1_013_904_223
@@ -18,8 +18,15 @@ final class AudioRendererTests: XCTestCase {
         let output = try EverydayAudioDSP.render(source, count: 36_000, targetMidiNote: target)
         XCTAssertEqual(output.count, 36_000)
         XCTAssertTrue(output.allSatisfy(\.isFinite))
-        let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(Array(output[8_000..<16_000])))
-        XCTAssertEqual(pitch.midiNote, target, accuracy: 0.2)
+        if source == noise {
+          let xy = zip(source, output).reduce(0.0) { $0 + Double($1.0 * $1.1) }
+          let xx = source.reduce(0.0) { $0 + Double($1 * $1) }
+          let yy = output.prefix(source.count).reduce(0.0) { $0 + Double($1 * $1) }
+          XCTAssertGreaterThan(xy / sqrt(xx * yy), 0.98)
+        } else {
+          let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(Array(output[8_000..<16_000])))
+          XCTAssertEqual(pitch.midiNote, target, accuracy: 0.2)
+        }
       }
     }
   }
@@ -40,6 +47,44 @@ final class AudioRendererTests: XCTestCase {
     video["reverse"] = false
     json["videoEvents"] = [video]
     XCTAssertThrowsError(try decode(json))
+  }
+
+  func testContinuousPhraseFollowsBeatNotesWithoutRestartingSource() throws {
+    let source = (0..<90_000).map { frame -> Float in
+      let t = Double(frame) / 48_000
+      return Float((0.25 + t * 0.08) * sin(2 * Double.pi * 180 * t))
+    }
+    let notes = [53.0, 57, 60, 55]
+    let steps = notes.enumerated().map {
+      EverydayAudioDSP.PitchStep(offsetSamples: $0.offset * 22_500, midiNote: $0.element)
+    }
+    let output = try EverydayAudioDSP.render(source, count: 90_000,
+      targetMidiNote: 53, pitchSteps: steps)
+    XCTAssertEqual(output.count, source.count)
+    for (index, target) in notes.enumerated() {
+      let window = Array(output[(index * 22_500 + 6000)..<(index * 22_500 + 14_000)])
+      let measured = try XCTUnwrap(EverydayAudioDSP.estimate(window))
+      XCTAssertEqual(measured.midiNote, target, accuracy: 0.25)
+      XCTAssertGreaterThan(window.map(\.magnitude).max() ?? 0, 0.02)
+    }
+  }
+
+  func testPitchCurveContractRejectsInvalidOffsetsAndKeepsLegacyDefaults() throws {
+    var json = validJSON(sourceDuration: 48_000, destinationStart: 0,
+      eventDuration: 48_000, fadeIn: 72, fadeOut: 240, loopMode: "once")
+    XCTAssertNil(try decode(json).events.first?.pitchSteps)
+    var audio = (json["events"] as! [[String: Any]])[0]
+    var video = (json["videoEvents"] as! [[String: Any]])[0]
+    audio["sourceDurationSamples"] = 48_000
+    audio["targetMidiNote"] = 57.0
+    video["sourceDurationSamples"] = 48_000
+    json["videoEvents"] = [video]
+    for offsets in [[0, 24_000], [1, 24_000], [0, 0], [0, 48_000], [0, -1]] {
+      audio["pitchSteps"] = offsets.map { ["offsetSamples": $0, "midiNote": 57] }
+      json["events"] = [audio]
+      if offsets == [0, 24_000] { XCTAssertNoThrow(try decode(json)) }
+      else { XCTAssertThrowsError(try decode(json)) }
+    }
   }
 
   func testPCMPlacementUsesAbsoluteBufferPTSAndPreservesTimelineGaps() throws {

@@ -75,21 +75,35 @@ Arrangement arrangeEveryday({
     bool reverse = false,
     int variation = 0,
     bool flip = false,
+    int sourceOffset = 0,
+    List<PitchStep> pitchSteps = const [],
   }) {
     if (start >= 720000 || wanted <= 0) return;
     final region = _window(
       clip,
-      phrase: treatment == SoundTreatment.phrase,
+      phrase: treatment == SoundTreatment.phrase || pitchSteps.isNotEmpty,
       variation: variation,
     );
-    final available = region.durationSamples;
+    var offset = sourceOffset.abs() % region.durationSamples;
+    // Do not turn a tiny remainder at the end of a word into a long loop.
+    final minimumPassage = math.min(
+      region.durationSamples,
+      math.max(pitchSteps.isEmpty ? 14400 : wanted, 14400),
+    );
+    if (region.durationSamples - offset < minimumPassage) offset = 0;
+    final available = region.durationSamples - offset;
     final desired = math.min(wanted, 720000 - start);
     final duration = treatment == SoundTreatment.phrase
         ? math.min(desired, available)
         : desired;
     // Tuned one-shots can hold a note, but always loop inside the selected
     // source range. Long natural phrases are never squeezed into note slots.
-    final sourceDuration = math.min(available, duration);
+    // Short score notes still get context for local pitch analysis. Playback
+    // reads the prefix at rate=1; neither audio nor video jumps to its centre.
+    final sourceDuration = math.min(
+      available,
+      note == null ? duration : math.max(duration, 14400),
+    );
     final fadeIn = math.min(
       treatment == SoundTreatment.phrase ? 240 : 72,
       duration ~/ 4,
@@ -100,13 +114,14 @@ Arrangement arrangeEveryday({
     );
     final event = SoundEvent(
       assetId: clip.assetId,
-      sourceStartSample: region.startSample,
+      sourceStartSample: region.startSample + offset,
       sourceDurationSamples: sourceDuration,
       destinationStartSample: start,
       durationSamples: duration,
       gain: gain,
       fades: EventFades(fadeInSamples: fadeIn, fadeOutSamples: fadeOut),
       targetMidiNote: note,
+      pitchSteps: pitchSteps,
       reverse: reverse,
       treatment: treatment,
     );
@@ -147,6 +162,9 @@ Arrangement arrangeEveryday({
     }
     for (var lane = 0; lane < 3; lane++) {
       final notes = midiScoreNotes[lane];
+      // One octave choice for the ENTIRE part, never fold individual notes.
+      // Prefer the recorded voice's register to an unnecessarily shrill lead.
+      final octave = _scoreOctave(notes, leads[lane].fundamentalMidiNote ?? 57);
       for (var index = 0; index < notes.length; index++) {
         final note = notes[index];
         final start = (note[0] * 720000 / 15360).round();
@@ -155,14 +173,20 @@ Arrangement arrangeEveryday({
           lanes[lane][index % lanes[lane].length],
           start,
           end - start,
-          note: note[2].toDouble(),
+          note: (note[2] + octave).toDouble(),
+          sourceOffset: start % 90000,
           gain: lane == 0 ? .55 : .38,
           variation: index ~/ 8,
         );
       }
     }
   } else {
-    final root = (melody.fundamentalMidiNote?.round() ?? 60).clamp(60, 72);
+    // Centre the motif (range 0..9) around the source instead of forcing every
+    // voice above middle C. Unknown speech uses a modest A3-centred register.
+    final root = ((melody.fundamentalMidiNote?.round() ?? 57) - 4).clamp(
+      48,
+      76,
+    );
     final motif = switch (melodyTemplate) {
       MelodyTemplate.wink => const [0, 7, 4, 9, 7, 2, 4, 0],
       MelodyTemplate.answer => const [0, 0, 4, 7, 2, 2, 7, 4],
@@ -211,29 +235,31 @@ Arrangement arrangeEveryday({
             variation: hit,
           );
         }
-        final steps = style == ArrangementStyle.sparse
-            ? 4
-            : style == ArrangementStyle.lively && bar >= 6
-            ? 16
-            : 8;
+        final steps = style == ArrangementStyle.sparse ? 2 : 4;
         final stepSamples = 90000 ~/ steps;
-        for (var step = 0; step < steps; step++) {
-          if (melodyTemplate == MelodyTemplate.wink && step % 4 == 3) continue;
-          final lead =
-              melodyTemplate == MelodyTemplate.answer && step >= steps ~/ 2
-              ? usable[(usable.indexOf(melody) + 1) % usable.length]
-              : melody;
-          final degree = motif[(step + bar + (seed & 3)) % motif.length];
-          final held = step == 0 && bar.isEven;
-          add(
-            lead,
-            start + step * stepSamples,
-            held ? 36000 : math.max(2400, stepSamples - 480),
-            note: (root + degree).toDouble(),
-            gain: .51,
-            variation: bar ~/ 2,
-          );
-        }
+        final lead = melodyTemplate == MelodyTemplate.answer && bar.isOdd
+            ? usable[(usable.indexOf(melody) + 1) % usable.length]
+            : melody;
+        final curve = <PitchStep>[
+          for (var step = 0; step < steps; step++)
+            PitchStep(
+              offsetSamples: step * stepSamples,
+              midiNote: (root + motif[(step + bar + (seed & 3)) % motif.length])
+                  .toDouble(),
+            ),
+        ];
+        // A full passage carries several notes. Words evolve naturally across
+        // beat boundaries; short stutters remain a separate, quieter accent.
+        add(
+          lead,
+          start,
+          90000,
+          note: curve.first.midiNote,
+          pitchSteps: curve,
+          gain: .51,
+          variation: bar ~/ 2,
+          sourceOffset: (bar - 3) * 90000,
+        );
       }
     }
     // Genuine echoes: every duplicate picture has its own audible event.
@@ -298,6 +324,7 @@ Arrangement arrangeEveryday({
         gain: e.gain * (duck ? .62 : 1),
         fades: e.fades,
         targetMidiNote: e.targetMidiNote,
+        pitchSteps: e.pitchSteps,
         reverse: e.reverse,
         treatment: e.treatment,
       ),
@@ -321,7 +348,7 @@ Arrangement arrangeEveryday({
   return Arrangement(
     templateId: midi
         ? 'score-image-3part-128bpm-8bar'
-        : 'everyday-${style.name}-${melodyTemplate.name}-v2',
+        : 'everyday-${style.name}-${melodyTemplate.name}-v3',
     templateVersion: 1,
     analysisVersion: 1,
     rendererVersion: 1,
@@ -363,4 +390,20 @@ AudibleRegion _window(
   // Repeated notes intentionally reuse the same syllable for a recognizable
   // hook; variations change on phrase boundaries rather than on every frame.
   return regions[variation.abs() % regions.length];
+}
+
+int _scoreOctave(List<List<int>> notes, double sourceNote) {
+  final pitches = notes.map((n) => n[2]).toList()..sort();
+  final median = pitches[pitches.length ~/ 2];
+  var best = 0;
+  var cost = double.infinity;
+  for (final octave in const [0, -12, 12, -24, 24]) {
+    if (pitches.first + octave < 24 || pitches.last + octave > 100) continue;
+    final candidate = (median + octave - sourceNote).abs();
+    if (candidate < cost) {
+      best = octave;
+      cost = candidate;
+    }
+  }
+  return best;
 }

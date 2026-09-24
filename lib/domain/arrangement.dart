@@ -44,6 +44,32 @@ final class EventFades {
   );
 }
 
+final class PitchStep {
+  const PitchStep({required this.offsetSamples, required this.midiNote});
+  final int offsetSamples;
+  final double midiNote;
+  Map<String, Object?> toJson() => {
+    'offsetSamples': offsetSamples,
+    'midiNote': midiNote,
+  };
+  factory PitchStep.fromJson(Map<String, Object?> json) => PitchStep(
+    offsetSamples: json['offsetSamples'] as int,
+    midiNote: (json['midiNote'] as num).toDouble(),
+  );
+}
+
+List<PitchStep> _decodePitchSteps(Object? value) {
+  if (value == null) return const [];
+  if (value is! List<Object?> || value.length > 64) {
+    throw const MediaContractException('Pitch curve exceeds schema limits.');
+  }
+  return List<PitchStep>.unmodifiable(
+    value.map(
+      (step) => PitchStep.fromJson((step as Map<Object?, Object?>).cast()),
+    ),
+  );
+}
+
 final class SoundEvent {
   const SoundEvent({
     required this.assetId,
@@ -55,6 +81,7 @@ final class SoundEvent {
     this.pitchSemitones = 0,
     this.sourceDurationSamples,
     this.targetMidiNote,
+    this.pitchSteps = const <PitchStep>[],
     this.reverse = false,
     this.treatment = SoundTreatment.original,
   });
@@ -68,6 +95,28 @@ final class SoundEvent {
   final double pitchSemitones;
   final int? sourceDurationSamples;
   final double? targetMidiNote;
+  final List<PitchStep> pitchSteps;
+
+  bool get hasValidPitchSteps {
+    if (pitchSteps.isEmpty) return true;
+    if (pitchSteps.length > 64 ||
+        targetMidiNote == null ||
+        sourceDurationSamples == null ||
+        pitchSteps.first.offsetSamples != 0)
+      return false;
+    var previous = -1;
+    for (final step in pitchSteps) {
+      if (step.offsetSamples <= previous ||
+          step.offsetSamples >= durationSamples ||
+          !step.midiNote.isFinite ||
+          step.midiNote < 24 ||
+          step.midiNote > 100)
+        return false;
+      previous = step.offsetSamples;
+    }
+    return true;
+  }
+
   final bool reverse;
   final SoundTreatment treatment;
   int get effectiveSourceDurationSamples =>
@@ -84,6 +133,8 @@ final class SoundEvent {
     if (sourceDurationSamples != null)
       'sourceDurationSamples': sourceDurationSamples,
     if (targetMidiNote != null) 'targetMidiNote': targetMidiNote,
+    if (pitchSteps.isNotEmpty)
+      'pitchSteps': pitchSteps.map((s) => s.toJson()).toList(),
     if (reverse) 'reverse': true,
     if (treatment != SoundTreatment.original) 'treatment': treatment.name,
   };
@@ -98,6 +149,7 @@ final class SoundEvent {
     pitchSemitones: (json['pitchSemitones'] as num?)?.toDouble() ?? 0,
     sourceDurationSamples: json['sourceDurationSamples'] as int?,
     targetMidiNote: (json['targetMidiNote'] as num?)?.toDouble(),
+    pitchSteps: _decodePitchSteps(json['pitchSteps']),
     reverse: json['reverse'] as bool? ?? false,
     treatment: SoundTreatment.values.byName(
       json['treatment'] as String? ?? 'original',
@@ -256,6 +308,7 @@ final class Arrangement {
     }
     if (events.any(
           (event) =>
+              !event.hasValidPitchSteps ||
               event.sourceStartSample < 0 ||
               event.effectiveSourceDurationSamples <= 0 ||
               event.effectiveSourceDurationSamples > 720000 ||

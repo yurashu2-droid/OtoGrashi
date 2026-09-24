@@ -28,6 +28,7 @@ struct SoundEventPayload: Codable, Equatable {
   let pitchSemitones: Double?
   var sourceDurationSamples: Int? = nil
   var targetMidiNote: Double? = nil
+  var pitchSteps: [EverydayAudioDSP.PitchStep]? = nil
   var reverse: Bool? = nil
   var treatment: String? = nil
 
@@ -171,6 +172,9 @@ struct ArrangementPayload: Decodable, Equatable {
       )
       guard !sourceOverflow, !destinationOverflow, !fadeOverflow,
         sourceEnd > event.sourceStartSample,
+        EverydayAudioDSP.validSteps(event.pitchSteps ?? [], count: event.durationSamples),
+        (event.pitchSteps ?? []).isEmpty ||
+          (event.targetMidiNote != nil && event.sourceDurationSamples != nil),
         event.sourceStartSample >= 0,
         (1...Self.totalSamples).contains(event.effectiveSourceDurationSamples),
         event.targetMidiNote == nil || (event.targetMidiNote!.isFinite && (24...100).contains(event.targetMidiNote!)),
@@ -289,7 +293,8 @@ struct AudioRenderer {
         guard event.sourceStartSample >= trackRange.startSample,
           event.sourceStartSample + sourceDuration <= trackRange.endSample
         else { throw AudioRenderError.sourceOutOfBounds }
-        let key = "\(event.assetId)|\(event.sourceStartSample)|\(sourceDuration)|\(event.durationSamples)|\(event.targetMidiNote.map(String.init(describing:)) ?? "dry")|\(event.isReversed)|\(event.effectivePitchSemitones)"
+        let curveKey = (event.pitchSteps ?? []).map { "\($0.offsetSamples):\($0.midiNote)" }.joined(separator: ",")
+        let key = "\(curveKey)|\(event.assetId)|\(event.sourceStartSample)|\(sourceDuration)|\(event.durationSamples)|\(event.targetMidiNote.map(String.init(describing:)) ?? "dry")|\(event.isReversed)|\(event.effectivePitchSemitones)"
         let processed: [Float]
         if let cached = musicalFragments[key] {
           processed = cached
@@ -301,7 +306,7 @@ struct AudioRenderer {
           do {
             let shaped = try EverydayAudioDSP.render(leveled,
               count: event.durationSamples, targetMidiNote: event.targetMidiNote,
-              reverse: event.isReversed)
+              reverse: event.isReversed, pitchSteps: event.pitchSteps ?? [])
             processed = event.targetMidiNote == nil && event.effectivePitchSemitones != 0
               ? try pitchPreservingDuration(shaped, semitones: event.effectivePitchSemitones,
                   cancellation: cancellation, latencyCache: &pitchLatencies) : shaped

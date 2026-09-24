@@ -48,7 +48,7 @@ enum EverydayAudioDSP {
     }
     var lag = 2
     while lag <= maxLag {
-      if cmnd[lag] < 0.18 {
+      if cmnd[lag] < 0.10 {
         while lag < maxLag && cmnd[lag + 1] < cmnd[lag] { lag += 1 }
         guard cmnd[lag + 1] >= cmnd[lag] else { return nil }
         let left = cmnd[lag - 1], mid = cmnd[lag], right = cmnd[lag + 1]
@@ -92,128 +92,217 @@ enum EverydayAudioDSP {
     return source.map { $0.isFinite ? $0 * gain : 0 }
   }
 
-  /// Phase-coherent granular resynthesis: neighboring atoms are aligned to the
-  /// recording's local waveform and crossfaded at a fixed target period. This
-  /// follows changing speech, while noisy atoms acquire musical periodicity.
-  /// Natural phrases use target=nil and remain entirely unmodified in pitch.
+  /// Musical targets are independent of source time. A single phrase can move
+  /// through several notes without restarting a syllable or its video.
+  struct PitchStep: Codable, Equatable {
+    let offsetSamples: Int
+    let midiNote: Double
+  }
+
+  static func validSteps(_ steps: [PitchStep], count: Int) -> Bool {
+    guard steps.count <= 64 else { return false }
+    var previous = -1
+    for step in steps {
+      guard step.offsetSamples > previous, step.offsetSamples < count,
+        step.midiNote.isFinite, (24...100).contains(step.midiNote)
+      else { return false }
+      previous = step.offsetSamples
+    }
+    return steps.isEmpty || steps[0].offsetSamples == 0
+  }
+
+  /// Native-rate pitch-synchronous overlap-add. Copy windows of the ORIGINAL
+  /// waveform around local pitch marks; never squeeze a cycle into a wavetable.
+  /// Voiceless intervals stay dry, preserving consonants, breaths and impacts.
+  /// The passage advances at rate=1, with the same loop/reverse clock as video.
   static func render(
-    _ input: [Float], count: Int, targetMidiNote: Double?, reverse: Bool = false
+    _ input: [Float], count: Int, targetMidiNote: Double?,
+    reverse: Bool = false, pitchSteps: [PitchStep] = []
   ) throws -> [Float] {
     guard count > 0, count <= 720_000, !input.isEmpty, input.count <= 720_000,
-      input.allSatisfy(\.isFinite),
-      targetMidiNote == nil || (targetMidiNote!.isFinite && (24...100).contains(targetMidiNote!))
+      input.allSatisfy(\.isFinite), validSteps(pitchSteps, count: count),
+      targetMidiNote == nil || (targetMidiNote!.isFinite && (24...100).contains(targetMidiNote!)),
+      pitchSteps.isEmpty || targetMidiNote != nil
     else { throw Failure.invalidInput }
     let source = reverse ? Array(input.reversed()) : input
-    guard let note = targetMidiNote else {
-      if count <= source.count { return Array(source.prefix(count)) }
-      var result = (0..<count).map { source[$0 % source.count] }
-      // Crossfade without shortening the source period. The picture loops on
-      // EXACTLY the same sourceCount, not on sourceCount - crossfade.
-      let fade = min(240, source.count / 8)
-      if fade > 0 {
-        for i in source.count..<count where i % source.count < fade {
-          let phase = i % source.count
-          let t = Float(phase + 1) / Float(fade)
-          result[i] = source[source.count - fade + phase] * (1 - t) + source[phase] * t
+    let dry = repeatSource(source, count: count)
+    guard let note = targetMidiNote, source.contains(where: { $0 != 0 }) else { return dry }
+    let frames = analyzeVoice(source)
+    let marks = pitchMarks(source, frames: frames)
+    guard !marks.isEmpty else {
+      // No fundamental (whisper/noise/impact) is not a licence to replace the
+      // recording with a synthetic vowel. Keep its attack and spectral texture.
+      return resonate(dry, note: note, steps: pitchSteps)
+    }
+    var sum = [Float](repeating: 0, count: count)
+    var weights = [Float](repeating: 0, count: count)
+    var cursor = 0.0
+    var markIndex = 0
+    var lastPosition = -1
+    while cursor < Double(count) {
+      let position = Int(cursor) % source.count
+      if position < lastPosition { markIndex = 0 }
+      lastPosition = position
+      while markIndex + 1 < marks.count &&
+        abs(marks[markIndex + 1].sample - position) < abs(marks[markIndex].sample - position) {
+        markIndex += 1
+      }
+      let mark = marks[markIndex]
+      let hz = 440 * pow(2, (targetNote(at: cursor, base: note, steps: pitchSteps) - 69) / 12)
+      let targetPeriod = Double(sampleRate) / hz
+      if abs(mark.sample - position) <= Int(mark.period * 1.5),
+        voice(at: position, frames: frames).amount > 0 {
+        // Extreme transpositions can cancel a narrow-band grain almost
+        // completely. Spend part of that shift on native waveform resampling,
+        // rather than silently outputting zero or injecting a synthetic tone.
+        // In the normal voice range (+/- roughly an octave), rate remains 1.
+        let ratio = mark.period / targetPeriod
+        let readRate = ratio > 2 ? ratio / 1.8 : ratio < 0.5 ? ratio / 0.55 : 1
+        let radius = max(mark.period / readRate, targetPeriod * 0.55)
+        let from = max(0, Int(ceil(cursor - radius)))
+        let to = min(count - 1, Int(floor(cursor + radius)))
+        if from <= to {
+          for outputIndex in from...to {
+            let delta = Double(outputIndex) - cursor
+            let inputPosition = Double(mark.sample) + delta * readRate
+            guard inputPosition >= 0, inputPosition < Double(source.count - 1) else { continue }
+            let weight = Float(0.5 + 0.5 * cos(Double.pi * delta / radius))
+            let i = Int(inputPosition), blend = Float(inputPosition - Double(i))
+            // Normally unit slope: preserve the vowel's formant positions.
+            let sample = source[i] * (1 - blend) + source[i + 1] * blend
+            sum[outputIndex] += sample * weight
+            weights[outputIndex] += weight
+          }
         }
       }
-      return result
+      cursor += targetPeriod
     }
-    let targetHz = 440 * pow(2, (note - 69) / 12)
-    let tableSize = 128
-    let hop = 960
-    let tableCount = max(2, (source.count + hop - 1) / hop + 1)
-    var atoms = [[Float]]()
-    atoms.reserveCapacity(tableCount)
-    var lastPitch: Pitch?
-    for frame in 0..<tableCount {
-      let center = min(source.count - 1, frame * hop)
-      let windowStart = max(0, min(source.count - min(4096, source.count), center - 2048))
-      // Reuse a 40 ms pitch estimate for adjacent 20 ms atom frames.
-      if frame % 2 == 0 || frame == tableCount - 1 {
-        lastPitch = estimate(source, start: windowStart)
-      }
-      atoms.append(atom(source, center: center, pitch: lastPitch,
-                        tableSize: tableSize, targetHz: targetHz))
-    }
-    var output = [Float](repeating: 0, count: count)
-    let phaseStep = targetHz / Double(sampleRate)
+    var output = dry
     for i in output.indices {
-      let position = Double(i % source.count) / Double(hop)
-      let a = min(Int(position), atoms.count - 2)
-      let blend = Float(position - Double(a))
-      let phase = (Double(i) * phaseStep).truncatingRemainder(dividingBy: 1)
-      let tablePosition = phase * Double(tableSize)
-      let lo = Int(tablePosition) % tableSize
-      let hi = (lo + 1) % tableSize
-      let fraction = Float(tablePosition - floor(tablePosition))
-      let v0 = atoms[a][lo] * (1 - fraction) + atoms[a][hi] * fraction
-      let v1 = atoms[a + 1][lo] * (1 - fraction) + atoms[a + 1][hi] * fraction
-      output[i] = v0 * (1 - blend) + v1 * blend
+      let position = i % source.count
+      let amount = Float(voice(at: position, frames: frames).amount)
+      // Blend only at voiced/unvoiced boundaries, not a permanent doubled
+      // dry+pitched voice (which would reintroduce the out-of-tune fundamental).
+      let edge = Float(min(1.0, min(Double(position), Double(source.count - 1 - position)) / 240))
+      let wet = amount * edge
+      if weights[i] > 0.05, wet > 0 {
+        output[i] = dry[i] * (1 - wet) + sum[i] / weights[i] * wet
+      }
     }
     return output
   }
 
-  private static func atom(
-    _ source: [Float], center: Int, pitch: Pitch?, tableSize: Int, targetHz: Double
-  ) -> [Float] {
-    let period = min(Double(max(2, source.count / 2)), pitch.map { Double(sampleRate) / $0.hertz } ?? 256)
-    let lo = max(0, min(source.count - 1, center - Int(period / 2)))
-    let hi = min(source.count - 1, lo + max(1, Int(period)))
-    var peak = lo
-    if hi > lo {
-      for i in lo...hi where source[i] > source[peak] { peak = i }
-    }
-    let start = min(Double(peak), max(0, Double(source.count - 1) - period))
-    func read(_ position: Double) -> Float {
-      let p = max(0, min(Double(source.count - 1), position))
-      let a = Int(p), b = min(a + 1, source.count - 1)
-      let t = Float(p - Double(a))
-      return source[a] * (1 - t) + source[b] * t
-    }
-    var table = (0..<tableSize).map { read(start + Double($0) * period / Double(tableSize)) }
-    let mean = table.reduce(0, +) / Float(tableSize)
-    for i in table.indices { table[i] -= mean }
-    let energy = sqrt(table.reduce(0) { $0 + $1 * $1 } / Float(tableSize))
-    guard energy > 1e-7 else { return table.map { _ in 0 } }
+  private static let voiceHop = 480 // 10 ms analysis; musical notes are slower.
+  private struct VoiceFrame {
+    let pitch: Pitch?
+    let amount: Double
+  }
+  private struct Mark {
+    let sample: Int
+    let period: Double
+  }
 
-    // Keep the original spectral fingerprint, but strengthen its first harmonic
-    // when an unpitched sound has no clear fundamental. Its amplitude comes
-    // from the recording; silence remains silence (no separate backing synth).
-    var cosine: Float = 0, sine: Float = 0
-    for i in table.indices {
-      let phase = 2 * Double.pi * Double(i) / Double(tableSize)
-      cosine += table[i] * Float(cos(phase)) * 2 / Float(tableSize)
-      sine += table[i] * Float(sin(phase)) * 2 / Float(tableSize)
-    }
-    let fundamental = sqrt(cosine * cosine + sine * sine)
-    if pitch == nil {
-      // Align the resonant fundamental across noisy atoms: arbitrary phase
-      // changes here otherwise destroy low bass notes during crossfades.
-      for i in table.indices {
-        let phase = 2 * Double.pi * Double(i) / Double(tableSize)
-        table[i] += (energy * 1.5 - cosine) * Float(cos(phase)) - sine * Float(sin(phase))
-      }
-    } else if fundamental < energy * 0.8 {
-      let phaseOffset = fundamental > 1e-7 ? atan2(Double(sine), Double(cosine)) : 0
-      let addition = energy * 0.8 - fundamental
-      for i in table.indices {
-        table[i] += addition * Float(cos(2 * Double.pi * Double(i) / Double(tableSize) - phaseOffset))
-      }
-    }
-    // Circular smoothing prevents bright noise grains aliasing excessively at
-    // high target notes. It never changes the period or event clock.
-    let radius = min(16, max(1, Int(ceil(Double(tableSize) * targetHz / 24_000))))
-    if radius > 1 {
-      let original = table
-      for i in table.indices {
-        var value: Float = 0
-        for j in -radius...radius {
-          value += original[(i + j + tableSize) % tableSize]
+  private static func analyzeVoice(_ source: [Float]) -> [VoiceFrame] {
+    let window = min(3072, source.count)
+    var frames = [VoiceFrame]()
+    for center in stride(from: 0, through: source.count, by: voiceHop) {
+      let start = max(0, min(source.count - window, center - window / 2))
+      let pitch = estimate(source, start: start, count: window)
+      var amount = 0.0
+      if let pitch, pitch.confidence >= 0.86 {
+        // A broad analysis window can see a neighboring vowel through a /s/.
+        // Require periodicity AT this time before touching the consonant.
+        let lag = Int((Double(sampleRate) / pitch.hertz).rounded())
+        let lo = max(0, center - 480)
+        let hi = min(source.count - lag, center + 480)
+        var xy = 0.0, xx = 0.0, yy = 0.0
+        if hi > lo {
+          for i in lo..<hi {
+            let a = Double(source[i]), b = Double(source[i + lag])
+            xy += a * b; xx += a * a; yy += b * b
+          }
+          let correlation = xy / max(1e-12, sqrt(xx * yy))
+          amount = max(0, min(1, (correlation - 0.65) / 0.25))
         }
-        table[i] = value / Float(2 * radius + 1)
+      }
+      frames.append(VoiceFrame(pitch: amount > 0 ? pitch : nil, amount: amount))
+    }
+    return frames
+  }
+
+  private static func voice(at sample: Int, frames: [VoiceFrame]) -> VoiceFrame {
+    let a = min(max(0, sample / voiceHop), frames.count - 1)
+    let b = min(a + 1, frames.count - 1)
+    let blend = Double(sample % voiceHop) / Double(voiceHop)
+    let amount = frames[a].amount * (1 - blend) + frames[b].amount * blend
+    let pitch = frames[a].pitch ?? frames[b].pitch
+    return VoiceFrame(pitch: pitch, amount: amount)
+  }
+
+  private static func pitchMarks(_ source: [Float], frames: [VoiceFrame]) -> [Mark] {
+    var marks = [Mark]()
+    var position = 0
+    var previous: Int?
+    while position < source.count {
+      let local = voice(at: position, frames: frames)
+      guard local.amount > 0.5, let pitch = local.pitch else {
+        position += voiceHop / 2
+        previous = nil
+        continue
+      }
+      let period = Double(sampleRate) / pitch.hertz
+      let predicted = previous.map { $0 + Int(period.rounded()) } ?? position
+      let tolerance = Int(period * (previous == nil ? 0.5 : 0.2))
+      let lo = max((previous ?? -1) + 1, max(0, predicted - tolerance))
+      let hi = min(source.count - 1, predicted + tolerance)
+      guard lo <= hi else { break }
+      var best = lo
+      for i in lo...hi where source[i] > source[best] { best = i }
+      marks.append(Mark(sample: best, period: period))
+      previous = best
+      position = best + max(1, Int(period))
+    }
+    return marks
+  }
+
+  private static func targetNote(at sample: Double, base: Double, steps: [PitchStep]) -> Double {
+    var current = base
+    for step in steps {
+      if Double(step.offsetSamples) > sample { break }
+      if step.offsetSamples > 0, sample < Double(step.offsetSamples + 720) {
+        let t = (sample - Double(step.offsetSamples)) / 720 // 15 ms portamento.
+        let smooth = t * t * (3 - 2 * t)
+        return current + (step.midiNote - current) * smooth
+      }
+      current = step.midiNote
+    }
+    return current
+  }
+
+  private static func repeatSource(_ source: [Float], count: Int) -> [Float] {
+    if count <= source.count { return Array(source.prefix(count)) }
+    var result = (0..<count).map { source[$0 % source.count] }
+    let fade = min(240, source.count / 8)
+    if fade > 0 {
+      for i in source.count..<count where i % source.count < fade {
+        let phase = i % source.count, t = Float(phase + 1) / Float(fade)
+        result[i] = source[source.count - fade + phase] * (1 - t) + source[phase] * t
       }
     }
-    return table
+    return result
+  }
+
+  private static func resonate(_ dry: [Float], note: Double, steps: [PitchStep]) -> [Float] {
+    var resonant = [Float](repeating: 0, count: dry.count)
+    var output = dry
+    for i in dry.indices {
+      let hz = 440 * pow(2, (targetNote(at: Double(i), base: note, steps: steps) - 69) / 12)
+      let delay = max(1, Int((Double(sampleRate) / hz).rounded()))
+      resonant[i] = dry[i] * 0.4 + (i >= delay ? resonant[i - delay] * 0.6 : 0)
+      // 85% untouched source. Resonance cannot introduce sound during a silent
+      // consonant gap/tail: gate it by the local dry signal's envelope.
+      output[i] = dry[i] == 0 ? 0 : dry[i] * 0.85 + resonant[i] * 0.15
+    }
+    return output
   }
 }

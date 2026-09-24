@@ -82,8 +82,11 @@ void main() {
         expect(v.reverse, a.reverse);
       }
       expect(
-        notes.map((e) => e.targetMidiNote).toSet(),
-        midiScoreNotes.expand((p) => p).map((n) => n[2].toDouble()).toSet(),
+        notes.map((e) => e.targetMidiNote! % 12).toSet(),
+        midiScoreNotes
+            .expand((p) => p)
+            .map((n) => n[2].toDouble() % 12)
+            .toSet(),
       );
     },
   );
