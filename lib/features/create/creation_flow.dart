@@ -119,6 +119,7 @@ class _CreationFlowState extends State<CreationFlow> {
   }
 
   Future<void> _openCapture({bool fromPhotos = false}) async {
+    final before = widget.controller.state.clips.map((clip) => clip.id).toSet();
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => _CaptureRoute(
@@ -135,6 +136,83 @@ class _CreationFlowState extends State<CreationFlow> {
         fullscreenDialog: true,
       ),
     );
+    if (mounted) await _nameNewRelayClip(before);
+  }
+
+  Future<void> _nameNewRelayClip(Set<String> previousIds) async {
+    if (!widget.controller.isRelay) return;
+    final clips = widget.controller.state.clips;
+    final newClips = clips.where((clip) => !previousIds.contains(clip.id));
+    if (newClips.isEmpty) return;
+    final clip = newClips.last;
+    final person = TextEditingController(text: '${clips.length}人目');
+    final sound = TextEditingController(text: '音');
+    try {
+      final label = await showModalBottomSheet<String>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (sheetContext) => Padding(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            4,
+            20,
+            MediaQuery.viewInsetsOf(sheetContext).bottom + 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'この音はだれの？',
+                style: Theme.of(sheetContext).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 4),
+              const Text('名前は完成動画にも表示されます。あとから変更できます。'),
+              const SizedBox(height: 16),
+              TextField(
+                controller: person,
+                maxLength: 16,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(labelText: '撮った人'),
+              ),
+              TextField(
+                controller: sound,
+                maxLength: 20,
+                decoration: const InputDecoration(labelText: '音の名前'),
+              ),
+              const SizedBox(height: 8),
+              FilledButton(
+                onPressed: () {
+                  final who = person.text.trim();
+                  final what = sound.text.trim();
+                  final parts = [who, what].where((part) => part.isNotEmpty);
+                  Navigator.pop(sheetContext, parts.join(' · '));
+                },
+                child: const Text('次の人へ渡す'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(sheetContext),
+                child: const Text('あとで名前をつける'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (label != null && label.isNotEmpty && mounted) {
+        try {
+          await widget.controller.renameClip(clip.id, label);
+        } catch (_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context)
+                .showSnackBar(const SnackBar(content: Text('名前を保存できませんでした')));
+          }
+        }
+      }
+    } finally {
+      person.dispose();
+      sound.dispose();
+    }
   }
 
   Future<void> _openProject(Project project) async {
@@ -151,8 +229,12 @@ class _CreationFlowState extends State<CreationFlow> {
   }
 
   Future<void> _reuseAsset(ClipAsset asset) async {
+    final before = widget.controller.state.clips.map((clip) => clip.id).toSet();
     await widget.controller.addExisting(asset);
-    if (mounted) setState(() => _tabIndex = 0);
+    if (mounted) {
+      setState(() => _tabIndex = 0);
+      await _nameNewRelayClip(before);
+    }
   }
 
   Widget _settings() {
@@ -343,10 +425,10 @@ class _CollectScreen extends StatelessWidget {
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
         actions: [
-          if (state.clips.isNotEmpty)
+          if (state.clips.isNotEmpty || controller.isRelay)
             TextButton(
               onPressed: controller.startNew,
-              child: const Text('新しくつくる'),
+              child: Text(state.clips.isEmpty ? 'ひとりでつくる' : '新しくつくる'),
             ),
         ],
       ),
@@ -383,13 +465,15 @@ class _CollectScreen extends StatelessWidget {
               ),
               const SizedBox(height: 18),
               Text(
-                'いつもの音を、\n3つ集めよう。',
+                controller.isRelay ? 'ひとり一音、\nみんなで一曲。' : 'いつもの音を、\n3つ集めよう。',
                 style: Theme.of(context).textTheme.displaySmall,
               ),
               const SizedBox(height: 10),
-              const Text(
-                'コップ、蛇口、キーボード。3つで作成、最大6つまで使えます。',
-                style: TextStyle(color: AppTokens.mutedInk, height: 1.5),
+              Text(
+                controller.isRelay
+                    ? 'スマホを順番に渡して、一人ずつ短い音を撮ろう。3人から作れます。'
+                    : 'コップ、蛇口、キーボード。3つで作成、最大6つまで使えます。',
+                style: const TextStyle(color: AppTokens.mutedInk, height: 1.5),
               ),
               const SizedBox(height: 22),
             ],
@@ -421,17 +505,19 @@ class _CollectScreen extends StatelessWidget {
                 ),
                 const SizedBox(width: 12),
                 Text(
-                  '$clipCount/6',
+                  controller.isRelay ? '$clipCount/6人' : '$clipCount/6',
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
               ],
             ),
-            if (clipCount == 0)
-              const SizedBox(height: 22)
-            else ...[
+            if (controller.isRelay || clipCount > 0) ...[
               const SizedBox(height: 4),
               Text(
-                collectionHint,
+                controller.isRelay
+                    ? clipCount >= 6
+                          ? 'みんなの音が集まりました'
+                          : '3人から作成OK · 次の人へスマホを渡そう'
+                    : collectionHint,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: AppTokens.mutedInk,
@@ -439,11 +525,12 @@ class _CollectScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 12),
-            ],
+            ] else
+              const SizedBox(height: 22),
             if (state.clips.isEmpty)
               Container(
-                padding: const EdgeInsets.symmetric(
-                  vertical: 38,
+                padding: EdgeInsets.symmetric(
+                  vertical: controller.isRelay ? 38 : 20,
                   horizontal: 22,
                 ),
                 decoration: BoxDecoration(
@@ -451,21 +538,33 @@ class _CollectScreen extends StatelessWidget {
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: const Color(0xFFE9E1DA)),
                 ),
-                child: const Column(
+                child: Column(
                   children: [
-                    Icon(
-                      Icons.graphic_eq_rounded,
-                      color: AppTokens.coral,
-                      size: 42,
-                    ),
-                    SizedBox(height: 12),
+                    if (controller.isRelay)
+                      const Icon(
+                        Icons.graphic_eq_rounded,
+                        color: AppTokens.coral,
+                        size: 42,
+                      )
+                    else
+                      OutlinedButton.icon(
+                        onPressed: state.phase == CreationPhase.preparing
+                            ? null
+                            : controller.startRelay,
+                        icon: const Icon(Icons.groups_rounded),
+                        label: const Text('みんなで一音ずつ'),
+                      ),
+                    const SizedBox(height: 12),
                     Text(
-                      '家の中の短い音を、まず3つ。',
+                      controller.isRelay ? '最初の人の音から始めよう。' : '家の中の短い音を、まず3つ。',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    SizedBox(height: 5),
-                    Text('同じ場所の音でも大丈夫。', textAlign: TextAlign.center),
+                    const SizedBox(height: 5),
+                    Text(
+                      controller.isRelay ? '撮ったら次の人へ。' : '同じ場所の音でも大丈夫。',
+                      textAlign: TextAlign.center,
+                    ),
                   ],
                 ),
               )

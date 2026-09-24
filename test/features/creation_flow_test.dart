@@ -26,6 +26,170 @@ import 'package:otogurashi/storage/project_repository.dart';
 
 void main() {
   test(
+    'relay mode and contributor names survive reopening and rearranging',
+    () async {
+      final projects = _MemoryProjects();
+      final assets = _RelayAssets();
+      final media = _FakeMedia();
+      final controller = CreationController(
+        projects: projects,
+        assets: assets,
+        media: media,
+        presentation: _FakePresentation(),
+        demo: _FakeDemo(),
+      );
+      addTearDown(controller.dispose);
+      controller.startRelay();
+      expect(controller.isRelay, isTrue);
+      expect(projects.createCount, 0);
+      expect(projects.project, isNull);
+      for (final clip in await _FakeDemo().install(assets)) {
+        await controller.addExisting(clip);
+      }
+      await controller.renameClip('clip-0', 'ユイ · コップ');
+      expect(media.analysisCalls, 0);
+      expect(media.renderRequests, isEmpty);
+      final saved = projects.project!;
+
+      final reopened = CreationController(
+        projects: projects,
+        assets: assets,
+        media: media,
+        presentation: _FakePresentation(),
+        demo: _FakeDemo(),
+      );
+      addTearDown(reopened.dispose);
+      await reopened.openProject(saved);
+      expect(reopened.isRelay, isTrue);
+      expect(reopened.state.clips.first.label, 'ユイ · コップ');
+      await reopened.createPreview();
+      expect(reopened.state.project!.videoRecipe['sessionMode'], 'relay');
+      expect(reopened.state.project!.videoRecipe['clipNames'], {
+        'clip-0': 'ユイ · コップ',
+      });
+      expect(media.renderRequests.last.video.clipNames, {'clip-0': 'ユイ · コップ'});
+      reopened.startNew();
+      expect(reopened.isRelay, isFalse);
+    },
+  );
+
+  test('leaving before the first relay sound creates no empty project', () {
+    final projects = _MemoryProjects();
+    final controller = CreationController(
+      projects: projects,
+      assets: _UnusedAssets(),
+      media: _FakeMedia(),
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    controller.startRelay();
+    controller.startNew();
+    expect(controller.isRelay, isFalse);
+    expect(projects.createCount, 0);
+  });
+
+  testWidgets('relay collection stays usable at 375 by 812', (tester) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: MediaQuery(
+          data: MediaQueryData.fromView(tester.view)
+              .copyWith(textScaler: const TextScaler.linear(1.2)),
+          child: CreationFlow(controller: controller, media: media),
+        ),
+      ),
+    );
+    await tester.tap(find.text('みんなで一音ずつ'));
+    await tester.pumpAndSettle();
+    expect(find.text('0/6人'), findsOneWidget);
+    for (final clip in await _FakeDemo().install(_UnusedAssets())) {
+      await controller.addExisting(clip);
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('3/6人'), findsOneWidget);
+    expect(find.text('3人から作成OK · 次の人へスマホを渡そう'), findsOneWidget);
+    final create = find.text('この音で15秒をつくる  ↗');
+    expect(create, findsOneWidget);
+    expect(tester.getRect(create).bottom, lessThan(812));
+    final thirdCard = find.ancestor(
+      of: find.text('合成素材 3'),
+      matching: find.byType(Card),
+    );
+    final cardRect = tester.getRect(thirdCard);
+    final createRect = tester.getRect(create);
+    expect(
+      (createRect.top - cardRect.top).clamp(0.0, cardRect.height),
+      greaterThanOrEqualTo(96),
+    );
+    final fourth = (await _FakeDemo(count: 4).install(_UnusedAssets())).last;
+    await controller.addExisting(fourth);
+    await tester.pumpAndSettle();
+    expect(find.text('4/6人'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('adopting a relay clip asks for a contributor and sound', (
+    tester,
+  ) async {
+    final media = _FakeMedia()
+      ..pickAction = (operationId) async => CapturedMedia(
+        operationId: operationId,
+        assetId: 'chosen',
+        relativePath: 'staging/chosen.mov',
+        durationUs: 3000000,
+        audioTrackStartUs: 0,
+        width: 1080,
+        height: 1920,
+        rotation: 0,
+      );
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _RelayAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+    await tester.tap(find.text('みんなで一音ずつ'));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView).first, const Offset(0, -180));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('動画を選ぶ'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('この音を使う'));
+    await tester.pumpAndSettle();
+    expect(find.text('この音はだれの？'), findsOneWidget);
+    expect(find.text('撮った人'), findsOneWidget);
+    expect(find.text('音の名前'), findsOneWidget);
+    await tester.tap(find.text('次の人へ渡す'));
+    await tester.pumpAndSettle();
+    expect(controller.state.clips.single.label, '1人目 · 音');
+    expect(controller.state.project!.videoRecipe['clipNames'], {
+      'clip-0': '1人目 · 音',
+    });
+  });
+
+  test(
     'theme, style, layout and seed reuse the same source analysis',
     () async {
       final media = _FakeMedia();
@@ -1477,6 +1641,31 @@ final class _RenamableAssets implements AssetRepository {
     return (await _FakeDemo(count: index + 1).install(this)).last
         .withLabel(label);
   }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
+final class _RelayAssets implements AssetRepository {
+  final clips = <String, ClipAsset>{};
+
+  @override
+  Future<ClipAsset> importManagedStaging(String relativePath) async =>
+      (await load('clip-0'))!;
+
+  @override
+  Future<ClipAsset?> load(String assetId) async {
+    if (clips.isEmpty) {
+      for (final clip in await _FakeDemo().install(this)) {
+        clips[clip.id] = clip;
+      }
+    }
+    return clips[assetId];
+  }
+
+  @override
+  Future<ClipAsset> rename(String assetId, String label) async =>
+      clips[assetId] = (await load(assetId))!.withLabel(label);
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();

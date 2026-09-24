@@ -42,6 +42,7 @@ final class CreationState {
     this.seed = 1,
     this.preview,
     this.error,
+    this.relayPending = false,
   });
 
   final CreationPhase phase;
@@ -55,6 +56,7 @@ final class CreationState {
   final int seed;
   final RenderedMedia? preview;
   final Object? error;
+  final bool relayPending;
 
   CreationState copyWith({
     CreationPhase? phase,
@@ -70,6 +72,7 @@ final class CreationState {
     bool clearPreview = false,
     Object? error,
     bool clearError = false,
+    bool? relayPending,
   }) => CreationState(
     phase: phase ?? this.phase,
     project: project ?? this.project,
@@ -82,6 +85,7 @@ final class CreationState {
     seed: seed ?? this.seed,
     preview: clearPreview ? null : preview ?? this.preview,
     error: clearError ? null : error ?? this.error,
+    relayPending: relayPending ?? this.relayPending,
   );
 }
 
@@ -166,6 +170,15 @@ final class CreationController extends ChangeNotifier {
 
   CreationState get state => _state;
 
+  bool get isRelay =>
+      _state.relayPending ||
+      _state.project?.videoRecipe['sessionMode'] == 'relay';
+
+  void startRelay() {
+    if (_disposed || _state.clips.isNotEmpty) return;
+    _set(_state.copyWith(relayPending: true));
+  }
+
   List<PlaybackSegment> get comparisonSegments => _state.clips
       .map((clip) {
         final request = _analysisRequest(clip);
@@ -194,7 +207,9 @@ final class CreationController extends ChangeNotifier {
       );
       await projects.save(project, expectedRevision: 0);
       if (_disposed) return;
-      _set(_state.copyWith(project: project, clips: clips));
+      _set(
+        _state.copyWith(project: project, clips: clips, relayPending: false),
+      );
       await _loadThumbnails(clips);
       _set(_state.copyWith(phase: CreationPhase.readyToCreate));
     } catch (error) {
@@ -238,12 +253,17 @@ final class CreationController extends ChangeNotifier {
     ++_requestVersion;
     _clearAnalysisCache();
     try {
-      final current = _state.project ?? await projects.create('今日の音');
+      final current =
+          _state.project ??
+          await projects.create(_state.relayPending ? 'みんなの音' : '今日の音');
       if (_disposed) return;
       final clips = <ClipAsset>[..._state.clips, asset];
       final updated = current.copyWith(
         revision: current.revision + 1,
         clipIds: clips.map((clip) => clip.id).toList(),
+        videoRecipe: _state.relayPending
+            ? <String, Object?>{...current.videoRecipe, 'sessionMode': 'relay'}
+            : null,
         updatedAt: DateTime.now().toUtc(),
       );
       await projects.save(updated, expectedRevision: current.revision);
@@ -253,6 +273,7 @@ final class CreationController extends ChangeNotifier {
         _state.copyWith(
           project: updated,
           clips: clips,
+          relayPending: false,
           phase: clips.length >= 3
               ? CreationPhase.readyToCreate
               : CreationPhase.collecting,
@@ -280,6 +301,7 @@ final class CreationController extends ChangeNotifier {
         _state.copyWith(
           project: project,
           clips: clips,
+          relayPending: false,
           phase: clips.length >= 3
               ? CreationPhase.readyToCreate
               : CreationPhase.collecting,
@@ -706,6 +728,7 @@ final class CreationController extends ChangeNotifier {
     final captions = previous['captions'];
     final crops = previous['clipCrops'];
     final clipNames = previous['clipNames'];
+    if (previous['sessionMode'] == 'relay') result['sessionMode'] = 'relay';
     if (captions is List) result['captions'] = _copyJson(captions);
     if (clipNames is Map) {
       final validIds = (generated['clipCrops'] as List<Object?>)
