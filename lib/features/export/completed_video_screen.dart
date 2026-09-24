@@ -195,37 +195,37 @@ class _CompletedVideoScreenState extends State<CompletedVideoScreen> {
                     );
               return Column(
                 children: [
-                  SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 3,
-                      thumbShape: const RoundSliderThumbShape(
-                        enabledThumbRadius: 6,
-                      ),
-                    ),
-                    child: Slider(
-                      value: _scrubValue ?? ratio,
-                      onChanged: playback.isReady
-                          ? (value) => setState(() => _scrubValue = value)
-                          : null,
-                      onChangeEnd: (value) {
-                        setState(() => _scrubValue = null);
-                        unawaited(
-                          playback.seek(
-                            Duration(milliseconds: (duration * value).round()),
+                  Row(
+                    children: [
+                      Text(_time(playback.position)),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 3,
+                            thumbShape: const RoundSliderThumbShape(
+                              enabledThumbRadius: 6,
+                            ),
                           ),
-                        );
-                      },
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      children: [
-                        Text(_time(playback.position)),
-                        const Spacer(),
-                        Text(_time(playback.duration)),
-                      ],
-                    ),
+                          child: Slider(
+                            value: _scrubValue ?? ratio,
+                            onChanged: playback.isReady
+                                ? (value) => setState(() => _scrubValue = value)
+                                : null,
+                            onChangeEnd: (value) {
+                              setState(() => _scrubValue = null);
+                              unawaited(
+                                playback.seek(
+                                  Duration(
+                                    milliseconds: (duration * value).round(),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                      Text(_time(playback.duration)),
+                    ],
                   ),
                   if (playback.error != null)
                     const Padding(
