@@ -873,6 +873,8 @@ class _AssetCardState extends State<_AssetCard> {
   Future<Uint8List>? _thumbnail;
   Future<AudioWaveform>? _waveform;
   late Future<List<String>> _projects = widget.loadReferences();
+  MediaPlaybackController? _inlinePlayback;
+  bool _playWhenReady = false;
 
   @override
   void initState() {
@@ -883,8 +885,10 @@ class _AssetCardState extends State<_AssetCard> {
   @override
   void didUpdateWidget(covariant _AssetCard oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.compact && !widget.compact) _discardInlinePlayback();
     if (oldWidget.asset.relativePath != widget.asset.relativePath ||
         oldWidget.presentation != widget.presentation) {
+      _discardInlinePlayback();
       _loadMedia();
     }
     if (oldWidget.asset.id != widget.asset.id ||
@@ -897,6 +901,51 @@ class _AssetCardState extends State<_AssetCard> {
     final gateway = widget.presentation;
     _thumbnail = gateway?.thumbnail(widget.asset.relativePath);
     _waveform = gateway?.waveform(widget.asset.relativePath);
+  }
+
+  void _toggleCompactPlayback() {
+    final presentation = widget.presentation;
+    if (presentation == null) return;
+    var playback = _inlinePlayback;
+    if (playback == null || playback.error != null) {
+      _discardInlinePlayback();
+      playback = MediaPlaybackController(presentation);
+      _inlinePlayback = playback;
+      _playWhenReady = true;
+      playback.addListener(_onInlinePlaybackChanged);
+      setState(() {});
+      return;
+    }
+    if (playback.isLoading) return;
+    unawaited(playback.toggle());
+  }
+
+  void _onInlinePlaybackChanged() {
+    if (!mounted) return;
+    final playback = _inlinePlayback;
+    if (playback == null) return;
+    if (_playWhenReady && playback.isReady) {
+      _playWhenReady = false;
+      unawaited(playback.toggle());
+    } else {
+      setState(() {});
+    }
+  }
+
+  void _discardInlinePlayback() {
+    final playback = _inlinePlayback;
+    _inlinePlayback = null;
+    _playWhenReady = false;
+    if (playback == null) return;
+    playback.removeListener(_onInlinePlaybackChanged);
+    unawaited(playback.pause());
+    playback.dispose();
+  }
+
+  @override
+  void dispose() {
+    _discardInlinePlayback();
+    super.dispose();
   }
 
   @override
@@ -1086,35 +1135,35 @@ class _AssetCardState extends State<_AssetCard> {
     clipBehavior: Clip.antiAlias,
     child: AspectRatio(
       aspectRatio: 9 / 16,
-      child: InkWell(
-        onTap: widget.onPreview,
+      child: GestureDetector(
+        onTap: _toggleCompactPlayback,
+        onLongPress: widget.onPreview,
         child: Stack(
           fit: StackFit.expand,
           children: [
-            FutureBuilder<Uint8List>(
-              future: _thumbnail,
-              builder: (context, snapshot) => snapshot.hasData
-                  ? Image.memory(snapshot.data!, fit: BoxFit.cover)
-                  : DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            accent.withValues(alpha: .65),
-                            AppTokens.ink,
-                          ],
-                        ),
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.graphic_eq_rounded,
-                          color: Colors.white,
-                          size: 36,
-                        ),
-                      ),
+            if (_inlinePlayback case final playback?)
+              Positioned.fill(
+                child: NativeMovieView(
+                  relativePath: asset.relativePath,
+                  segments: [
+                    PlaybackSegment(
+                      relativePath: asset.relativePath,
+                      startUs: asset.selectionStartUs,
+                      durationUs: asset.selectionDurationUs,
                     ),
-            ),
+                  ],
+                  gateway: widget.presentation!,
+                  controller: playback,
+                  fallback: _thumbnailFallback(accent),
+                ),
+              )
+            else
+              FutureBuilder<Uint8List>(
+                future: _thumbnail,
+                builder: (context, snapshot) => snapshot.hasData
+                    ? Image.memory(snapshot.data!, fit: BoxFit.cover)
+                    : _thumbnailFallback(accent),
+              ),
             const DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -1154,32 +1203,19 @@ class _AssetCardState extends State<_AssetCard> {
               left: 7,
               child: _StatusPill(text: '${widget.index + 1}', color: accent),
             ),
-            if (widget.onPreview != null)
-              Positioned(
-                top: 7,
-                right: 7,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: const Color(0x99000000),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Padding(
-                    padding: EdgeInsets.all(4),
-                    child: Icon(
-                      Icons.play_arrow_rounded,
-                      color: Colors.white,
-                      size: 17,
-                    ),
-                  ),
-                ),
+            Center(
+              child: _CompactPlayButton(
+                playback: _inlinePlayback,
+                onPressed: _toggleCompactPlayback,
               ),
+            ),
             Positioned(
               left: 8,
               right: 8,
-              bottom: 8,
+              bottom: 54,
               child: Text(
                 name,
-                maxLines: 1,
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Colors.white,
@@ -1189,10 +1225,98 @@ class _AssetCardState extends State<_AssetCard> {
                 ),
               ),
             ),
+            if (widget.onReuse != null)
+              Positioned(
+                right: 3,
+                bottom: 2,
+                child: IconButton.filledTonal(
+                  onPressed: widget.onReuse,
+                  tooltip: '作品に追加',
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppTokens.coral,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(46, 46),
+                    maximumSize: const Size(46, 46),
+                    padding: EdgeInsets.zero,
+                  ),
+                  icon: const Icon(Icons.add_rounded, size: 26),
+                ),
+              ),
           ],
         ),
       ),
     ),
+  );
+
+  Widget _thumbnailFallback(Color accent) => DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [accent.withValues(alpha: .65), AppTokens.ink],
+      ),
+    ),
+    child: const Center(
+      child: Icon(Icons.graphic_eq_rounded, color: Colors.white, size: 36),
+    ),
+  );
+}
+
+final class _CompactPlayButton extends StatelessWidget {
+  const _CompactPlayButton({required this.playback, required this.onPressed});
+
+  final MediaPlaybackController? playback;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final activePlayback = playback;
+    if (activePlayback == null) {
+      return _button(loading: false, playing: false, hasError: false);
+    }
+    return AnimatedBuilder(
+      animation: activePlayback,
+      builder: (context, _) => _button(
+        loading: activePlayback.isLoading,
+        playing: activePlayback.isPlaying,
+        hasError: activePlayback.error != null,
+      ),
+    );
+  }
+
+  Widget _button({
+    required bool loading,
+    required bool playing,
+    required bool hasError,
+  }) => IconButton.filled(
+    onPressed: loading ? null : onPressed,
+    tooltip: playing ? '一時停止' : '再生',
+    style: IconButton.styleFrom(
+      backgroundColor: const Color(0xCC17161A),
+      foregroundColor: Colors.white,
+      disabledBackgroundColor: const Color(0xCC17161A),
+      disabledForegroundColor: Colors.white,
+      minimumSize: const Size(52, 52),
+      maximumSize: const Size(52, 52),
+      padding: EdgeInsets.zero,
+    ),
+    icon: loading
+        ? const SizedBox(
+            width: 21,
+            height: 21,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.white,
+            ),
+          )
+        : Icon(
+            hasError
+                ? Icons.refresh_rounded
+                : playing
+                ? Icons.pause_rounded
+                : Icons.play_arrow_rounded,
+            size: 31,
+          ),
   );
 }
 
@@ -1378,6 +1502,7 @@ class _AssetPreviewSheetState extends State<_AssetPreviewSheet> {
                     borderRadius: BorderRadius.circular(13),
                     child: NativeMovieView(
                       relativePath: widget.asset.relativePath,
+                      aspectFitVideo: true,
                       segments: [
                         PlaybackSegment(
                           relativePath: widget.asset.relativePath,

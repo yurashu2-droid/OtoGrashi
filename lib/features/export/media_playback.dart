@@ -167,6 +167,7 @@ class NativeMovieView extends StatelessWidget {
     required this.controller,
     this.segments = const <PlaybackSegment>[],
     this.fallback,
+    this.aspectFitVideo = false,
     super.key,
   });
 
@@ -175,6 +176,7 @@ class NativeMovieView extends StatelessWidget {
   final MediaPlaybackController controller;
   final List<PlaybackSegment> segments;
   final Widget? fallback;
+  final bool aspectFitVideo;
 
   @override
   Widget build(BuildContext context) {
@@ -183,6 +185,7 @@ class NativeMovieView extends StatelessWidget {
     }
     final creationParams = <String, Object?>{
       'relativePath': relativePath,
+      'aspectFitVideo': aspectFitVideo,
       if (segments.isNotEmpty)
         'segments': segments.map((segment) => segment.toNativeMap()).toList(),
     };

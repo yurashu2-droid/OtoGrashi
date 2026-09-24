@@ -538,9 +538,10 @@ final class PlaybackViewFactory: NSObject, FlutterPlatformViewFactory {
     let relativePath = (args as? [String: Any])?["relativePath"] as? String ?? ""
     let url = try? store.resolvePlayable(relativePath: relativePath)
     let segments = (args as? [String: Any])?["segments"] as? [[String: Any]]
+    let aspectFitVideo = (args as? [String: Any])?["aspectFitVideo"] as? Bool ?? false
     return PlaybackPlatformView(frame: frame, viewId: viewId,
       url: segments == nil ? url : nil, registry: registry,
-      segments: segments, store: store)
+      segments: segments, store: store, aspectFitVideo: aspectFitVideo)
   }
 }
 
@@ -551,10 +552,14 @@ final class PlaybackPlatformView: NSObject, FlutterPlatformView {
   private var loading: Task<Void, Never>?
 
   init(frame: CGRect, viewId: Int64, url: URL?, registry: PlaybackRegistry,
-    segments: [[String: Any]]? = nil, store: ManagedMediaStore = ManagedMediaStore()) {
+    segments: [[String: Any]]? = nil, store: ManagedMediaStore = ManagedMediaStore(),
+    aspectFitVideo: Bool = false) {
     self.viewId = viewId
     self.registry = registry
-    self.playerView = PlaybackUIView(frame: frame, url: url)
+    self.playerView = PlaybackUIView(
+      frame: frame, url: url,
+      videoGravity: aspectFitVideo ? .resizeAspect : .resizeAspectFill
+    )
     super.init()
     registry.register(viewId: viewId, player: playerView.player)
     if let segments {
@@ -616,7 +621,7 @@ final class PlaybackUIView: UIView {
   override class var layerClass: AnyClass { AVPlayerLayer.self }
   let player: AVPlayer
 
-  init(frame: CGRect, url: URL?) {
+  init(frame: CGRect, url: URL?, videoGravity: AVLayerVideoGravity = .resizeAspectFill) {
     if let url {
       player = AVPlayer(url: url)
     } else {
@@ -626,7 +631,7 @@ final class PlaybackUIView: UIView {
     backgroundColor = .black
     let layer = layer as! AVPlayerLayer
     layer.player = player
-    layer.videoGravity = .resizeAspectFill
+    layer.videoGravity = videoGravity
     isAccessibilityElement = true
     accessibilityLabel = "動画プレビュー"
   }
