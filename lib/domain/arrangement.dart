@@ -7,6 +7,8 @@ enum ArrangementStyle { sparse, swaying, lively }
 
 enum VideoLoopMode { loop, hold, once }
 
+enum SoundTreatment { original, phrase, rhythm, tuned }
+
 enum ArrangementRejectionReason {
   noSources,
   allSilent,
@@ -51,6 +53,10 @@ final class SoundEvent {
     required this.gain,
     required this.fades,
     this.pitchSemitones = 0,
+    this.sourceDurationSamples,
+    this.targetMidiNote,
+    this.reverse = false,
+    this.treatment = SoundTreatment.original,
   });
 
   final String assetId;
@@ -60,6 +66,12 @@ final class SoundEvent {
   final double gain;
   final EventFades fades;
   final double pitchSemitones;
+  final int? sourceDurationSamples;
+  final double? targetMidiNote;
+  final bool reverse;
+  final SoundTreatment treatment;
+  int get effectiveSourceDurationSamples =>
+      sourceDurationSamples ?? durationSamples;
 
   Map<String, Object?> toJson() => {
     'assetId': assetId,
@@ -69,6 +81,11 @@ final class SoundEvent {
     'gain': gain,
     'fades': fades.toJson(),
     if (pitchSemitones != 0) 'pitchSemitones': pitchSemitones,
+    if (sourceDurationSamples != null)
+      'sourceDurationSamples': sourceDurationSamples,
+    if (targetMidiNote != null) 'targetMidiNote': targetMidiNote,
+    if (reverse) 'reverse': true,
+    if (treatment != SoundTreatment.original) 'treatment': treatment.name,
   };
 
   factory SoundEvent.fromJson(Map<String, Object?> json) => SoundEvent(
@@ -79,6 +96,12 @@ final class SoundEvent {
     gain: (json['gain'] as num).toDouble(),
     fades: EventFades.fromJson((json['fades'] as Map<Object?, Object?>).cast()),
     pitchSemitones: (json['pitchSemitones'] as num?)?.toDouble() ?? 0,
+    sourceDurationSamples: json['sourceDurationSamples'] as int?,
+    targetMidiNote: (json['targetMidiNote'] as num?)?.toDouble(),
+    reverse: json['reverse'] as bool? ?? false,
+    treatment: SoundTreatment.values.byName(
+      json['treatment'] as String? ?? 'original',
+    ),
   );
 }
 
@@ -143,6 +166,9 @@ final class VideoEvent {
     required this.sourceVideoStartTime,
     required this.crop,
     required this.loopMode,
+    this.sourceDurationSamples,
+    this.reverse = false,
+    this.mirror = false,
   });
 
   final String assetId;
@@ -151,6 +177,11 @@ final class VideoEvent {
   final RationalTime sourceVideoStartTime;
   final NormalizedCrop crop;
   final VideoLoopMode loopMode;
+  final int? sourceDurationSamples;
+  final bool reverse;
+  final bool mirror;
+  int get effectiveSourceDurationSamples =>
+      sourceDurationSamples ?? durationSamples;
 
   Map<String, Object?> toJson() => {
     'assetId': assetId,
@@ -159,6 +190,10 @@ final class VideoEvent {
     'sourceVideoStartTime': sourceVideoStartTime.toJson(),
     'crop': crop.toJson(),
     'loopMode': loopMode.name,
+    if (sourceDurationSamples != null)
+      'sourceDurationSamples': sourceDurationSamples,
+    if (reverse) 'reverse': true,
+    if (mirror) 'mirror': true,
   };
 
   factory VideoEvent.fromJson(Map<String, Object?> json) => VideoEvent(
@@ -172,6 +207,9 @@ final class VideoEvent {
       (json['crop'] as Map<Object?, Object?>).cast(),
     ),
     loopMode: VideoLoopMode.values.byName(json['loopMode'] as String),
+    sourceDurationSamples: json['sourceDurationSamples'] as int?,
+    reverse: json['reverse'] as bool? ?? false,
+    mirror: json['mirror'] as bool? ?? false,
   );
 }
 
@@ -219,8 +257,16 @@ final class Arrangement {
     if (events.any(
           (event) =>
               event.sourceStartSample < 0 ||
+              event.effectiveSourceDurationSamples <= 0 ||
+              event.effectiveSourceDurationSamples > 720000 ||
+              (event.targetMidiNote != null &&
+                  (!event.targetMidiNote!.isFinite ||
+                      event.targetMidiNote! < 24 ||
+                      event.targetMidiNote! > 100)) ||
+              ((event.targetMidiNote != null || event.reverse) &&
+                  event.sourceDurationSamples == null) ||
               event.sourceStartSample >
-                  9223372036854775807 - event.durationSamples ||
+                  9223372036854775807 - event.effectiveSourceDurationSamples ||
               event.destinationStartSample < 0 ||
               event.durationSamples <= 0 ||
               event.destinationStartSample > totalSamples ||
@@ -262,6 +308,9 @@ final class Arrangement {
       if (audio.assetId != video.assetId ||
           audio.destinationStartSample != video.destinationStartSample ||
           audio.durationSamples != video.durationSamples ||
+          audio.effectiveSourceDurationSamples !=
+              video.effectiveSourceDurationSamples ||
+          audio.reverse != video.reverse ||
           video.sourceVideoStartTime.numerator != audio.sourceStartSample ||
           video.sourceVideoStartTime.denominator != sampleRate) {
         throw const MediaContractException(
@@ -332,7 +381,7 @@ final class Arrangement {
   }
 
   static const int schemaVersion = 1;
-  static const int maxEvents = 160;
+  static const int maxEvents = 256;
   static const int barSamples = 90000;
   static const int beatSamples = 22500;
   final int sampleRate;

@@ -1,7 +1,7 @@
 /// Original song patterns made only from the recorded clips. Each melody slot
 /// is half a bar at 128 BPM; null is a deliberate rest.
-/// Note steps become target notes only when a stable recorded fundamental is
-/// available and the required shift fits the renderer's quality range.
+/// Casual speech and noisy recordings are musicalized at the target notes;
+/// natural phrase spotlights preserve the recognizable original voices.
 enum MelodyTemplate { none, hop, wink, answer, midiScore }
 
 extension MelodyTemplateDetails on MelodyTemplate {
@@ -15,9 +15,9 @@ extension MelodyTemplateDetails on MelodyTemplate {
 
   String get description => switch (this) {
     MelodyTemplate.none => '撮った音からリズムをつくる',
-    MelodyTemplate.hop => 'まっすぐな拍に、上がって戻る旋律',
-    MelodyTemplate.wink => '裏拍と休符で、跳ねる曲',
-    MelodyTemplate.answer => '刻む拍に、短い音が返事する曲',
+    MelodyTemplate.hop => '声や生活音が、はねるメロディに変わる',
+    MelodyTemplate.wink => '小刻みな音と反転カットで、MAD風に',
+    MelodyTemplate.answer => '友達の声を残して、音でかけあい',
     MelodyTemplate.midiScore => '提供されたMIDIの旋律・低音・ピアノを撮った音で演奏',
   };
 

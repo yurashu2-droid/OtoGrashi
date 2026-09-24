@@ -120,7 +120,10 @@ void main() {
           expect(arrangement.songRoles?.bass, 'hum');
           expect(arrangement.songRoles?.keys, 'room');
           expect(arrangement.songRoles?.melody, 'hum');
-          expect(arrangement.events.length, lessThanOrEqualTo(64));
+          expect(
+            arrangement.events.length,
+            lessThanOrEqualTo(Arrangement.maxEvents),
+          );
           expect(arrangement.videoEvents.length, arrangement.events.length);
           expect(arrangement.events.every(_fitsDestination), isTrue);
           expect(
@@ -140,7 +143,7 @@ void main() {
             );
           }
           expect(
-            arrangement.events.any((event) => event.pitchSemitones != 0),
+            arrangement.events.any((event) => event.targetMidiNote != null),
             isTrue,
           );
           expect(
@@ -180,7 +183,7 @@ void main() {
                   (event) => [
                     event.assetId,
                     event.destinationStartSample,
-                    event.pitchSemitones,
+                    event.targetMidiNote,
                   ],
                 )
                 .toList()
@@ -229,136 +232,78 @@ void main() {
     },
   );
 
-  test('short taps become beat and key accents, never bass or melody', () {
-    final onlyShortSounds = [
-      _clip('tap-1', role: SuggestedRole.transient),
-      _clip('tap-2', role: SuggestedRole.transient),
-      _clip('tap-3', role: SuggestedRole.transient),
+  test('short taps can be musical bass and melody without a stable pitch', () {
+    final sounds = [
+      for (var i = 0; i < 3; i++)
+        _clip('tap-$i', role: SuggestedRole.transient),
     ];
-    final arrangement = arrange(
-      clips: onlyShortSounds,
+    final result = arrange(
+      clips: sounds,
       style: ArrangementStyle.lively,
       melodyTemplate: MelodyTemplate.hop,
       seed: 7,
     );
-    expect(arrangement.songRoles?.bass, isNull);
-    expect(arrangement.songRoles?.melody, isNull);
-    expect(arrangement.songRoles?.beat, isNotNull);
-    expect(arrangement.songRoles?.keys, isNotNull);
-    expect(arrangement.songRoles?.keys, isNot(arrangement.songRoles?.beat));
+    expect(result.songRoles?.bass, isNotNull);
+    expect(result.songRoles?.melody, isNotNull);
     expect(
-      arrangement.events
-          .where((event) => event.assetId == arrangement.songRoles?.beat)
-          .every((event) => event.pitchSemitones == 0),
+      result.events.any(
+        (e) => e.targetMidiNote != null && e.durationSamples >= 42000,
+      ),
       isTrue,
     );
-    expect(arrangement.events.length, lessThanOrEqualTo(64));
+    expect(
+      result.events.where((e) => e.treatment == SoundTreatment.phrase).length,
+      3,
+    );
   });
 
   test(
-    'unmeasured sounds keep their original pitch and have no melody role',
+    'unmeasured and distant pitches are retuned instead of silently bypassed',
     () {
-      final arranged = arrange(
-        clips: threeFixtures,
-        style: ArrangementStyle.sparse,
-        melodyTemplate: MelodyTemplate.hop,
-        seed: 7,
-      );
-
-      expect(arranged.songRoles?.bass, 'hum');
-      expect(arranged.songRoles?.melody, isNull);
-      expect(
-        arranged.events.every((event) => event.pitchSemitones == 0),
-        isTrue,
-      );
+      for (final measured in [false, true]) {
+        final result = arrange(
+          clips: [
+            _clip('tap', role: SuggestedRole.transient),
+            _clip('voice', pitch: measured ? 57.0144 : null),
+            _clip('other-tone', pitch: measured ? 81.2 : null),
+          ],
+          style: ArrangementStyle.sparse,
+          melodyTemplate: MelodyTemplate.hop,
+          seed: 7,
+        );
+        expect(result.songRoles?.melody, isNotNull);
+        expect(
+          result.events.where((e) => e.targetMidiNote != null).length,
+          greaterThan(10),
+        );
+        expect(
+          result.events.any(
+            (e) =>
+                e.treatment == SoundTreatment.phrase &&
+                e.targetMidiNote == null,
+          ),
+          isTrue,
+        );
+        expect(Arrangement.fromJson(result.toJson()).toJson(), result.toJson());
+      }
     },
   );
 
-  test('a distant measured sound stays at its original pitch', () {
-    final arranged = arrange(
-      clips: [
-        _clip('tap', role: SuggestedRole.transient),
-        _clip('voice', pitch: 57),
-        _clip('other-tone', pitch: 65),
-      ],
+  test('fractional measured pitch does not disable boundary notes', () {
+    final input = _clip('voice', pitch: 57.35);
+    final result = arrange(
+      clips: [input],
       style: ArrangementStyle.sparse,
       melodyTemplate: MelodyTemplate.hop,
       seed: 7,
     );
-
-    expect(arranged.songRoles?.melody, 'voice');
-    expect(arranged.songRoles?.keys, 'other-tone');
-    expect(
-      arranged.events
-          .where((event) => event.assetId == 'other-tone')
-          .every((event) => event.pitchSemitones == 0),
-      isTrue,
-    );
-    expect(
-      arranged.events.any(
-        (event) => event.assetId == 'voice' && event.pitchSemitones != 0,
-      ),
-      isTrue,
-    );
-  });
-
-  test('a measured sustained note follows each song melody automatically', () {
-    final clips = [
-      _clip('tap', role: SuggestedRole.transient),
-      _clip('voice', pitch: 57.35),
-      _clip('room', role: SuggestedRole.texture),
-    ];
-    for (final song in MelodyTemplate.values.where(
-      (value) =>
-          value != MelodyTemplate.none && value != MelodyTemplate.midiScore,
-    )) {
-      final arranged = arrange(
-        clips: clips,
-        style: ArrangementStyle.sparse,
-        melodyTemplate: song,
-        seed: 7,
-      );
-      final start = 3 * Arrangement.barSamples;
-      final melodyEvents = arranged.events.where(
-        (event) =>
-            event.assetId == 'voice' &&
-            event.destinationStartSample >= start &&
-            event.destinationStartSample < 7 * Arrangement.barSamples &&
-            event.durationSamples == 18000,
-      );
-      final expectedNotes = song.notes
-          .where((note) => note.pitchSemitones != null)
-          .toList();
-      expect(melodyEvents.length, expectedNotes.length);
-      for (var index = 0; index < expectedNotes.length; index++) {
-        final actual = melodyEvents.elementAt(index);
-        final target = 57 + expectedNotes[index].pitchSemitones!;
-        final requiredShift = target - 57.35;
-        if (requiredShift.abs() <= 3) {
-          expect(57.35 + actual.pitchSemitones, closeTo(target, 0.001));
-        } else {
-          expect(actual.pitchSemitones, 0);
-        }
-      }
-      expect(arranged.events.length, lessThanOrEqualTo(64));
-      expect(arranged.videoEvents.length, arranged.events.length);
-      for (var index = 0; index < arranged.events.length; index++) {
-        expect(
-          arranged.videoEvents[index].destinationStartSample,
-          arranged.events[index].destinationStartSample,
-        );
-      }
-      expect(
-        Arrangement.fromJson(arranged.toJson()).toJson(),
-        arranged.toJson(),
-      );
-    }
-
-    final measured = clips[1];
-    expect(AnalyzedClip.fromJson(measured.toJson()).fundamentalMidiNote, 57.35);
+    final tuned = result.events.where((e) => e.targetMidiNote != null);
+    expect(tuned.any((e) => (e.targetMidiNote! - 57.35).abs() > 3), isTrue);
+    expect(tuned.every((e) => e.sourceDurationSamples != null), isTrue);
+    expect(AnalyzedClip.fromJson(input.toJson()).fundamentalMidiNote, 57.35);
     expect(
       () => AnalyzedClip.fromJson({
-        ...measured.toJson(),
+        ...input.toJson(),
         'fundamentalMidiNote': double.nan,
       }),
       throwsA(isA<MediaContractException>()),
@@ -380,7 +325,7 @@ void main() {
       melodyTemplate: MelodyTemplate.answer,
       seed: 7,
     );
-    expect(arranged.events.length, lessThanOrEqualTo(64));
+    expect(arranged.events.length, lessThanOrEqualTo(Arrangement.maxEvents));
     expect(
       arranged.events.map((event) => event.assetId).toSet(),
       clips.map((clip) => clip.assetId).toSet(),
@@ -401,11 +346,7 @@ void main() {
       arrangement: arranged,
       layout: VideoLayout.buildUp,
     );
-    expect(recipe.events.take(3).map((scene) => scene.primaryAssetId), [
-      'tap',
-      'hum',
-      'room',
-    ]);
+    expect(recipe.events.first.primaryAssetId, clips.first.assetId);
     for (final scene in recipe.events.take(3)) {
       expect(
         arranged.events.any(
@@ -420,31 +361,34 @@ void main() {
     }
   });
 
-  test('persisted arrangement rejects more than six assets or 160 events', () {
-    final valid = arrange(
-      clips: threeFixtures,
-      style: ArrangementStyle.lively,
-      seed: 7,
-    ).toJson();
-    expect(
-      () => Arrangement.fromJson({
-        ...valid,
-        'sourceAssetIds': List<String>.generate(7, (index) => 'asset-$index'),
-      }),
-      throwsA(isA<MediaContractException>()),
-    );
+  test(
+    'persisted arrangement rejects more than six assets or the event budget',
+    () {
+      final valid = arrange(
+        clips: threeFixtures,
+        style: ArrangementStyle.lively,
+        seed: 7,
+      ).toJson();
+      expect(
+        () => Arrangement.fromJson({
+          ...valid,
+          'sourceAssetIds': List<String>.generate(7, (index) => 'asset-$index'),
+        }),
+        throwsA(isA<MediaContractException>()),
+      );
 
-    final audio = (valid['events'] as List<Object?>).first;
-    final video = (valid['videoEvents'] as List<Object?>).first;
-    expect(
-      () => Arrangement.fromJson({
-        ...valid,
-        'events': List<Object?>.filled(161, audio),
-        'videoEvents': List<Object?>.filled(161, video),
-      }),
-      throwsA(isA<MediaContractException>()),
-    );
-  });
+      final audio = (valid['events'] as List<Object?>).first;
+      final video = (valid['videoEvents'] as List<Object?>).first;
+      expect(
+        () => Arrangement.fromJson({
+          ...valid,
+          'events': List<Object?>.filled(Arrangement.maxEvents + 1, audio),
+          'videoEvents': List<Object?>.filled(Arrangement.maxEvents + 1, video),
+        }),
+        throwsA(isA<MediaContractException>()),
+      );
+    },
+  );
 
   test(
     'six sources are all scheduled while the first three lead the intro',
@@ -695,7 +639,8 @@ void main() {
       result.events.every(
         (event) =>
             event.sourceStartSample >= 96000 &&
-            event.sourceStartSample + event.durationSamples <= 144000,
+            event.sourceStartSample + event.effectiveSourceDurationSamples <=
+                144000,
       ),
       isTrue,
     );
@@ -768,7 +713,8 @@ void main() {
       voiceEvents.every(
         (event) =>
             event.sourceStartSample >= 72000 &&
-            event.sourceStartSample + event.durationSamples <= 96000,
+            event.sourceStartSample + event.effectiveSourceDurationSamples <=
+                96000,
       ),
       isTrue,
     );
@@ -934,6 +880,6 @@ bool _fitsSource(SoundEvent event, List<AnalyzedClip> clips) {
     (candidate) => candidate.assetId == event.assetId,
   );
   return event.sourceStartSample >= clip.sourceStartSample &&
-      event.sourceStartSample + event.durationSamples <=
+      event.sourceStartSample + event.effectiveSourceDurationSamples <=
           clip.sourceStartSample + clip.durationSamples;
 }

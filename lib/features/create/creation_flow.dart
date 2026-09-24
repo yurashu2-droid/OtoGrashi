@@ -487,7 +487,7 @@ class _CollectScreen extends StatelessWidget {
               Text(
                 controller.isRelay
                     ? 'スマホを順番に渡して、一人ずつ短い音を撮ろう。3人から作れます。'
-                    : 'コップ、蛇口、キーボード。3つで作成、最大6つまで使えます。',
+                    : '友達の声、リアクション、身近な音。3つで曲に、最大6つまで使えます。',
                 style: const TextStyle(color: AppTokens.mutedInk, height: 1.5),
               ),
               const SizedBox(height: 22),
@@ -573,7 +573,9 @@ class _CollectScreen extends StatelessWidget {
                       ),
                     const SizedBox(height: 12),
                     Text(
-                      controller.isRelay ? '最初の人の音から始めよう。' : '家の中の短い音を、まず3つ。',
+                      controller.isRelay
+                          ? '最初の人の音から始めよう。'
+                          : '会話や長い音も、そのまま録ってみよう。',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),

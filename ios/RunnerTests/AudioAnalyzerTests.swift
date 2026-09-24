@@ -3,6 +3,32 @@ import XCTest
 @testable import Runner
 
 final class AudioAnalyzerTests: XCTestCase {
+  func testSilencePaddingDoesNotDisablePitchAndRegionsKeepTheirOwnPitch() throws {
+    func tone(_ hz: Double, _ count: Int, _ gain: Double = 0.4) -> [Float] {
+      (0..<count).map { Float(gain * sin(2 * Double.pi * hz * Double($0) / 48_000)) }
+    }
+    let padding = [Float](repeating: 0, count: 60_000)
+    let padded = try AudioAnalyzer().measure(samples: padding + tone(220, 24_000) + padding)
+    XCTAssertEqual(padded.suggestedRole, .sustain)
+    XCTAssertEqual(try XCTUnwrap(padded.fundamentalMidiNote), 57, accuracy: 0.1)
+    let separated = tone(220, 14_400) + [Float](repeating: 0, count: 9_600) + tone(330, 48_000, 0.3)
+    let measured = try AudioAnalyzer().measure(samples: separated)
+    XCTAssertEqual(measured.audibleRegions.count, 2)
+    XCTAssertNil(measured.fundamentalMidiNote)
+    let regionNotes = measured.audibleRegions.compactMap(\.fundamentalMidiNote).sorted()
+    XCTAssertEqual(regionNotes.count, 2)
+    XCTAssertEqual(regionNotes[0], 57, accuracy: 0.1)
+    XCTAssertEqual(regionNotes[1], 64.01955, accuracy: 0.1)
+  }
+
+  func testHighAndLowPitchDetectionHasSubSemitoneAccuracy() throws {
+    for hz in [60.0, 82.4069, 100, 220, 880, 1046.502, 1174.659, 1760] {
+      let input = (0..<24_000).map { Float(0.3 * sin(2 * Double.pi * hz * Double($0) / 48_000)) }
+      let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(input))
+      XCTAssertLessThan(abs(1200 * log2(pitch.hertz / hz)), 8)
+    }
+  }
+
   private let analyzer = AudioAnalyzer()
 
   func testTrackRangeRoundsItsAbsoluteEndInsteadOfAddingRoundedParts() throws {

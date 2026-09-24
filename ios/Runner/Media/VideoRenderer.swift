@@ -90,7 +90,7 @@ struct VideoRecipePayload: Decodable {
     )
     events = try Self.decodeBounded(
       VideoSceneEventPayload.self, from: container, forKey: .events,
-      maximum: ArrangementPayload.maximumEvents
+      maximum: ArrangementPayload.maximumEvents * 2 + 1
     )
     effects = try container.decodeIfPresent(VideoEffectsPayload.self, forKey: .effects)
       ?? VideoEffectsPayload(enabled: [])
@@ -99,7 +99,7 @@ struct VideoRecipePayload: Decodable {
     guard schemaVersion == 1,
       (1...6).contains(clipCrops.count),
       captions.count <= 12,
-      events.count <= ArrangementPayload.maximumEvents,
+      events.count <= ArrangementPayload.maximumEvents * 2 + 1,
       !events.isEmpty,
       Set(cropIds).count == cropIds.count,
       clipCrops.allSatisfy({ !$0.assetId.isEmpty && $0.crop.isValid }),
@@ -107,16 +107,18 @@ struct VideoRecipePayload: Decodable {
       clipNames.allSatisfy({ cropIds.contains($0.key) &&
         !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         $0.value.count <= 40 }),
-      effects.enabled.isEmpty,
+      effects.enabled.count <= 3,
+      Set(effects.enabled).count == effects.enabled.count,
+      effects.enabled.allSatisfy({ ["mirrorCuts", "beatPunch", "echoTiles"].contains($0) }),
       events.first?.destinationStartSample == 0,
       events.last?.destinationEndSample == ArrangementPayload.totalSamples
     else { throw VideoRenderError.unsupportedContract }
     for (index, event) in events.enumerated() {
       guard event.destinationStartSample >= 0,
-        event.destinationStartSample % 90_000 == 0,
         event.durationSamples > 0,
         event.destinationEndSample <= ArrangementPayload.totalSamples,
-        (1...3).contains(event.assetIds.count),
+        (1...6).contains(event.assetIds.count),
+        Set(event.assetIds).count == event.assetIds.count,
         event.assetIds.allSatisfy(cropIds.contains),
         event.primaryAssetId.map(event.assetIds.contains) ?? true,
         index == 0 || events[index - 1].destinationEndSample == event.destinationStartSample
@@ -211,7 +213,8 @@ struct VideoRenderer {
     cancellation: CancellationToken
   ) async throws -> VideoRenderReport {
     try checkCancellation(cancellation)
-    let requiredIds = Set(request.arrangement.sourceAssetIds)
+    let requiredIds = Set(request.arrangement.videoEvents.map(\.assetId))
+      .union(request.video.events.flatMap(\.assetIds))
     guard requiredIds.allSatisfy({ assets[$0] != nil }) else {
       throw VideoRenderError.missingAsset
     }
@@ -239,6 +242,7 @@ struct VideoRenderer {
       videoEvents: request.arrangement.videoEvents,
       scenes: request.video.events,
       layout: request.video.layout,
+      maximumSize: CGSize(width: dimensions.width, height: dimensions.height),
       cancellation: cancellation
     )
     videoRenderDiagnostic("VIDEO_STAGE providers_ready count=\(providers.count)")
@@ -444,6 +448,7 @@ struct VideoRenderer {
     videoEvents: [VideoEventPayload],
     scenes: [VideoSceneEventPayload],
     layout: VideoLayoutPayload,
+    maximumSize: CGSize,
     cancellation: CancellationToken
   ) async throws
     -> [String: SourceProvider]
@@ -459,6 +464,7 @@ struct VideoRenderer {
       }
       let generator = AVAssetImageGenerator(asset: asset)
       generator.appliesPreferredTrackTransform = true
+      generator.maximumSize = maximumSize
       generator.dynamicRangePolicy = .forceSDR
       let halfFrame = CMTime(value: 1, timescale: 60)
       generator.requestedTimeToleranceBefore = halfFrame
@@ -495,7 +501,7 @@ struct VideoRenderer {
         value: CMTimeValue(event.sourceVideoStartTime.numerator),
         timescale: timescale
       )
-      let duration = CMTime(value: CMTimeValue(event.durationSamples), timescale: timescale)
+      let duration = CMTime(value: CMTimeValue(event.effectiveSourceDurationSamples), timescale: timescale)
       guard start.isNumeric, duration.isNumeric, duration > .zero else { continue }
       ranges[event.assetId, default: []].append(
         CMTimeRange(start: start, duration: duration)
@@ -670,19 +676,33 @@ struct VideoRenderer {
     var canvas = CIImage(color: CIColor.black).cropped(
       to: CGRect(x: 0, y: 0, width: width, height: height)
     )
+    // The sound clock is authoritative even when opening an older bar-based
+    // recipe. Never hide an audible source behind a silent selected picture.
+    let active = request.arrangement.videoEvents.filter {
+      sample >= $0.destinationStartSample && sample < $0.destinationStartSample + $0.durationSamples
+    }
+    let activeIds = Set(active.map(\.assetId))
+    let visibleAssetIds = active.isEmpty
+      ? Self.visibleAssetIds(scene: scene, layout: request.video.layout)
+      : scene.assetIds.filter(activeIds.contains) + active.map(\.assetId)
+        .filter { !scene.assetIds.contains($0) }
+        .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+    // Sequential focus still foregrounds the speaker, but the other audible
+    // voices get their own panels instead of being invisible.
+    let renderLayout: VideoLayoutPayload = request.video.layout == .sequentialFocus && visibleAssetIds.count > 1
+      ? .buildUp : request.video.layout
     let targets = Self.targetRects(
-      count: scene.assetIds.count,
-      layout: request.video.layout,
+      count: visibleAssetIds.count,
+      layout: renderLayout,
       width: CGFloat(width),
       height: CGFloat(height)
     )
-    let visibleAssetIds = Self.visibleAssetIds(scene: scene, layout: request.video.layout)
     for (index, id) in visibleAssetIds.enumerated() {
       guard let provider = providers[id],
         let crop = request.video.clipCrops.first(where: { $0.assetId == id })?.crop
       else { throw VideoRenderError.missingAsset }
       let target = targets[index]
-      let tileCount = request.video.layout == .buildUp && scene.assetIds.count > 1 && index > 0
+      let tileCount = request.video.effects.enabled.contains("echoTiles") || request.video.layout == .buildUp
         ? Self.buildUpTileCount(assetId: id, sample: sample, events: request.arrangement.events)
         : 1
       let activeVideoEvents = request.arrangement.videoEvents.filter { event in
@@ -707,8 +727,16 @@ struct VideoRenderer {
           width: CGFloat(crop.width) * image.extent.width,
           height: CGFloat(crop.height) * image.extent.height
         )
-        let cropped = image.cropped(to: sourceCrop)
-        let scale = max(tile.width / cropped.extent.width, tile.height / cropped.extent.height)
+        var cropped = image.cropped(to: sourceCrop)
+        let current = activeVideoEvents.isEmpty ? nil : matchingEvents.first
+        if request.video.effects.enabled.contains("mirrorCuts"), current?.isMirrored == true {
+          cropped = cropped.transformed(by: CGAffineTransform(a: -1, b: 0, c: 0, d: 1,
+            tx: cropped.extent.minX + cropped.extent.maxX, ty: 0))
+        }
+        let age = current.map { sample - $0.destinationStartSample } ?? 48_000
+        let punch: CGFloat = request.video.effects.enabled.contains("beatPunch")
+          ? 1 + 0.09 * CGFloat(max(0, 1 - Double(age) / 7_200)) : 1
+        let scale = max(tile.width / cropped.extent.width, tile.height / cropped.extent.height) * punch
         let scaled = cropped.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         let translated = scaled.transformed(
           by: CGAffineTransform(
@@ -765,6 +793,16 @@ struct VideoRenderer {
     width: CGFloat,
     height: CGFloat
   ) -> [CGRect] {
+    guard count > 0 else { return [] }
+    if count > 3 {
+      let columns = 2
+      let rows = (count + columns - 1) / columns
+      return (0..<count).map { index in
+        CGRect(x: CGFloat(index % columns) * width / CGFloat(columns),
+          y: height - CGFloat(index / columns + 1) * height / CGFloat(rows),
+          width: width / CGFloat(columns), height: height / CGFloat(rows))
+      }
+    }
     switch layout {
     case .buildUp:
       switch count {
@@ -819,7 +857,7 @@ struct VideoRenderer {
       $0.assetId == assetId && sample >= $0.destinationStartSample &&
         sample < $0.destinationStartSample + $0.durationSamples
     }.count
-    return voices >= 4 ? 4 : (voices >= 2 ? 2 : 1)
+    return max(1, min(4, voices))
   }
 
   static func tileRects(in target: CGRect, count: Int) -> [CGRect] {
@@ -835,8 +873,8 @@ struct VideoRenderer {
         CGRect(x: target.minX, y: target.minY, width: target.width / 2, height: target.height),
         CGRect(x: target.midX, y: target.minY, width: target.width / 2, height: target.height),
       ]
-    case 4:
-      return (0..<4).map { index in
+    case 3, 4:
+      return (0..<count).map { index in
         CGRect(
           x: target.minX + CGFloat(index % 2) * target.width / 2,
           y: target.minY + CGFloat(index / 2) * target.height / 2,
@@ -866,17 +904,25 @@ struct VideoRenderer {
     events: [VideoEventPayload],
     duration: CMTime
   ) -> CMTime {
-    let event = events.last(where: {
-      $0.assetId == assetId && sample >= $0.destinationStartSample &&
+    let candidates = events.filter { $0.assetId == assetId }
+      .sorted { $0.destinationStartSample < $1.destinationStartSample }
+    let event = candidates.last(where: {
+      sample >= $0.destinationStartSample &&
         sample < $0.destinationStartSample + $0.durationSamples
-    }) ?? events.last(where: {
-      $0.assetId == assetId && $0.destinationStartSample <= sample
-    }) ?? events.first(where: { $0.assetId == assetId })
+    }) ?? candidates.last(where: { $0.destinationStartSample <= sample }) ?? candidates.first
     guard let event else { return .zero }
     let eventDuration = max(1, event.durationSamples)
     let offset = min(eventDuration - 1, max(0, sample - event.destinationStartSample))
     let timescale = CMTimeScale(event.sourceVideoStartTime.denominator)
-    let sourceSample = event.sourceVideoStartTime.numerator + offset
+    let mappedOffset: Int
+    if let sourceCount = event.sourceDurationSamples {
+      mappedOffset = EverydayAudioDSP.sourceOffset(outputOffset: offset,
+        sourceCount: sourceCount, reverse: event.isReversed)
+    } else {
+      // Legacy payloads retain their original once/hold timing.
+      mappedOffset = offset
+    }
+    let sourceSample = event.sourceVideoStartTime.numerator + mappedOffset
     let requested = CMTime(value: CMTimeValue(sourceSample), timescale: timescale)
     guard duration.isNumeric, duration > .zero else { return .zero }
     let lastFrame = CMTimeMaximum(.zero, duration - CMTime(value: 1, timescale: 600))
@@ -1356,8 +1402,10 @@ private final class SourceProvider {
   let timestamps: [CMTime]
   let sourceRanges: [CMTimeRange]
 
-  private var cachedFrame: Int?
-  private var cachedImage: CGImage?
+  private var cachedImages: [Int: CGImage] = [:]
+  private var recentFrames: [Int] = []
+  private var cachedBytes = 0
+  private let maximumCachedBytes = 24 * 1024 * 1024
 
   init(
     generator: AVAssetImageGenerator,
@@ -1377,7 +1425,11 @@ private final class SourceProvider {
 
   func image(at time: CMTime) async throws -> CGImage {
     let index = heldFrameIndex(at: time)
-    if cachedFrame == index, let cachedImage { return cachedImage }
+    if let image = cachedImages[index] {
+      recentFrames.removeAll { $0 == index }
+      recentFrames.append(index)
+      return image
+    }
     let generated: (image: CGImage, actualTime: CMTime)
     do {
       generated = try await generator.image(at: timestamps[index])
@@ -1388,11 +1440,18 @@ private final class SourceProvider {
       )
       throw error
     }
-    if cachedImage == nil {
-      videoRenderDiagnostic("VIDEO_STAGE first_generator_image index=\(index)")
+    let cost = generated.image.bytesPerRow * generated.image.height
+    while !recentFrames.isEmpty && (recentFrames.count >= 8 || cachedBytes + cost > maximumCachedBytes) {
+      let oldest = recentFrames.removeFirst()
+      if let image = cachedImages.removeValue(forKey: oldest) {
+        cachedBytes -= image.bytesPerRow * image.height
+      }
     }
-    cachedFrame = index
-    cachedImage = generated.image
+    if cost <= maximumCachedBytes {
+      cachedImages[index] = generated.image
+      recentFrames.append(index)
+      cachedBytes += cost
+    }
     return generated.image
   }
 

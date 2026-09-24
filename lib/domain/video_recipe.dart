@@ -7,22 +7,25 @@ final class VideoEffects {
   const VideoEffects._(this.enabled);
 
   static const none = VideoEffects._(<String>[]);
+  static const mad = VideoEffects._(['mirrorCuts', 'beatPunch', 'echoTiles']);
+  static const supported = {'mirrorCuts', 'beatPunch', 'echoTiles'};
 
   final List<String> enabled;
 
   factory VideoEffects.fromJson(Map<String, Object?> json) {
     final values = json['enabled'];
-    if (values is! List<Object?> || values.isNotEmpty) {
-      throw const MediaContractException(
-        'Video effects are unsupported by recipe version 1.',
-      );
+    if (values is! List<Object?> ||
+        values.length > supported.length ||
+        values.any((value) => !supported.contains(value)) ||
+        values.toSet().length != values.length) {
+      throw const MediaContractException('Unknown or duplicate video effect.');
     }
-    return none;
+    return values.isEmpty
+        ? none
+        : VideoEffects._(List<String>.unmodifiable(values.cast<String>()));
   }
 
-  Map<String, Object?> toJson() => <String, Object?>{
-    'enabled': const <Object?>[],
-  };
+  Map<String, Object?> toJson() => <String, Object?>{'enabled': enabled};
 }
 
 final class ClipCrop {
@@ -123,7 +126,7 @@ final class VideoRecipe {
        clipNames = Map<String, String>.unmodifiable(clipNames) {
     if (clipCrops.length > 6 ||
         captions.length > 12 ||
-        events.length > Arrangement.maxEvents) {
+        events.length > maxScenes) {
       throw const MediaContractException('Video recipe exceeds schema limits.');
     }
     final cropIds = clipCrops.map((value) => value.assetId).toList();
@@ -161,12 +164,13 @@ final class VideoRecipe {
             ArrangementPayloadClock.totalSamples ||
         events.any(
           (value) =>
-              value.destinationStartSample % Arrangement.barSamples != 0 ||
+              value.destinationStartSample < 0 ||
               value.durationSamples <= 0 ||
               value.destinationEndSample >
                   ArrangementPayloadClock.totalSamples ||
               value.assetIds.isEmpty ||
-              value.assetIds.length > 3 ||
+              value.assetIds.length > 6 ||
+              value.assetIds.toSet().length != value.assetIds.length ||
               value.assetIds.any((id) => !cropIds.contains(id)) ||
               (value.primaryAssetId != null &&
                   !value.assetIds.contains(value.primaryAssetId)),
@@ -186,17 +190,17 @@ final class VideoRecipe {
     required VideoLayout layout,
   }) {
     final ids = arrangement.sourceAssetIds;
-    if (ids.length < 3 || ids.length > 6) {
+    if (ids.isEmpty || ids.length > 6) {
       throw const MediaContractException(
-        'Video recipes require 3 to 6 sources.',
+        'Video recipes require 1 to 6 sources.',
       );
     }
     final usableIds = ids
         .where((id) => !arrangement.unusableAssetIds.contains(id))
         .toList(growable: false);
-    if (usableIds.length < 3) {
+    if (usableIds.isEmpty) {
       throw const MediaContractException(
-        'Video recipes require 3 usable sources.',
+        'Video recipes require an audible source.',
       );
     }
     final roles = arrangement.songRoles;
@@ -212,7 +216,12 @@ final class VideoRecipe {
           .map((id) => ClipCrop(assetId: id, crop: NormalizedCrop.fullFrame))
           .toList(),
       captions: const <VideoCaption>[],
-      events: _buildScenes(visibleIds, layout, arrangement.events, roles),
+      events: arrangement.events.isEmpty
+          ? _buildScenes(visibleIds, layout, arrangement.events, roles)
+          : _audioScenes(arrangement.events, visibleIds),
+      effects: arrangement.events.isEmpty
+          ? VideoEffects.none
+          : VideoEffects.mad,
     );
   }
 
@@ -228,7 +237,7 @@ final class VideoRecipe {
       final eventValues = json['events'] as List<Object?>;
       if (cropValues.length > 6 ||
           captionValues.length > 12 ||
-          eventValues.length > Arrangement.maxEvents) {
+          eventValues.length > maxScenes) {
         throw const MediaContractException(
           'Video recipe exceeds schema limits.',
         );
@@ -273,6 +282,7 @@ final class VideoRecipe {
     }
   }
 
+  static const int maxScenes = Arrangement.maxEvents * 2 + 1;
   static const int schemaVersion = 1;
   static const int framesPerSecond = 30;
   final VideoLayout layout;
@@ -332,7 +342,7 @@ List<VideoSceneEvent> _buildScenes(
               )
               .map((event) => event.assetId)
               .firstOrNull;
-          visible.add(roleId ?? sounding ?? ids[bar]);
+          visible.add(roleId ?? sounding ?? ids[bar % ids.length]);
         } else {
           visible.add(ids.first);
           final sounding = sounds
@@ -367,7 +377,7 @@ List<VideoSceneEvent> _buildScenes(
         );
       });
     case VideoLayout.stacked:
-      if (ids.length == 3) {
+      if (ids.length <= 3) {
         return <VideoSceneEvent>[
           VideoSceneEvent(
             destinationStartSample: 0,
@@ -425,3 +435,45 @@ bool _validCrop(NormalizedCrop crop) =>
     crop.height > 0 &&
     crop.x + crop.width <= 1 &&
     crop.y + crop.height <= 1;
+
+// Scene boundaries are audio boundaries, not bars. A rest holds the last
+// picture; the renderer freezes it instead of inventing an unrelated sound.
+List<VideoSceneEvent> _audioScenes(List<SoundEvent> sounds, List<String> ids) {
+  final boundaries = <int>{0, ArrangementPayloadClock.totalSamples};
+  for (final event in sounds) {
+    boundaries.add(event.destinationStartSample);
+    boundaries.add(event.destinationStartSample + event.durationSamples);
+  }
+  final times = boundaries.toList()..sort();
+  final scenes = <VideoSceneEvent>[];
+  var held = <String>[ids.first];
+  for (var i = 0; i + 1 < times.length; i++) {
+    final start = times[i];
+    final active = sounds
+        .where(
+          (e) =>
+              e.destinationStartSample <= start &&
+              start < e.destinationStartSample + e.durationSamples,
+        )
+        .toList();
+    active.sort((a, b) {
+      final phraseA = a.treatment == SoundTreatment.phrase;
+      final phraseB = b.treatment == SoundTreatment.phrase;
+      if (phraseA != phraseB) return phraseA ? -1 : 1;
+      final order = b.destinationStartSample.compareTo(
+        a.destinationStartSample,
+      );
+      return order != 0 ? order : a.assetId.compareTo(b.assetId);
+    });
+    if (active.isNotEmpty) held = active.map((e) => e.assetId).toSet().toList();
+    scenes.add(
+      VideoSceneEvent(
+        destinationStartSample: start,
+        durationSamples: times[i + 1] - start,
+        assetIds: held,
+        primaryAssetId: held.first,
+      ),
+    );
+  }
+  return scenes;
+}

@@ -3,6 +3,56 @@ import XCTest
 @testable import Runner
 
 final class VideoRendererTests: XCTestCase {
+  func testVideoUsesTheSameLoopAndReverseSourceClockAsAudio() throws {
+    for reverse in [false, true] {
+      let event = VideoEventPayload(assetId: "voice", destinationStartSample: 12_000,
+        durationSamples: 96_000,
+        sourceVideoStartTime: RationalTimePayload(numerator: 24_000, denominator: 48_000),
+        crop: NormalizedCropPayload(x: 0, y: 0, width: 1, height: 1), loopMode: .loop,
+        sourceDurationSamples: 9_600, reverse: reverse, mirror: true)
+      for offset in [0, 1_600, 9_599, 9_600, 38_000, 95_999] {
+        let actual = VideoRenderer.sourceTime(assetId: "voice", sample: 12_000 + offset,
+          events: [event], duration: CMTime(seconds: 6, preferredTimescale: 48_000))
+        let mapped = 24_000 + EverydayAudioDSP.sourceOffset(outputOffset: offset,
+          sourceCount: 9_600, reverse: reverse)
+        XCTAssertEqual(CMTimeGetSeconds(actual), Double(mapped) / 48_000, accuracy: 1e-8)
+      }
+      let range = try XCTUnwrap(VideoRenderer.sourceRangesByAsset(videoEvents: [event])["voice"]?.first)
+      XCTAssertEqual(CMTimeGetSeconds(range.duration), 0.2, accuracy: 1e-8)
+    }
+  }
+
+  func testSixAudibleVideosHaveSixInBoundsPanels() {
+    for layout in [VideoLayoutPayload.buildUp, .stacked, .sequentialFocus, .photoDump] {
+      let panels = VideoRenderer.targetRects(count: 6, layout: layout, width: 360, height: 640)
+      XCTAssertEqual(panels.count, 6)
+      XCTAssertTrue(panels.allSatisfy { CGRect(x: 0, y: 0, width: 360, height: 640).contains($0) })
+    }
+  }
+
+  func testRealDartEverydayTimelineRendersAsSynchronizedMADVideo() async throws {
+    let directory = try evidenceDirectory()
+    let requestURL = directory.appendingPathComponent("everyday-mad-request.json")
+    guard FileManager.default.fileExists(atPath: requestURL.path) else {
+      throw XCTSkip("Run flutter test test/domain/everyday_native_fixture_test.dart before native tests.")
+    }
+    let request = try JSONDecoder().decode(VideoRenderRequestPayload.self, from: Data(contentsOf: requestURL))
+    let output = temporaryURL("everyday-mad.mp4")
+    defer { try? FileManager.default.removeItem(at: output) }
+    let report = try await VideoRenderer(audioRenderer: AudioRenderer(accompanimentGain: 0)).render(
+      request: request,
+      assets: ["tap": fixtureURL("synthetic-tap.mp4"), "sustain": fixtureURL("synthetic-sustain.mp4"),
+        "texture": fixtureURL("synthetic-texture.mp4")], outputURL: output,
+      cancellation: CancellationToken(operationId: "everyday-mad"))
+    XCTAssertEqual(report.frameCount, 450)
+    let asset = AVURLAsset(url: output)
+    let duration = try await asset.load(.duration)
+    let tracks = try await asset.loadTracks(withMediaType: .audio)
+    XCTAssertEqual(CMTimeGetSeconds(duration), 15, accuracy: 0.034)
+    XCTAssertEqual(tracks.count, 1)
+    try preserveMovie(output, name: "everyday-mad")
+  }
+
   private enum ProducerFailure: Error, Equatable { case audio }
 
   func testProducerErrorPrecedencePreservesFailuresButNotCancellationArtifacts() {

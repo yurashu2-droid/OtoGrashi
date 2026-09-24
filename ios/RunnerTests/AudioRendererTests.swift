@@ -3,6 +3,45 @@ import XCTest
 @testable import Runner
 
 final class AudioRendererTests: XCTestCase {
+  func testEverydayNoiseAndMovingVoiceAreRetunedWithExactDuration() throws {
+    var state: UInt32 = 91
+    let noise = (0..<24_000).map { _ -> Float in
+      state = state &* 1_664_525 &+ 1_013_904_223
+      return Float(Double(state) / Double(UInt32.max) - 0.5) * 0.5
+    }
+    let glide = (0..<24_000).map { frame -> Float in
+      let t = Double(frame) / 48_000
+      return Float(0.3 * sin(2 * Double.pi * (170 * t + 80 * t * t)))
+    }
+    for source in [noise, glide] {
+      for target in [48.0, 60, 72, 82] {
+        let output = try EverydayAudioDSP.render(source, count: 36_000, targetMidiNote: target)
+        XCTAssertEqual(output.count, 36_000)
+        XCTAssertTrue(output.allSatisfy(\.isFinite))
+        let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(Array(output[8_000..<16_000])))
+        XCTAssertEqual(pitch.midiNote, target, accuracy: 0.2)
+      }
+    }
+  }
+
+  func testSourceRangeAndTargetPitchContractMustMatchVideo() throws {
+    var json = validJSON(sourceDuration: 4_800, destinationStart: 0,
+      eventDuration: 48_000, fadeIn: 72, fadeOut: 240, loopMode: "loop")
+    var audio = (json["events"] as! [[String: Any]])[0]
+    var video = (json["videoEvents"] as! [[String: Any]])[0]
+    audio["sourceDurationSamples"] = 4_800
+    audio["targetMidiNote"] = 60.0
+    audio["reverse"] = true
+    audio["treatment"] = "tuned"
+    video["sourceDurationSamples"] = 4_800
+    video["reverse"] = true
+    json["events"] = [audio]; json["videoEvents"] = [video]
+    XCTAssertEqual(try decode(json).events[0].effectiveSourceDurationSamples, 4_800)
+    video["reverse"] = false
+    json["videoEvents"] = [video]
+    XCTAssertThrowsError(try decode(json))
+  }
+
   func testPCMPlacementUsesAbsoluteBufferPTSAndPreservesTimelineGaps() throws {
     var timeline = Array(repeating: Float(0), count: 10)
 
@@ -388,8 +427,8 @@ final class AudioRendererTests: XCTestCase {
     json["sourceAssetIds"] = ["fixture"]
     let event = (json["events"] as! [[String: Any]])[0]
     let video = (json["videoEvents"] as! [[String: Any]])[0]
-    json["events"] = Array(repeating: event, count: 161)
-    json["videoEvents"] = Array(repeating: video, count: 161)
+    json["events"] = Array(repeating: event, count: ArrangementPayload.maximumEvents + 1)
+    json["videoEvents"] = Array(repeating: video, count: ArrangementPayload.maximumEvents + 1)
     XCTAssertThrowsError(try decode(json)) { error in
       XCTAssertEqual(error as? AudioRenderError, .unsupportedContract)
     }
@@ -621,8 +660,8 @@ final class AudioRendererTests: XCTestCase {
 
     json["videoEvents"] = Array(repeating: video, count: 147)
     XCTAssertThrowsError(try decode(json))
-    json["videoEvents"] = Array(repeating: video, count: 161)
-    json["events"] = Array(repeating: event, count: 161)
+    json["videoEvents"] = Array(repeating: video, count: ArrangementPayload.maximumEvents + 1)
+    json["events"] = Array(repeating: event, count: ArrangementPayload.maximumEvents + 1)
     XCTAssertThrowsError(try decode(json)) {
       XCTAssertEqual($0 as? AudioRenderError, .unsupportedContract)
     }

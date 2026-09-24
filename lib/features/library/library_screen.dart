@@ -887,6 +887,10 @@ class _AssetCardState extends State<_AssetCard> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.compact && !widget.compact) _discardInlinePlayback();
     if (oldWidget.asset.relativePath != widget.asset.relativePath ||
+        oldWidget.asset.selectionStartUs != widget.asset.selectionStartUs ||
+        oldWidget.asset.selectionDurationUs !=
+            widget.asset.selectionDurationUs ||
+        oldWidget.asset.id != widget.asset.id ||
         oldWidget.presentation != widget.presentation) {
       _discardInlinePlayback();
       _loadMedia();
@@ -1137,7 +1141,12 @@ class _AssetCardState extends State<_AssetCard> {
       aspectRatio: 9 / 16,
       child: GestureDetector(
         onTap: _toggleCompactPlayback,
-        onLongPress: widget.onPreview,
+        onLongPress: widget.onPreview == null
+            ? null
+            : () {
+                unawaited(_inlinePlayback?.pause() ?? Future<void>.value());
+                widget.onPreview!();
+              },
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -1458,9 +1467,24 @@ final class _AssetPreviewSheet extends StatefulWidget {
 
 class _AssetPreviewSheetState extends State<_AssetPreviewSheet> {
   late final playback = MediaPlaybackController(widget.presentation);
+  bool _autoplay = true;
+
+  @override
+  void initState() {
+    super.initState();
+    playback.addListener(_playWhenReady);
+  }
+
+  void _playWhenReady() {
+    if (mounted && _autoplay && playback.isReady) {
+      _autoplay = false;
+      unawaited(playback.toggle());
+    }
+  }
 
   @override
   void dispose() {
+    playback.removeListener(_playWhenReady);
     unawaited(playback.pause());
     playback.dispose();
     super.dispose();
@@ -1524,13 +1548,23 @@ class _AssetPreviewSheetState extends State<_AssetPreviewSheet> {
               builder: (context, _) => Row(
                 children: [
                   IconButton.filledTonal(
-                    onPressed: playback.toggle,
-                    tooltip: playback.isPlaying ? '一時停止' : '再生',
-                    icon: Icon(
-                      playback.isPlaying
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
-                    ),
+                    onPressed: playback.isReady ? playback.toggle : null,
+                    tooltip: playback.isLoading
+                        ? '読み込み中'
+                        : playback.isPlaying
+                        ? '一時停止'
+                        : '再生',
+                    icon: playback.isLoading
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            playback.isPlaying
+                                ? Icons.pause_rounded
+                                : Icons.play_arrow_rounded,
+                          ),
                   ),
                   const SizedBox(width: 12),
                   Text(

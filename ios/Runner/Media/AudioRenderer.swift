@@ -26,7 +26,13 @@ struct SoundEventPayload: Codable, Equatable {
   let gain: Double
   let fades: EventFadesPayload
   let pitchSemitones: Double?
+  var sourceDurationSamples: Int? = nil
+  var targetMidiNote: Double? = nil
+  var reverse: Bool? = nil
+  var treatment: String? = nil
 
+  var effectiveSourceDurationSamples: Int { sourceDurationSamples ?? durationSamples }
+  var isReversed: Bool { reverse ?? false }
   var effectivePitchSemitones: Double { pitchSemitones ?? 0 }
 }
 
@@ -61,6 +67,13 @@ struct VideoEventPayload: Codable, Equatable {
   let sourceVideoStartTime: RationalTimePayload
   let crop: NormalizedCropPayload
   let loopMode: VideoLoopModePayload
+  var sourceDurationSamples: Int? = nil
+  var reverse: Bool? = nil
+  var mirror: Bool? = nil
+
+  var effectiveSourceDurationSamples: Int { sourceDurationSamples ?? durationSamples }
+  var isReversed: Bool { reverse ?? false }
+  var isMirrored: Bool { mirror ?? false }
 
   private enum CodingKeys: String, CodingKey {
     case assetId
@@ -69,6 +82,7 @@ struct VideoEventPayload: Codable, Equatable {
     case sourceVideoStartTime
     case crop
     case loopMode
+    case sourceDurationSamples, reverse, mirror
   }
 }
 
@@ -76,7 +90,7 @@ struct ArrangementPayload: Decodable, Equatable {
   static let supportedSchemaVersion = 1
   static let sampleRate = 48_000
   static let totalSamples = 720_000
-  static let maximumEvents = 160
+  static let maximumEvents = 256
 
   let schemaVersion: Int
   let sampleRate: Int
@@ -148,7 +162,7 @@ struct ArrangementPayload: Decodable, Equatable {
       let event = events[index]
       let video = videoEvents[index]
       let (sourceEnd, sourceOverflow) = event.sourceStartSample.addingReportingOverflow(
-        event.durationSamples
+        event.effectiveSourceDurationSamples
       )
       let (destinationEnd, destinationOverflow) = event.destinationStartSample
         .addingReportingOverflow(event.durationSamples)
@@ -158,6 +172,10 @@ struct ArrangementPayload: Decodable, Equatable {
       guard !sourceOverflow, !destinationOverflow, !fadeOverflow,
         sourceEnd > event.sourceStartSample,
         event.sourceStartSample >= 0,
+        (1...Self.totalSamples).contains(event.effectiveSourceDurationSamples),
+        event.targetMidiNote == nil || (event.targetMidiNote!.isFinite && (24...100).contains(event.targetMidiNote!)),
+        (event.targetMidiNote == nil && !event.isReversed) || event.sourceDurationSamples != nil,
+        ["original", "phrase", "rhythm", "tuned"].contains(event.treatment ?? "original"),
         event.destinationStartSample >= 0,
         destinationEnd <= Self.totalSamples,
         event.gain.isFinite,
@@ -171,6 +189,8 @@ struct ArrangementPayload: Decodable, Equatable {
         event.assetId == video.assetId,
         event.destinationStartSample == video.destinationStartSample,
         event.durationSamples == video.durationSamples,
+        event.effectiveSourceDurationSamples == video.effectiveSourceDurationSamples,
+        event.isReversed == video.isReversed,
         event.sourceStartSample == video.sourceVideoStartTime.numerator,
         video.sourceVideoStartTime.denominator == Self.sampleRate,
         video.crop.isValid
@@ -249,6 +269,7 @@ struct AudioRenderer {
     var trackRanges: [String: NativePCMReader.TrackRange] = [:]
     var pitchedFragments: [PitchedFragmentKey: [Float]] = [:]
     var cachedPitchSamples = 0
+    var musicalFragments: [String: [Float]] = [:]
 
     for index in arrangement.events.indices {
       try checkCancellation(cancellation)
@@ -261,6 +282,40 @@ struct AudioRenderer {
       } else {
         trackRange = try reader.trackRange(url: url)
         trackRanges[event.assetId] = trackRange
+      }
+      if let sourceDuration = event.sourceDurationSamples {
+        // New events own their exact selected range. Never read beyond the
+        // trim, and never add pre/post-roll outside the visible event clock.
+        guard event.sourceStartSample >= trackRange.startSample,
+          event.sourceStartSample + sourceDuration <= trackRange.endSample
+        else { throw AudioRenderError.sourceOutOfBounds }
+        let key = "\(event.assetId)|\(event.sourceStartSample)|\(sourceDuration)|\(event.durationSamples)|\(event.targetMidiNote.map(String.init(describing:)) ?? "dry")|\(event.isReversed)|\(event.effectivePitchSemitones)"
+        let processed: [Float]
+        if let cached = musicalFragments[key] {
+          processed = cached
+        } else {
+          let decoded = try reader.readTimeline(url: url,
+            startSample: event.sourceStartSample, durationSamples: sourceDuration,
+            cancellation: cancellation)
+          let leveled = EverydayAudioDSP.matchLevel(decoded.samples)
+          do {
+            let shaped = try EverydayAudioDSP.render(leveled,
+              count: event.durationSamples, targetMidiNote: event.targetMidiNote,
+              reverse: event.isReversed)
+            processed = event.targetMidiNote == nil && event.effectivePitchSemitones != 0
+              ? try pitchPreservingDuration(shaped, semitones: event.effectivePitchSemitones,
+                  cancellation: cancellation, latencyCache: &pitchLatencies) : shaped
+          } catch let error as AudioRenderError { throw error }
+          catch { throw AudioRenderError.pitchProcessingFailed }
+          if cachedPitchSamples <= Self.maximumCachedPitchSamples - processed.count {
+            musicalFragments[key] = processed
+            cachedPitchSamples += processed.count
+          }
+        }
+        mixEvent(processed, destinationStart: event.destinationStartSample,
+          eventGain: Float(event.gain), fadeInSamples: event.fades.fadeInSamples,
+          fadeOutSamples: event.fades.fadeOutSamples, into: &mix)
+        continue
       }
       let sourceEnd = event.sourceStartSample + event.durationSamples
       let destinationEnd = event.destinationStartSample + event.durationSamples

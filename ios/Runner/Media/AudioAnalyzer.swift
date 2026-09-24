@@ -69,6 +69,13 @@ struct MediaAnalysisRequest: Codable, Equatable {
 struct AudibleRegion: Codable, Equatable {
   let startSample: Int
   let durationSamples: Int
+  let fundamentalMidiNote: Double?
+
+  init(startSample: Int, durationSamples: Int, fundamentalMidiNote: Double? = nil) {
+    self.startSample = startSample
+    self.durationSamples = durationSamples
+    self.fundamentalMidiNote = fundamentalMidiNote
+  }
 }
 
 struct AnalyzedClip: Codable, Equatable {
@@ -112,12 +119,14 @@ struct AnalyzedClip: Codable, Equatable {
       audibleRegions.count <= 16,
       audibleRegions.allSatisfy({
         $0.startSample >= sourceStartSample && $0.durationSamples > 0 &&
-          $0.startSample <= sourceEndSample - $0.durationSamples
+          $0.startSample <= sourceEndSample - $0.durationSamples &&
+          ($0.fundamentalMidiNote == nil ||
+            ($0.fundamentalMidiNote!.isFinite && (24...100).contains($0.fundamentalMidiNote!)))
       }),
       peak.isFinite, rms.isFinite,
       (0...1).contains(peak), (0...1).contains(rms),
       fundamentalMidiNote == nil ||
-        (fundamentalMidiNote!.isFinite && (40...88).contains(fundamentalMidiNote!))
+        (fundamentalMidiNote!.isFinite && (24...100).contains(fundamentalMidiNote!))
     else { throw AudioAnalysisError.unsupportedContract }
     self.schemaVersion = Self.supportedSchemaVersion
     self.analysisVersion = Self.supportedAnalysisVersion
@@ -190,7 +199,8 @@ struct AudioAnalyzer {
       onsetSamples: metrics.onsetSamples.map { $0 + sourceStartSample },
       audibleRegions: metrics.audibleRegions.map {
         AudibleRegion(startSample: $0.startSample + sourceStartSample,
-                      durationSamples: $0.durationSamples)
+                      durationSamples: $0.durationSamples,
+                      fundamentalMidiNote: $0.fundamentalMidiNote)
       },
       peak: metrics.peak,
       rms: metrics.rms,
@@ -308,21 +318,40 @@ struct AudioAnalyzer {
       onsets.append(max(0, loudestFrame * Self.frameSamples - 2_400))
     }
 
+    // Classify the audible signal, not the recording including its silence.
+    // A half-second voice inside a six-second recording is still a voice.
+    let regions = Self.audibleRegions(
+      frameRMS: frameRMS, sampleCount: samples.count, rms: rms
+    )
+    let activeThreshold = max(0.0001, (frameRMS.max() ?? 0) * 0.1)
+    let activeFrames = frameRMS.filter { $0 >= activeThreshold }
+    let activeRMS = activeFrames.isEmpty ? 0
+      : sqrt(activeFrames.reduce(0) { $0 + $1 * $1 } / Double(activeFrames.count))
     let role: SuggestedRole
     if peak < 0.001 && rms < 0.0001 {
       role = .texture
-    } else if !onsets.isEmpty && peak >= max(0.05, rms * 3) {
+    } else if !onsets.isEmpty && peak >= max(0.05, activeRMS * 3) {
       role = .transient
-    } else if rms >= 0.01 {
+    } else if activeRMS >= 0.001 {
       role = .sustain
     } else {
       role = .texture
     }
-    let audibleRegions = Self.audibleRegions(
-      frameRMS: frameRMS,
-      sampleCount: samples.count,
-      rms: rms
-    )
+    let audibleRegions = regions.map { region in
+      let fragment = Array(samples[region.startSample..<(region.startSample + region.durationSamples)])
+      return AudibleRegion(startSample: region.startSample,
+        durationSamples: region.durationSamples,
+        fundamentalMidiNote: EverydayAudioDSP.stableNote(fragment))
+    }
+    let regionNotes = audibleRegions.compactMap(\.fundamentalMidiNote)
+    let stableClipNote: Double?
+    if !regionNotes.isEmpty,
+      regionNotes.count == audibleRegions.count,
+      regionNotes.max()! - regionNotes.min()! < 0.5 {
+      stableClipNote = regionNotes.sorted()[regionNotes.count / 2]
+    } else {
+      stableClipNote = nil
+    }
     return SignalMetrics(
       frameRMS: frameRMS,
       differenceEnergy: differenceEnergy,
@@ -331,69 +360,8 @@ struct AudioAnalyzer {
       onsetSamples: onsets,
       audibleRegions: audibleRegions,
       suggestedRole: role,
-      fundamentalMidiNote: role == .sustain
-        ? audibleRegions.first(where: { $0.durationSamples >= 12_000 }).flatMap {
-          Self.stableFundamental(samples: samples, region: $0)
-        }
-        : nil
+      fundamentalMidiNote: stableClipNote
     )
-  }
-
-  /// YIN's first strong normalized-difference trough avoids picking a harmonic
-  /// as the fundamental. Three separated windows must agree before a clip is
-  /// allowed to drive a melody; speech, room noise and changing notes return nil.
-  private static func stableFundamental(
-    samples: [Float], region: AudibleRegion
-  ) -> Double? {
-    let start = region.startSample
-    let end = min(samples.count, start + region.durationSamples)
-    let window = 4_096
-    guard end - start >= 12_000 else { return nil }
-    let available = end - start - window
-    let offsets = [available / 6, available / 2, available * 5 / 6]
-    let notes = offsets.compactMap {
-      fundamental(in: samples, start: start + $0, count: window)
-    }
-    guard notes.count == 3,
-      (notes.max()! - notes.min()!) <= 0.35
-    else { return nil }
-    return notes.reduce(0, +) / 3
-  }
-
-  private static func fundamental(in samples: [Float], start: Int, count: Int) -> Double? {
-    let signal = (start..<(start + count)).map { Double(samples[$0]) }
-    let mean = signal.reduce(0, +) / Double(count)
-    let centered = signal.map { $0 - mean }
-    let variance = centered.reduce(0) { $0 + $1 * $1 } / Double(count)
-    guard variance >= 0.000_1 else { return nil }
-
-    let minimumLag = sampleRate / 1_000
-    let maximumLag = sampleRate / 100
-    var runningDifference = 0.0
-    var previous = 1.0
-    var bestLag: Int?
-    var bestValue = 1.0
-    for lag in 1...maximumLag {
-      var difference = 0.0
-      for index in 0..<(count - maximumLag) {
-        let delta = centered[index] - centered[index + lag]
-        difference += delta * delta
-      }
-      runningDifference += difference
-      guard lag >= minimumLag, runningDifference > 0 else { continue }
-      let normalized = difference * Double(lag) / runningDifference
-      if normalized < 0.18 && normalized < bestValue {
-        bestLag = lag
-        bestValue = normalized
-      } else if let bestLag, normalized > previous,
-        bestValue < 0.18 {
-        let hertz = Double(sampleRate) / Double(bestLag)
-        let midi = 69 + 12 * log2(hertz / 440)
-        return (40...88).contains(midi) ? midi : nil
-      }
-      previous = normalized
-    }
-    return nil
   }
 
   private static func audibleRegions(
@@ -401,7 +369,7 @@ struct AudioAnalyzer {
     sampleCount: Int,
     rms: Double
   ) -> [AudibleRegion] {
-    let threshold = max(0.003, max(rms * 0.35, (frameRMS.max() ?? 0) * 0.10))
+    let threshold = max(0.0001, max(rms * 0.35, (frameRMS.max() ?? 0) * 0.10))
     var active = frameRMS.map { $0 >= threshold }
     guard active.contains(true) else { return [] }
 

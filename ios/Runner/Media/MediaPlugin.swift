@@ -184,8 +184,12 @@ final class MediaPlugin: NSObject, FlutterPlugin {
       do {
         switch call.method {
         case "playbackPlay":
-          try playback.play(viewId: viewId)
-          succeed(result, value: nil)
+          try playback.play(viewId: viewId) { [self] outcome in
+            switch outcome {
+            case .success: succeed(result, value: nil)
+            case .failure(let error): fail(result, error: error)
+            }
+          }
         case "playbackPause":
           playback.pause(viewId: viewId)
           succeed(result, value: nil)
@@ -193,8 +197,12 @@ final class MediaPlugin: NSObject, FlutterPlugin {
           guard let positionUs = (arguments["positionUs"] as? NSNumber)?.int64Value,
             positionUs >= 0
           else { throw CaptureServiceError.invalidMedia }
-          playback.seek(viewId: viewId, positionUs: positionUs)
-          succeed(result, value: nil)
+          try playback.seek(viewId: viewId, positionUs: positionUs) { [self] outcome in
+            switch outcome {
+            case .success: succeed(result, value: nil)
+            case .failure(let error): fail(result, error: error)
+            }
+          }
         case "playbackPosition":
           succeed(result, value: playback.positionUs(viewId: viewId))
         default:
@@ -418,6 +426,8 @@ final class PlaybackRegistry {
   private let audioSession: AudioSessionCoordinator
   private var players: [Int64: AVPlayer] = [:]
   private var loadingErrors: [Int64: Error] = [:]
+  private var operations: [Int64: Int] = [:]
+  private var observers: [NSObjectProtocol] = []
 
   func setLoadingError(viewId: Int64, error: Error) { loadingErrors[viewId] = error }
 
@@ -427,52 +437,84 @@ final class PlaybackRegistry {
       self?.pauseAll()
     }
     let center = NotificationCenter.default
-    center.addObserver(
+    observers.append(center.addObserver(
       forName: AVAudioSession.interruptionNotification,
       object: nil,
       queue: .main
-    ) { [weak self] _ in self?.pauseAll() }
-    center.addObserver(
+    ) { [weak self] _ in self?.pauseAll() })
+    observers.append(center.addObserver(
       forName: UIApplication.didEnterBackgroundNotification,
       object: nil,
       queue: .main
-    ) { [weak self] _ in self?.pauseAll() }
+    ) { [weak self] _ in self?.pauseAll() })
   }
 
-  func register(viewId: Int64, player: AVPlayer) { players[viewId] = player }
+  deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
+
+  func register(viewId: Int64, player: AVPlayer) {
+    pauseAll()
+    loadingErrors.removeValue(forKey: viewId)
+    player.isMuted = false
+    player.volume = 1
+    players[viewId] = player
+    operations[viewId] = 0
+  }
 
   func unregister(viewId: Int64) {
     loadingErrors.removeValue(forKey: viewId)
+    operations.removeValue(forKey: viewId)
     players.removeValue(forKey: viewId)?.pause()
   }
 
-  func play(viewId: Int64) throws {
+  func play(viewId: Int64, completion: @escaping (Result<Void, Error>) -> Void) throws {
     if let error = loadingErrors[viewId] { throw error }
-    guard let player = players[viewId] else { throw CaptureServiceError.invalidState }
-    if player.currentItem?.status == .failed {
-      throw player.currentItem?.error ?? CaptureServiceError.invalidMedia
+    guard let player = players[viewId], let item = player.currentItem else {
+      throw CaptureServiceError.invalidState
     }
+    if item.status == .failed { throw item.error ?? CaptureServiceError.invalidMedia }
     pauseAll(except: viewId)
     try audioSession.activateForPlayback()
-    let duration = player.currentItem?.duration ?? .invalid
+    let operation = (operations[viewId] ?? 0) + 1
+    operations[viewId] = operation
+    let duration = item.duration
     if duration.isNumeric,
-      CMTimeCompare(player.currentTime(), duration - CMTime(seconds: 0.05, preferredTimescale: 600)) >= 0
-    {
-      player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-      player.play()
+      CMTimeCompare(player.currentTime(), duration - CMTime(seconds: 0.05, preferredTimescale: 600)) >= 0 {
+      player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] finished in
+        DispatchQueue.main.async {
+          guard let self, let player, self.operations[viewId] == operation,
+            self.players[viewId] === player else { completion(.success(())); return }
+          guard finished else { completion(.failure(CaptureServiceError.invalidState)); return }
+          player.play()
+          completion(.success(()))
+        }
+      }
     } else {
       player.play()
+      completion(.success(()))
     }
   }
 
-  func pause(viewId: Int64) { players[viewId]?.pause() }
+  func pause(viewId: Int64) {
+    operations[viewId] = (operations[viewId] ?? 0) + 1
+    players[viewId]?.pause()
+  }
 
-  func seek(viewId: Int64, positionUs: Int64) {
-    players[viewId]?.seek(
-      to: CMTime(value: positionUs, timescale: 1_000_000),
-      toleranceBefore: .zero,
-      toleranceAfter: .zero
-    )
+  func seek(viewId: Int64, positionUs: Int64,
+    completion: @escaping (Result<Void, Error>) -> Void) throws {
+    guard positionUs >= 0, let player = players[viewId] else {
+      throw CaptureServiceError.invalidState
+    }
+    let duration = player.currentItem?.duration ?? .invalid
+    let requested = CMTime(value: positionUs, timescale: 1_000_000)
+    let target = duration.isNumeric ? CMTimeMinimum(requested, duration) : requested
+    let operation = (operations[viewId] ?? 0) + 1
+    operations[viewId] = operation
+    player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+      DispatchQueue.main.async {
+        guard let self, self.operations[viewId] == operation else { completion(.success(())); return }
+        completion(finished ? .success(()) : .failure(CaptureServiceError.invalidState))
+      }
+    }
   }
 
   func positionUs(viewId: Int64) -> Int64 {
@@ -506,14 +548,14 @@ final class PlaybackRegistry {
     return [
       "positionUs": positionUs,
       "durationUs": durationUs,
-      "isPlaying": player.rate != 0,
+      "isPlaying": player.rate != 0 || player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
       "ended": ended,
       "loading": item.status == .unknown,
     ]
   }
 
   private func pauseAll(except keptViewId: Int64? = nil) {
-    for (viewId, player) in players where viewId != keptViewId { player.pause() }
+    for viewId in players.keys where viewId != keptViewId { pause(viewId: viewId) }
   }
 }
 
@@ -568,7 +610,7 @@ final class PlaybackPlatformView: NSObject, FlutterPlatformView {
           let composition = try await Self.comparison(segments, store: store)
           guard !Task.isCancelled else { return }
           let item = AVPlayerItem(asset: composition)
-          item.videoComposition = AVMutableVideoComposition(propertiesOf: composition)
+          item.videoComposition = try await Self.previewVideoComposition(composition)
           await MainActor.run { self?.playerView.player.replaceCurrentItem(with: item) }
         } catch {
           await MainActor.run { self?.registry?.setLoadingError(viewId: viewId, error: error) }
@@ -593,12 +635,18 @@ final class PlaybackPlatformView: NSObject, FlutterPlatformView {
       else { throw CaptureServiceError.invalidMedia }
       let asset = AVURLAsset(url: try store.resolvePlayable(relativePath: path))
       let length = try await asset.load(.duration)
-      let range = CMTimeRange(start: CMTime(value: start, timescale: 1_000_000),
-        duration: CMTime(value: duration, timescale: 1_000_000))
-      guard CMTimeCompare(range.end, length) <= 0 else { throw CaptureServiceError.invalidMedia }
+      let selectedStart = CMTime(value: start, timescale: 1_000_000)
+      let selectedEnd = selectedStart + CMTime(value: duration, timescale: 1_000_000)
+      guard length.isNumeric, selectedStart < length,
+        selectedEnd <= length + CMTime(value: 1, timescale: 1_000)
+      else { throw CaptureServiceError.invalidMedia }
+      let range = CMTimeRange(start: selectedStart, end: CMTimeMinimum(selectedEnd, length))
       for type in [AVMediaType.video, .audio] {
-        guard let source = try await asset.loadTracks(withMediaType: type).first,
-          let destination = composition.addMutableTrack(withMediaType: type,
+        guard let source = try await asset.loadTracks(withMediaType: type).first else {
+          if type == .audio { continue }
+          throw CaptureServiceError.invalidMedia
+        }
+        guard let destination = composition.addMutableTrack(withMediaType: type,
             preferredTrackID: kCMPersistentTrackID_Invalid)
         else { throw CaptureServiceError.invalidMedia }
         let available = try await source.load(.timeRange)
@@ -611,7 +659,61 @@ final class PlaybackPlatformView: NSObject, FlutterPlatformView {
       }
       cursor = cursor + range.duration
     }
+    // Preserve selected silent tails too, rather than shortening the player
+    // timeline to the last audio packet / video frame.
+    if composition.duration < cursor {
+      composition.insertEmptyTimeRange(CMTimeRange(start: composition.duration, end: cursor))
+    }
     return composition
+  }
+
+  static func previewVideoComposition(_ composition: AVMutableComposition) async throws
+    -> AVMutableVideoComposition {
+    let result = AVMutableVideoComposition()
+    let size = CGSize(width: 720, height: 1280)
+    result.renderSize = size
+    result.frameDuration = CMTime(value: 1, timescale: 30)
+    let tracks = try await composition.loadTracks(withMediaType: .video)
+    var parts: [(track: AVAssetTrack, range: CMTimeRange, transform: CGAffineTransform)] = []
+    var edges: [CMTime] = [.zero, composition.duration]
+    for track in tracks {
+      let range = try await track.load(.timeRange)
+      let naturalSize = try await track.load(.naturalSize)
+      let orientation = try await track.load(.preferredTransform)
+      let bounds = CGRect(origin: .zero, size: naturalSize).applying(orientation)
+      guard bounds.width > 0, bounds.height > 0 else { throw CaptureServiceError.invalidMedia }
+      let scale = min(size.width / bounds.width, size.height / bounds.height)
+      let transform = orientation
+        .concatenating(CGAffineTransform(translationX: -bounds.minX, y: -bounds.minY))
+        .concatenating(CGAffineTransform(scaleX: scale, y: scale))
+        .concatenating(CGAffineTransform(translationX: (size.width - bounds.width * scale) / 2,
+          y: (size.height - bounds.height * scale) / 2))
+      // Composition tracks can contain leading empty segments. Only expose
+      // their actual inserted ranges; empty tracks must not cover another clip.
+      for segment in track.segments where !segment.isEmpty {
+        let occupied = CMTimeRangeGetIntersection(range, otherRange: segment.timeMapping.target)
+        guard occupied.duration > .zero else { continue }
+        parts.append((track, occupied, transform))
+        edges.append(contentsOf: [occupied.start, occupied.end])
+      }
+    }
+    edges.sort { CMTimeCompare($0, $1) < 0 }
+    var instructions: [AVMutableVideoCompositionInstruction] = []
+    for index in 0..<(edges.count - 1) where edges[index + 1] > edges[index] {
+      let instruction = AVMutableVideoCompositionInstruction()
+      instruction.timeRange = CMTimeRange(start: edges[index], end: edges[index + 1])
+      instruction.backgroundColor = CGColor(gray: 0, alpha: 1)
+      instruction.layerInstructions = parts.filter {
+        edges[index] >= $0.range.start && edges[index] < $0.range.end
+      }.map { part in
+        let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: part.track)
+        layer.setTransform(part.transform, at: edges[index])
+        return layer
+      }
+      instructions.append(instruction)
+    }
+    result.instructions = instructions
+    return result
   }
 
   func view() -> UIView { playerView }
@@ -629,11 +731,22 @@ final class PlaybackUIView: UIView {
     }
     super.init(frame: frame)
     backgroundColor = .black
+    clipsToBounds = true
+    isUserInteractionEnabled = false
     let layer = layer as! AVPlayerLayer
     layer.player = player
     layer.videoGravity = videoGravity
     isAccessibilityElement = true
     accessibilityLabel = "動画プレビュー"
+  }
+
+  override func layoutSubviews() {
+    // UIKit platform views move during sheet transitions. Do not animate a
+    // second, lagging video layer behind Flutter's geometry.
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    super.layoutSubviews()
+    CATransaction.commit()
   }
 
   @available(*, unavailable)

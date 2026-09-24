@@ -41,7 +41,10 @@ void main() {
       seed: 3,
     );
     expect(result.templateId, 'score-image-3part-128bpm-8bar');
-    expect(result.events, hasLength(148));
+    expect(
+      result.events.where((e) => e.treatment == SoundTreatment.tuned),
+      hasLength(148),
+    );
     expect(result.songRoles?.melody, 'high');
     expect(result.songRoles?.bass, 'low');
     expect(
@@ -72,7 +75,7 @@ void main() {
         greaterThanOrEqualTo(clip.sourceStartSample),
       );
       expect(
-        audio.sourceStartSample + audio.durationSamples,
+        audio.sourceStartSample + audio.effectiveSourceDurationSamples,
         lessThanOrEqualTo(clip.sourceStartSample + clip.durationSamples),
       );
       expect(audio.pitchSemitones.abs(), lessThanOrEqualTo(12));
@@ -81,28 +84,42 @@ void main() {
     expect(Arrangement.fromJson(result.toJson()).toJson(), result.toJson());
   });
 
-  test('short audible region truncates each sounding note without moving its onset', () {
-    final clips = [
-      _clip('a', 60, SuggestedRole.sustain, regionLength: 4000),
-      _clip('b', 55, SuggestedRole.sustain, regionLength: 4000),
-      _clip('c', null, SuggestedRole.texture, regionLength: 4000),
-    ];
-    final result = arrange(
-      clips: clips,
-      style: ArrangementStyle.lively,
-      melodyTemplate: MelodyTemplate.midiScore,
-      seed: 9,
-    );
-    expect(result.events, hasLength(148));
-    expect(
-      result.events.every((event) => event.durationSamples <= 4000),
-      isTrue,
-    );
-    expect(
-      result.events.where((event) => event.destinationStartSample == 0).length,
-      3,
-    );
-  });
+  test(
+    'short audible region sustains scored notes without moving their onset',
+    () {
+      final clips = [
+        _clip('a', 60, SuggestedRole.sustain, regionLength: 4000),
+        _clip('b', 55, SuggestedRole.sustain, regionLength: 4000),
+        _clip('c', null, SuggestedRole.texture, regionLength: 4000),
+      ];
+      final result = arrange(
+        clips: clips,
+        style: ArrangementStyle.lively,
+        melodyTemplate: MelodyTemplate.midiScore,
+        seed: 9,
+      );
+      expect(
+        result.events.where((e) => e.treatment == SoundTreatment.tuned),
+        hasLength(148),
+      );
+      expect(
+        result.events.every(
+          (event) => event.effectiveSourceDurationSamples <= 4000,
+        ),
+        isTrue,
+      );
+      expect(
+        result.events
+            .where(
+              (event) =>
+                  event.destinationStartSample == 0 &&
+                  event.treatment == SoundTreatment.tuned,
+            )
+            .length,
+        3,
+      );
+    },
+  );
 }
 
 AnalyzedClip _clip(
