@@ -21,6 +21,7 @@ class MelodyTemplateCard extends StatelessWidget {
     MelodyTemplate.hop => Icons.trending_up_rounded,
     MelodyTemplate.wink => Icons.music_note_rounded,
     MelodyTemplate.answer => Icons.question_answer_rounded,
+    MelodyTemplate.midiScore => Icons.piano_rounded,
   };
 
   @override
@@ -99,25 +100,39 @@ class MelodyTemplateCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const Spacer(),
-                SizedBox(
-                  height: 26,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      for (var step = 0; step < 8; step++) ...[
-                        if (step > 0) const SizedBox(width: 3),
-                        Expanded(
-                          child: _StepBar(
-                            note: melody == MelodyTemplate.none
-                                ? null
-                                : melody.notes[step],
-                            color: color,
-                          ),
-                        ),
+                if (melody == MelodyTemplate.midiScore)
+                  const SizedBox(
+                    height: 26,
+                    child: Row(
+                      children: [
+                        _MidiPartMark('旋律', AppTokens.coral),
+                        SizedBox(width: 5),
+                        _MidiPartMark('低音', AppTokens.lavender),
+                        SizedBox(width: 5),
+                        _MidiPartMark('鍵盤', Color(0xFFF4A653)),
                       ],
-                    ],
+                    ),
+                  )
+                else
+                  SizedBox(
+                    height: 26,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        for (var step = 0; step < 8; step++) ...[
+                          if (step > 0) const SizedBox(width: 3),
+                          Expanded(
+                            child: _StepBar(
+                              note: melody == MelodyTemplate.none
+                                  ? null
+                                  : melody.notes[step],
+                              color: color,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -125,6 +140,31 @@ class MelodyTemplateCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _MidiPartMark extends StatelessWidget {
+  const _MidiPartMark(this.label, this.color);
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Flexible(
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(width: 5, height: 12, color: color),
+        const SizedBox(width: 2),
+        Flexible(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _StepBar extends StatelessWidget {

@@ -54,6 +54,7 @@ final class _SongRoleSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMidiScore = state.melody == MelodyTemplate.midiScore;
     final arrangement = state.project?.arrangement;
     final roles =
         arrangement != null &&
@@ -85,18 +86,26 @@ final class _SongRoleSummary extends StatelessWidget {
             spacing: 6,
             runSpacing: 6,
             children: [
-              for (final entry in <String, Object?>{
-                '拍': roles['beat'],
-                'ベース風': roles['bass'],
-                'ピアノ風': roles['keys'],
-                '旋律': roles['melody'],
-              }.entries)
+              for (final entry
+                  in (isMidiScore
+                          ? <String, Object?>{
+                              'メロディ': roles['melody'],
+                              'ベース': roles['bass'],
+                              'ピアノ': roles['keys'],
+                            }
+                          : <String, Object?>{
+                              '拍': roles['beat'],
+                              'ベース風': roles['bass'],
+                              'ピアノ風': roles['keys'],
+                              '旋律': roles['melody'],
+                            })
+                      .entries)
                 Chip(label: Text('${entry.key}  ${name(entry.value)}')),
             ],
           ),
           const SizedBox(height: 4),
           Text(
-            'どの役割も、撮った音だけで鳴らしています',
+            isMidiScore ? '音程が取れない音も、楽譜のリズムに合わせて鳴らします' : 'どの役割も、撮った音だけで鳴らしています',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -992,12 +1001,20 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
             const SizedBox(height: 8),
             LayoutBuilder(
               builder: (context, constraints) {
+                const melodies = <MelodyTemplate>[
+                  MelodyTemplate.midiScore,
+                  MelodyTemplate.hop,
+                  MelodyTemplate.wink,
+                  MelodyTemplate.answer,
+                  MelodyTemplate.none,
+                ];
                 final cardWidth = (constraints.maxWidth - 24) / 2;
-                if (!_melodyPositioned && state.melody.index > 0) {
+                final selectedIndex = melodies.indexOf(state.melody);
+                if (!_melodyPositioned && selectedIndex > 0) {
                   _melodyPositioned = true;
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (!_melodyScrollController.hasClients) return;
-                    final target = (state.melody.index - 1) * (cardWidth + 8);
+                    final target = (selectedIndex - 1) * (cardWidth + 8);
                     _melodyScrollController.jumpTo(
                       target.clamp(
                         0,
@@ -1013,10 +1030,10 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
                   child: ListView.separated(
                     controller: _melodyScrollController,
                     scrollDirection: Axis.horizontal,
-                    itemCount: MelodyTemplate.values.length,
+                    itemCount: melodies.length,
                     separatorBuilder: (_, _) => const SizedBox(width: 8),
                     itemBuilder: (context, index) {
-                      final melody = MelodyTemplate.values[index];
+                      final melody = melodies[index];
                       return SizedBox(
                         width: cardWidth,
                         child: MelodyTemplateCard(
@@ -1030,6 +1047,13 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
                 );
               },
             ),
+            if (state.melody == MelodyTemplate.midiScore) ...[
+              const SizedBox(height: 8),
+              Text(
+                'この楽譜の冒頭8小節を、撮った音で15秒に。',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             const SizedBox(height: 18),
             Center(
               child: PlaybackChrome(
