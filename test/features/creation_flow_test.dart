@@ -1203,6 +1203,9 @@ void main() {
       180,
       scrollable: find.byType(Scrollable).first,
     );
+    await Scrollable.ensureVisible(tester.element(find.text('音の名前をつける')), alignment: 0.5);
+    await tester.pumpAndSettle();
+    expect(find.text('音の名前をつける').hitTestable(), findsOneWidget);
     await tester.tap(find.text('音の名前をつける'));
     await tester.pumpAndSettle();
     expect(find.text('合成素材 1'), findsWidgets);
@@ -1218,8 +1221,10 @@ void main() {
     await tester.tap(find.text('はねる'));
     await tester.pumpAndSettle();
     expect(controller.state.melody, MelodyTemplate.hop);
-    await tester.drag(find.byType(ListView).first, const Offset(0, -320));
+    await tester.scrollUntilVisible(find.text('ゆらゆら'), 180, scrollable: find.byType(Scrollable).first);
+    await Scrollable.ensureVisible(tester.element(find.text('ゆらゆら')), alignment: 0.5);
     await tester.pumpAndSettle();
+    expect(find.text('ゆらゆら').hitTestable(), findsOneWidget);
     expect(find.text('ぽつぽつ'), findsOneWidget);
     await tester.tap(find.text('ゆらゆら'));
     await tester.pumpAndSettle();
