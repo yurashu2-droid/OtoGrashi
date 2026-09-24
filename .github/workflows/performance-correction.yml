@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: codex/mad-performance-modes
-      - name: Correct compact settings expression
+      - name: Exercise real hit targets after scroll layout
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -22,12 +22,15 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('lib/features/create/creation_flow.dart');s=p.read_text();old='selectDuration)))))),),';new='selectDuration))))),),';assert old in s or new in s;s=s.replace(old,new);p.write_text(s)
+          p=Path('test/features/creation_flow_test.dart');s=p.read_text()
+          a="    await tester.tap(find.text('音の名前をつける'));"
+          b="    await Scrollable.ensureVisible(tester.element(find.text('音の名前をつける')), alignment: 0.5);\n    await tester.pumpAndSettle();\n    expect(find.text('音の名前をつける').hitTestable(), findsOneWidget);\n"+a
+          assert a in s;s=s.replace(a,b,1)
+          a="    await tester.drag(find.byType(ListView).first, const Offset(0, -320));\n    await tester.pumpAndSettle();\n    expect(find.text('ぽつぽつ'), findsOneWidget);"
+          b="    await tester.scrollUntilVisible(find.text('ゆらゆら'), 180, scrollable: find.byType(Scrollable).first);\n    await Scrollable.ensureVisible(tester.element(find.text('ゆらゆら')), alignment: 0.5);\n    await tester.pumpAndSettle();\n    expect(find.text('ゆらゆら').hitTestable(), findsOneWidget);\n    expect(find.text('ぽつぽつ'), findsOneWidget);"
+          assert a in s;s=s.replace(a,b,1);p.write_text(s)
           PY
-          git add lib/features/create/creation_flow.dart
-          if ! git diff --cached --quiet; then
-            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: compact settings builder expression [skip ci]'
-            git push origin HEAD:refs/heads/codex/mad-performance-modes
-          fi
-          gh run watch 36074501764 --repo yurashu2-droid/OtoGrashi --interval 10 || true
+          git add test/features/creation_flow_test.dart
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'test: settle scroll geometry and assert tappable controls before interaction [skip ci]'
+          git push origin HEAD:refs/heads/codex/mad-performance-modes
           gh run rerun 36074501764 --repo yurashu2-droid/OtoGrashi
