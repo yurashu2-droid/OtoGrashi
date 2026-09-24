@@ -243,8 +243,9 @@ Arrangement arrangePerformance({
             segment == 1 &&
             position >= 1327500 &&
             position < 1350000 &&
-            e.treatment == SoundTreatment.rhythm)
+            e.treatment == SoundTreatment.rhythm) {
           continue;
+        }
         events.add(copy(e, patch));
       }
     }

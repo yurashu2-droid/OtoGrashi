@@ -1,3 +1,5 @@
+// Standalone CLI regression: relative imports permit execution without Flutter.
+// ignore_for_file: avoid_relative_lib_imports, avoid_print
 import 'dart:convert';
 import 'dart:io';
 
@@ -93,13 +95,15 @@ void main() {
             'different moments as parts',
           );
         }
-        if (mode == PerformanceMode.vinyl)
+        if (mode == PerformanceMode.vinyl) {
           check(a.events.any((e) => e.reverse), 'scratch reversal');
-        if (seconds == 30)
+        }
+        if (seconds == 30) {
           check(
             a.events.any((e) => e.destinationStartSample >= 720000),
             '30s second section',
           );
+        }
         checks++;
         if (count == 3) {
           Directory('ci-artifacts').createSync(recursive: true);

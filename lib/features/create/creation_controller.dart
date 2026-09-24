@@ -432,8 +432,9 @@ final class CreationController extends ChangeNotifier {
   void selectDuration(int seconds) {
     if (_disposed ||
         !const [15, 30].contains(seconds) ||
-        seconds == _state.durationSeconds)
+        seconds == _state.durationSeconds) {
       return;
+    }
     final regenerate =
         _state.phase != CreationPhase.collecting &&
         _state.phase != CreationPhase.readyToCreate;
