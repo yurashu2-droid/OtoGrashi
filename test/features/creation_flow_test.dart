@@ -575,17 +575,69 @@ void main() {
     expect(find.text('家の中の短い音を、まず3つ。'), findsOneWidget);
   });
 
+  testWidgets(
+    'collect cards show cached waveforms and tapping a waveform opens its preview',
+    (tester) async {
+      tester.view.physicalSize = const Size(375, 812);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final presentation = _FakePresentation()
+        ..failedWaveformPaths.add('originals/clip-1.mp4');
+      final media = _FakeMedia();
+      final controller = CreationController(
+        projects: _MemoryProjects(),
+        assets: _UnusedAssets(),
+        media: media,
+        presentation: presentation,
+        demo: _FakeDemo(),
+      );
+      addTearDown(controller.dispose);
+      await controller.startDemo();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildOtogurashiTheme(),
+          home: CreationFlow(controller: controller, media: media),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final waveform = find.byKey(const ValueKey('clip-waveform-clip-0'));
+      expect(waveform, findsOneWidget);
+      final waveformSize = tester.getSize(
+        find.byKey(const ValueKey('clip-waveform-painter-clip-0')),
+      );
+      expect(waveformSize.width, greaterThan(0));
+      expect(waveformSize.height, greaterThan(0));
+      expect(find.text('波形を表示できません'), findsOneWidget);
+      expect(presentation.waveformRequests, [
+        'originals/clip-0.mp4',
+        'originals/clip-1.mp4',
+        'originals/clip-2.mp4',
+      ]);
+
+      controller.setCompareOriginal(true);
+      await tester.pumpAndSettle();
+      expect(presentation.waveformRequests, hasLength(3));
+
+      await tester.tap(waveform);
+      await tester.pumpAndSettle();
+      expect(find.text('曲にする前の、元の動画と音'), findsOneWidget);
+    },
+  );
+
   testWidgets('six sounds stay scrollable on a narrow phone', (tester) async {
     tester.view.physicalSize = const Size(320, 640);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final media = _FakeMedia();
+    final presentation = _FakePresentation();
     final controller = CreationController(
       projects: _MemoryProjects(),
       assets: _UnusedAssets(),
       media: media,
-      presentation: _FakePresentation(),
+      presentation: presentation,
       demo: _FakeDemo(count: 6),
     );
     addTearDown(controller.dispose);
@@ -603,6 +655,10 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     expect(find.text('合成素材 6'), findsOneWidget);
+    expect(presentation.waveformRequests, hasLength(6));
+    controller.setCompareOriginal(true);
+    await tester.pumpAndSettle();
+    expect(presentation.waveformRequests, hasLength(6));
     expect(tester.takeException(), isNull);
   });
 
@@ -842,30 +898,62 @@ void main() {
   testWidgets('large text remains scrollable and controls meet 44 points', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     final media = _FakeMedia();
+    final presentation = _FakePresentation();
     final controller = CreationController(
       projects: _MemoryProjects(),
       assets: _UnusedAssets(),
       media: media,
-      presentation: _FakePresentation(),
-      demo: _FakeDemo(),
+      presentation: presentation,
+      demo: _FakeDemo(count: 6),
     );
     addTearDown(controller.dispose);
     await controller.startDemo();
-    await controller.createPreview();
-    await tester.pumpWidget(
-      MediaQuery(
-        data: const MediaQueryData(
-          size: Size(390, 844),
-          textScaler: TextScaler.linear(1.8),
-          disableAnimations: true,
-        ),
-        child: MaterialApp(
-          theme: buildOtogurashiTheme(),
-          home: CreationFlow(controller: controller, media: media),
-        ),
+    final largeTextApp = MediaQuery(
+      data: const MediaQueryData(
+        size: Size(375, 812),
+        textScaler: TextScaler.linear(1.8),
+        disableAnimations: true,
+      ),
+      child: MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
       ),
     );
+    await tester.pumpWidget(largeTextApp);
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('合成素材 6'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('合成素材 6'), findsOneWidget);
+    expect(
+      tester.getSize(find.byTooltip('合成素材 6を作品から外す')).height,
+      greaterThanOrEqualTo(44),
+    );
+    expect(
+      tester.getSize(find.byTooltip('合成素材 6の順番を変える')).height,
+      greaterThanOrEqualTo(44),
+    );
+    final renameTapTarget = find
+        .ancestor(of: find.text('合成素材 6'), matching: find.byType(InkWell))
+        .first;
+    expect(tester.getSize(renameTapTarget).height, greaterThanOrEqualTo(44));
+    final previewTapTarget = find
+        .ancestor(of: find.text('聴く').last, matching: find.byType(TextButton))
+        .first;
+    expect(tester.getSize(previewTapTarget).height, greaterThanOrEqualTo(44));
+    expect(tester.takeException(), isNull);
+    expect(presentation.waveformRequests, hasLength(6));
+
+    await controller.createPreview();
+    await tester.pumpWidget(largeTextApp);
     await tester.pumpAndSettle();
 
     expect(find.byType(Scrollable), findsWidgets);
@@ -1302,9 +1390,21 @@ final class _FakeDelivery implements MediaDeliveryGateway {
 }
 
 final class _FakePresentation implements MediaPresentationGateway {
+  final waveformRequests = <String>[];
+  final failedWaveformPaths = <String>{};
+
   @override
-  Future<AudioWaveform> waveform(String relativePath) async =>
-      AudioWaveform(durationUs: 3000000, levels: List<double>.filled(96, 0.4));
+  Future<AudioWaveform> waveform(String relativePath) async {
+    waveformRequests.add(relativePath);
+    if (failedWaveformPaths.contains(relativePath)) {
+      throw StateError('waveform unavailable');
+    }
+    return AudioWaveform(
+      durationUs: 3000000,
+      levels: List<double>.generate(96, (index) => (index % 6) / 5),
+    );
+  }
+
   @override
   String get playbackViewType => 'fake-playback';
   @override

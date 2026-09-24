@@ -4,15 +4,19 @@ import 'package:flutter/material.dart';
 
 import '../../design/tokens.dart';
 import '../../domain/clip_asset.dart';
+import '../../media/media_presentation_gateway.dart';
 
 enum _ClipAction { moveUp, moveDown }
 
 /// A recorded sound stays identifiable even when the list gets long.
-class ClipCard extends StatelessWidget {
+class ClipCard extends StatefulWidget {
   const ClipCard({
     required this.clip,
     required this.index,
     required this.thumbnail,
+    required this.presentation,
+    required this.selectionStartUs,
+    required this.selectionDurationUs,
     required this.onPreview,
     required this.onRename,
     required this.onMove,
@@ -24,6 +28,9 @@ class ClipCard extends StatelessWidget {
   final ClipAsset clip;
   final int index;
   final Uint8List? thumbnail;
+  final MediaPresentationGateway presentation;
+  final int selectionStartUs;
+  final int selectionDurationUs;
   final VoidCallback onPreview;
   final VoidCallback onRename;
   final ValueChanged<int> onMove;
@@ -31,13 +38,40 @@ class ClipCard extends StatelessWidget {
   final bool canMoveDown;
 
   @override
+  State<ClipCard> createState() => _ClipCardState();
+}
+
+class _ClipCardState extends State<ClipCard> {
+  late Future<AudioWaveform> _waveform = _requestWaveform();
+
+  Future<AudioWaveform> _requestWaveform() {
+    try {
+      return widget.presentation.waveform(widget.clip.relativePath);
+    } catch (error, stackTrace) {
+      return Future<AudioWaveform>.error(error, stackTrace);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant ClipCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.presentation != widget.presentation ||
+        oldWidget.clip.relativePath != widget.clip.relativePath) {
+      _waveform = _requestWaveform();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final clip = widget.clip;
+    final index = widget.index;
     final generatedName = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$')
         .hasMatch(clip.label);
     final title = generatedName ? '録った音 ${index + 1}' : clip.label;
     final duration =
-        '${(clip.selectionDurationUs / 1000000).toStringAsFixed(1)}秒';
+        '${(widget.selectionDurationUs / 1000000).toStringAsFixed(1)}秒';
     final textScale = MediaQuery.textScalerOf(context).scale(16) / 16;
+    final accent = _clipAccent(index);
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       elevation: 0,
@@ -47,7 +81,7 @@ class ClipCard extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
-        height: 136 + (textScale - 1).clamp(0, 2) * 56,
+        height: 156 + (textScale - 1).clamp(0, 2) * 56,
         child: Row(
           children: [
             SizedBox(
@@ -56,8 +90,8 @@ class ClipCard extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  thumbnail != null
-                      ? Image.memory(thumbnail!, fit: BoxFit.cover)
+                  widget.thumbnail != null
+                      ? Image.memory(widget.thumbnail!, fit: BoxFit.cover)
                       : _ThumbnailFallback(
                           index: index,
                           synthetic:
@@ -67,7 +101,7 @@ class ClipCard extends StatelessWidget {
                   Material(
                     color: const Color(0x22000000),
                     child: InkWell(
-                      onTap: onPreview,
+                      onTap: widget.onPreview,
                       child: const Center(
                         child: Icon(
                           Icons.play_circle_fill_rounded,
@@ -109,38 +143,46 @@ class ClipCard extends StatelessWidget {
                     Row(
                       children: [
                         Expanded(
-                          child: InkWell(
-                            onTap: onRename,
-                            borderRadius: BorderRadius.circular(8),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 4),
-                              child: Row(
-                                children: [
-                                  Flexible(
-                                    child: Text(
-                                      title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w800,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: 48),
+                            child: InkWell(
+                              onTap: widget.onRename,
+                              borderRadius: BorderRadius.circular(8),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 4,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w800,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 3),
-                                  const Icon(Icons.edit_outlined, size: 16),
-                                ],
+                                    const SizedBox(width: 3),
+                                    const Icon(Icons.edit_outlined, size: 16),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
                         ),
-                        if (index > 0 || canMoveDown)
+                        if (index > 0 || widget.canMoveDown)
                           PopupMenuButton<_ClipAction>(
                             tooltip: '$titleの順番を変える',
                             icon: const Icon(Icons.more_horiz_rounded),
+                            style: IconButton.styleFrom(
+                              minimumSize: const Size(48, 48),
+                            ),
                             onSelected: (action) => switch (action) {
-                              _ClipAction.moveUp => onMove(-1),
-                              _ClipAction.moveDown => onMove(1),
+                              _ClipAction.moveUp => widget.onMove(-1),
+                              _ClipAction.moveDown => widget.onMove(1),
                             },
                             itemBuilder: (_) => [
                               if (index > 0)
@@ -148,7 +190,7 @@ class ClipCard extends StatelessWidget {
                                   value: _ClipAction.moveUp,
                                   child: Text('ひとつ前へ'),
                                 ),
-                              if (canMoveDown)
+                              if (widget.canMoveDown)
                                 const PopupMenuItem(
                                   value: _ClipAction.moveDown,
                                   child: Text('ひとつ後ろへ'),
@@ -161,11 +203,25 @@ class ClipCard extends StatelessWidget {
                       duration,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
-                    const Spacer(),
+                    const SizedBox(height: 3),
+                    Expanded(
+                      child: _ClipWaveform(
+                        key: ValueKey('clip-waveform-${clip.id}'),
+                        painterKey: ValueKey(
+                          'clip-waveform-painter-${clip.id}',
+                        ),
+                        future: _waveform,
+                        clipName: title,
+                        selectionStartUs: widget.selectionStartUs,
+                        selectionDurationUs: widget.selectionDurationUs,
+                        accent: accent,
+                        onTap: widget.onPreview,
+                      ),
+                    ),
                     Row(
                       children: [
                         TextButton.icon(
-                          onPressed: onPreview,
+                          onPressed: widget.onPreview,
                           icon: const Icon(Icons.play_arrow_rounded),
                           label: const Text('聴く'),
                           style: TextButton.styleFrom(
@@ -175,10 +231,13 @@ class ClipCard extends StatelessWidget {
                         ),
                         const Spacer(),
                         IconButton(
-                          onPressed: onRemove,
+                          onPressed: widget.onRemove,
                           tooltip: '$titleを作品から外す',
                           icon: const Icon(Icons.delete_outline_rounded),
                           color: AppTokens.mutedInk,
+                          style: IconButton.styleFrom(
+                            minimumSize: const Size(48, 48),
+                          ),
                         ),
                       ],
                     ),
@@ -191,6 +250,162 @@ class ClipCard extends StatelessWidget {
       ),
     );
   }
+}
+
+Color _clipAccent(int index) => switch (index % 3) {
+  0 => AppTokens.coral,
+  1 => const Color(0xFF9B78C8),
+  _ => const Color(0xFFE9A347),
+};
+
+class _ClipWaveform extends StatelessWidget {
+  const _ClipWaveform({
+    required this.future,
+    required this.clipName,
+    required this.selectionStartUs,
+    required this.selectionDurationUs,
+    required this.accent,
+    required this.onTap,
+    required this.painterKey,
+    super.key,
+  });
+
+  final Future<AudioWaveform> future;
+  final String clipName;
+  final int selectionStartUs;
+  final int selectionDurationUs;
+  final Color accent;
+  final VoidCallback onTap;
+  final Key painterKey;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: '$clipNameの波形。色のついた範囲を使用します。タップして聴く',
+    child: Tooltip(
+      message: '$clipNameを聴く',
+      child: Material(
+        color: const Color(0xFFF8F2EC),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(9),
+          side: BorderSide(color: accent.withValues(alpha: 0.2)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: SizedBox.expand(
+            child: FutureBuilder<AudioWaveform>(
+              future: future,
+              builder: (context, snapshot) {
+                final waveform =
+                    snapshot.connectionState == ConnectionState.done
+                    ? snapshot.data
+                    : null;
+                if (waveform == null) {
+                  return Center(
+                    child: snapshot.hasError
+                        ? Text(
+                            '波形を表示できません',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          )
+                        : SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: accent,
+                            ),
+                          ),
+                  );
+                }
+                return CustomPaint(
+                  key: painterKey,
+                  painter: _ClipWaveformPainter(
+                    waveform: waveform,
+                    selectionStartUs: selectionStartUs,
+                    selectionDurationUs: selectionDurationUs,
+                    accent: accent,
+                  ),
+                  child: const SizedBox.expand(),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _ClipWaveformPainter extends CustomPainter {
+  const _ClipWaveformPainter({
+    required this.waveform,
+    required this.selectionStartUs,
+    required this.selectionDurationUs,
+    required this.accent,
+  });
+
+  final AudioWaveform waveform;
+  final int selectionStartUs;
+  final int selectionDurationUs;
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final rangeStart =
+        (selectionStartUs / waveform.durationUs).clamp(0.0, 1.0) * size.width;
+    final rangeEnd =
+        ((selectionStartUs + selectionDurationUs) / waveform.durationUs).clamp(
+          0.0,
+          1.0,
+        ) *
+        size.width;
+    final range = Rect.fromLTRB(rangeStart, 0, rangeEnd, size.height);
+    canvas.drawRect(range, Paint()..color = accent.withValues(alpha: 0.08));
+
+    final slotWidth = size.width / waveform.levels.length;
+    final barWidth = (slotWidth * 0.66).clamp(1.0, 3.0).toDouble();
+    final maxBarHeight = size.height * 0.72;
+    for (var index = 0; index < waveform.levels.length; index++) {
+      final centerX = (index + 0.5) * slotWidth;
+      final centerUs =
+          (index + 0.5) * waveform.durationUs / waveform.levels.length;
+      final selected =
+          centerUs >= selectionStartUs &&
+          centerUs <= selectionStartUs + selectionDurationUs;
+      final amplitude = waveform.levels[index];
+      final barHeight = 1.5 + amplitude * (maxBarHeight - 1.5);
+      final rect = Rect.fromCenter(
+        center: Offset(centerX, size.height / 2),
+        width: barWidth,
+        height: barHeight,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, Radius.circular(barWidth / 2)),
+        Paint()
+          ..color = selected
+              ? accent
+              : AppTokens.mutedInk.withValues(alpha: 0.32),
+      );
+    }
+
+    final handlePaint = Paint()
+      ..color = accent
+      ..strokeWidth = 1.25;
+    for (final x in [rangeStart, rangeEnd]) {
+      canvas.drawLine(Offset(x, 4), Offset(x, size.height - 4), handlePaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ClipWaveformPainter oldDelegate) =>
+      oldDelegate.waveform != waveform ||
+      oldDelegate.selectionStartUs != selectionStartUs ||
+      oldDelegate.selectionDurationUs != selectionDurationUs ||
+      oldDelegate.accent != accent;
 }
 
 class _ThumbnailFallback extends StatelessWidget {

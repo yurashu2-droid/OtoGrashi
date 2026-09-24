@@ -329,6 +329,7 @@ class _CollectScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = controller.state;
+    final segments = controller.comparisonSegments;
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -446,6 +447,9 @@ class _CollectScreen extends StatelessWidget {
                   clip: state.clips[index],
                   index: index,
                   thumbnail: state.thumbnails[state.clips[index].id],
+                  presentation: controller.presentation,
+                  selectionStartUs: segments[index].startUs,
+                  selectionDurationUs: segments[index].durationUs,
                   onPreview: () =>
                       _previewClip(context, state.clips[index], index),
                   onRename: () =>
