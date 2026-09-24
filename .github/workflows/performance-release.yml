@@ -1,0 +1,170 @@
+name: Performance modes validated IPA
+on:
+  push:
+    branches: ['codex/mad-performance-modes']
+    paths: ['.github/workflows/performance-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: performance-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.publish.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/mad-performance-modes
+      - name: Apply bounded, hash-verified application delta
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, json, pathlib, subprocess, zlib
+          parts = sorted(pathlib.Path('scripts/review').glob('performance-payload-*.txt'))
+          if parts:
+              assert len(parts) == 4
+              encoded = ''.join(p.read_text().strip() for p in parts)
+              # Normalize one known transport typo, then authenticate all bytes.
+              encoded = encoded.replace('sfbN9f/evgmt', 'sfbN9/evgmt')
+              raw = zlib.decompress(base64.b64decode(encoded, validate=True))
+              assert hashlib.sha256(raw).hexdigest() == '60e2f41ad9a30efa49d24429468383c729dcecbd68ebf6e6e92c6b1074f0d0eb'
+              changes = json.loads(raw)
+              pending = []
+              for e in changes:
+                  p = pathlib.Path(e['path'])
+                  assert not p.is_absolute() and '..' not in p.parts and p.parts[0] in ['lib','ios','test','scripts','docs']
+                  old = p.read_bytes() if p.exists() else None
+                  assert (hashlib.sha256(old).hexdigest() if old is not None else None) == e['before'], str(p)
+                  lines = old.decode().splitlines(keepends=True) if old is not None else []
+                  for start, end, replacement in reversed(e['edits']):
+                      lines[start:end] = [replacement]
+                  data = ''.join(lines).encode()
+                  assert hashlib.sha256(data).hexdigest() == e['after'], str(p)
+                  pending.append((p, data))
+              for p, data in pending:
+                  p.parent.mkdir(parents=True, exist_ok=True)
+                  p.write_bytes(data)
+              for p in parts: p.unlink()
+              pathlib.Path('scripts/review/performance-delta-0.txt').unlink(missing_ok=True)
+              subprocess.run(['git','add','lib','ios','test','scripts','docs'],check=True)
+              subprocess.run(['git','-c','user.name=github-actions[bot]','-c','user.email=41898282+github-actions[bot]@users.noreply.github.com','commit','-m','feat: source-preserving MAD modes, sampler, vinyl and 30-second performances [skip ci]'],check=True)
+              subprocess.run(['git','push','origin','HEAD:refs/heads/codex/mad-performance-modes'],check=True)
+          PY
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  validate:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+      - name: Analyze and run all Flutter tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          git rev-parse HEAD | tee ci-logs/commit.txt
+          flutter pub get
+          flutter analyze --fatal-infos 2>&1 | tee ci-logs/analyze.txt
+          flutter test --reporter expanded 2>&1 | tee ci-logs/flutter-tests.txt
+          dart scripts/review/performance_regression.dart | tee ci-logs/performance.txt
+          git archive --format=zip HEAD -o ci-logs/performance-source.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: performance-dart-evidence
+          path: |
+            ci-logs
+            ci-artifacts
+          retention-days: 14
+  iphone:
+    needs: [prepare, validate]
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      BUILD_NUMBER: '101'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+      - name: Build device Release archive and unsigned IPA
+        run: bash scripts/package-unsigned-ipa.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: OtoGrashi-performance-unsigned-ipa
+          path: |
+            build/unsigned-ipa-output/
+            build/unsigned-ipa-log.txt
+          retention-days: 14
+  native:
+    needs: [prepare, validate]
+    runs-on: macos-26
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+      - name: Generate actual Dart timelines and test original voice DSP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs ci-artifacts
+          git rev-parse HEAD | tee ci-logs/commit.txt
+          flutter pub get
+          dart scripts/review/performance_regression.dart | tee ci-logs/performance.txt
+          for TEST in SourceVoiceRegression DSPRegression DynamicVoiceRegression; do
+            swiftc -O ios/Runner/Media/EverydayAudioDSP.swift scripts/review/$TEST.swift -o /tmp/$TEST
+            /tmp/$TEST | tee ci-logs/$TEST.txt
+          done
+      - name: Build and render all six modes on iPhone Simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build ios --simulator --debug 2>&1 | tee ci-logs/simulator-build.txt
+          UDID="$(xcrun simctl list devices available --json | ruby -rjson -e 'puts JSON.parse(STDIN.read).fetch("devices").select {|k,v| k.include?("iOS")}.values.flatten.find {|d| d["isAvailable"] && d["name"].include?("iPhone")}.fetch("udid")')"
+          xcrun simctl boot "$UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcodebuild test -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -sdk iphonesimulator -destination "platform=iOS Simulator,id=$UDID" -parallel-testing-enabled NO -resultBundlePath ci-artifacts/PerformanceTests.xcresult -only-testing:RunnerTests/VideoRendererTests/testPerformanceModesRenderWithProductionValidation -only-testing:RunnerTests/VideoRendererTests/testPerformancePanelsStayOnCanvas -only-testing:RunnerTests/VideoRendererTests/testVideoUsesTheSameLoopAndReverseSourceClockAsAudio -only-testing:RunnerTests/AudioRendererTests -only-testing:RunnerTests/AudioAnalyzerTests CODE_SIGNING_ALLOWED=NO 2>&1 | tee ci-logs/xctest.txt
+      - name: Summarize native tests
+        if: always()
+        run: |
+          if test -d ci-artifacts/PerformanceTests.xcresult; then
+            xcrun xcresulttool get test-results summary --path ci-artifacts/PerformanceTests.xcresult | tee ci-logs/native-summary.json
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: performance-native-renders
+          path: |
+            ci-logs
+            ci-artifacts/video-render-performance-*
+          retention-days: 14
