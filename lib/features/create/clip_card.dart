@@ -68,6 +68,10 @@ class _ClipCardState extends State<ClipCard> {
     final generatedName = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$')
         .hasMatch(clip.label);
     final title = generatedName ? '録った音 ${index + 1}' : clip.label;
+    final contributorParts = title.split(' · ');
+    final hasContributor =
+        contributorParts.length == 2 &&
+        contributorParts.every((part) => part.trim().isNotEmpty);
     final duration =
         '${(widget.selectionDurationUs / 1000000).toStringAsFixed(1)}秒';
     final textScale = MediaQuery.textScalerOf(context).scale(16) / 16;
@@ -190,15 +194,44 @@ class _ClipCardState extends State<ClipCard> {
                                 child: Row(
                                   children: [
                                     Flexible(
-                                      child: Text(
-                                        title,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
+                                      child: hasContributor
+                                          ? Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  contributorParts.first,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    color: accent,
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  contributorParts.last,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                                ),
+                                              ],
+                                            )
+                                          : Text(
+                                              title,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
                                     ),
                                     const SizedBox(width: 3),
                                     const Icon(Icons.edit_outlined, size: 16),
