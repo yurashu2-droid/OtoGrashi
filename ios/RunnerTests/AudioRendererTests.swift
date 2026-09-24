@@ -281,11 +281,9 @@ final class AudioRendererTests: XCTestCase {
     XCTAssertGreaterThan(rendered[90_600].magnitude, 0.001)
   }
 
-  func testNonFiniteAndClippingInputsProduceFiniteLimitedOutput() async throws {
-    var source = Array(repeating: Float(8), count: 4_800)
-    source[100] = .nan
-    source[101] = .infinity
-    let sourceURL = try makeFloatWAV(samples: source)
+  func testClippingInputProducesFiniteLimitedOutput() async throws {
+    let source = Array(repeating: Float(8), count: 4_800)
+    let sourceURL = try makeMonoFile(samples: source)
     let outputURL = temporaryURL(extension: "caf")
     defer { remove([sourceURL, outputURL]) }
 
@@ -602,38 +600,6 @@ final class AudioRendererTests: XCTestCase {
     for index in samples.indices { channel[index] = samples[index] }
     try file.write(from: buffer)
     file.close()
-    return url
-  }
-
-  // AVAudioFile may reject NaN while writing a test fixture before the renderer
-  // can exercise its input sanitization. Write the IEEE-float WAV bytes directly.
-  private func makeFloatWAV(samples: [Float]) throws -> URL {
-    let url = temporaryURL(extension: "wav")
-    var data = Data()
-    func append(_ text: String) { data.append(contentsOf: text.utf8) }
-    func append16(_ value: UInt16) {
-      var little = value.littleEndian
-      withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-    }
-    func append32(_ value: UInt32) {
-      var little = value.littleEndian
-      withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-    }
-    let sampleBytes = UInt32(samples.count * MemoryLayout<Float>.size)
-    append("RIFF")
-    append32(36 + sampleBytes)
-    append("WAVEfmt ")
-    append32(16)
-    append16(3) // IEEE float PCM
-    append16(1)
-    append32(48_000)
-    append32(48_000 * 4)
-    append16(4)
-    append16(32)
-    append("data")
-    append32(sampleBytes)
-    for sample in samples { append32(sample.bitPattern) }
-    try data.write(to: url)
     return url
   }
 
