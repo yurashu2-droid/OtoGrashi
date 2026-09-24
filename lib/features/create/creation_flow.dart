@@ -587,6 +587,18 @@ class _CollectScreen extends StatelessWidget {
                   selectionDurationUs: segments[index].durationUs,
                   onPreview: () =>
                       _previewClip(context, state.clips[index], index),
+                  onTrim: (waveform) => showClipTrimSheet(
+                    context,
+                    clip: state.clips[index],
+                    waveform: waveform,
+                    selectionStartUs: segments[index].startUs,
+                    selectionDurationUs: segments[index].durationUs,
+                    onSave: (startUs, durationUs) => controller.setTrim(
+                      state.clips[index].id,
+                      startUs,
+                      durationUs,
+                    ),
+                  ),
                   onRename: () =>
                       _renameClip(context, state.clips[index], index),
                   onRemove: () =>

@@ -571,7 +571,9 @@ final class CreationController extends ChangeNotifier {
       await projects.save(updated, expectedRevision: current.revision);
       if (_disposed) return;
       _set(_state.copyWith(project: updated, clearError: true));
-      if (_state.clips.length >= 3) {
+      if (_state.clips.length >= 3 &&
+          _state.phase != CreationPhase.collecting &&
+          _state.phase != CreationPhase.readyToCreate) {
         await _requestArrangement(style: _state.style, seed: _state.seed);
       }
     } catch (error) {

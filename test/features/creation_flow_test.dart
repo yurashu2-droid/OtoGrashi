@@ -89,6 +89,50 @@ void main() {
     expect(projects.createCount, 0);
   });
 
+  test(
+    'collect trim persists through relay reopening without making a song',
+    () async {
+      final projects = _MemoryProjects();
+      final assets = _RelayAssets();
+      final media = _FakeMedia();
+      final controller = CreationController(
+        projects: projects,
+        assets: assets,
+        media: media,
+        presentation: _FakePresentation(),
+        demo: _FakeDemo(),
+      );
+      addTearDown(controller.dispose);
+      controller.startRelay();
+      for (final clip in await _FakeDemo().install(assets)) {
+        await controller.addExisting(clip);
+      }
+
+      await controller.setTrim('clip-0', 500000, 1500000);
+      expect(controller.state.phase, CreationPhase.readyToCreate);
+      expect(controller.comparisonSegments.first.startUs, 500000);
+      expect(controller.comparisonSegments.first.durationUs, 1500000);
+      expect(media.analysisCalls, 0);
+      expect(media.renderRequests, isEmpty);
+
+      final reopened = CreationController(
+        projects: projects,
+        assets: assets,
+        media: media,
+        presentation: _FakePresentation(),
+        demo: _FakeDemo(),
+      );
+      addTearDown(reopened.dispose);
+      await reopened.openProject(projects.project!);
+      expect(reopened.isRelay, isTrue);
+      expect(reopened.comparisonSegments.first.startUs, 500000);
+      expect(reopened.comparisonSegments.first.durationUs, 1500000);
+      await reopened.createPreview();
+      expect(media.analysisRequests.first.selectionStartUs, 500000);
+      expect(media.analysisRequests.first.selectionDurationUs, 1500000);
+    },
+  );
+
   testWidgets('relay collection stays usable at 375 by 812', (tester) async {
     tester.view.physicalSize = const Size(375, 812);
     tester.view.devicePixelRatio = 1;
@@ -820,56 +864,77 @@ void main() {
     expect(find.text('家の中の短い音を、まず3つ。'), findsOneWidget);
   });
 
-  testWidgets(
-    'collect cards show cached waveforms and tapping a waveform opens its preview',
-    (tester) async {
-      tester.view.physicalSize = const Size(375, 812);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      final presentation = _FakePresentation()
-        ..failedWaveformPaths.add('originals/clip-1.mp4');
-      final media = _FakeMedia();
-      final controller = CreationController(
-        projects: _MemoryProjects(),
-        assets: _UnusedAssets(),
-        media: media,
-        presentation: presentation,
-        demo: _FakeDemo(),
-      );
-      addTearDown(controller.dispose);
-      await controller.startDemo();
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildOtogurashiTheme(),
-          home: CreationFlow(controller: controller, media: media),
-        ),
-      );
-      await tester.pumpAndSettle();
+  testWidgets('collect cards let a sound range be edited at 375 by 812', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final presentation = _FakePresentation()
+      ..failedWaveformPaths.add('originals/clip-1.mp4');
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: presentation,
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      final waveform = find.byKey(const ValueKey('clip-waveform-clip-0'));
-      expect(waveform, findsOneWidget);
-      final waveformSize = tester.getSize(
-        find.byKey(const ValueKey('clip-waveform-painter-clip-0')),
-      );
-      expect(waveformSize.width, greaterThan(0));
-      expect(waveformSize.height, greaterThan(0));
-      expect(find.text('波形を表示できません'), findsOneWidget);
-      expect(presentation.waveformRequests, [
-        'originals/clip-0.mp4',
-        'originals/clip-1.mp4',
-        'originals/clip-2.mp4',
-      ]);
+    final waveform = find.byKey(const ValueKey('clip-waveform-clip-0'));
+    expect(waveform, findsOneWidget);
+    final waveformSize = tester.getSize(
+      find.byKey(const ValueKey('clip-waveform-painter-clip-0')),
+    );
+    expect(waveformSize.width, greaterThan(0));
+    expect(waveformSize.height, greaterThan(0));
+    expect(find.text('波形を表示できません'), findsOneWidget);
+    expect(presentation.waveformRequests, [
+      'originals/clip-0.mp4',
+      'originals/clip-1.mp4',
+      'originals/clip-2.mp4',
+    ]);
 
-      controller.setCompareOriginal(true);
-      await tester.pumpAndSettle();
-      expect(presentation.waveformRequests, hasLength(3));
+    controller.setCompareOriginal(true);
+    await tester.pumpAndSettle();
+    expect(presentation.waveformRequests, hasLength(3));
 
-      await tester.tap(waveform);
-      await tester.pumpAndSettle();
-      expect(find.text('曲にする前の、元の動画と音'), findsOneWidget);
-    },
-  );
+    await tester.tap(waveform);
+    await tester.pumpAndSettle();
+    expect(find.text('使う音を選ぶ'), findsOneWidget);
+    final range = find.byType(RangeSlider);
+    expect(range, findsOneWidget);
+    final sliderRect = tester.getRect(range);
+    await tester.dragFrom(
+      Offset(sliderRect.left + 24, sliderRect.center.dy),
+      const Offset(60, 0),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('この範囲を使う'));
+    await tester.pumpAndSettle();
+    expect(controller.comparisonSegments.first.startUs, greaterThan(0));
+    expect(controller.comparisonSegments.first.durationUs, lessThan(3000000));
+    expect(
+      find.text(
+        '${(controller.comparisonSegments.first.durationUs / 1e6).toStringAsFixed(1)}秒',
+      ),
+      findsOneWidget,
+    );
+    expect(presentation.waveformRequests, hasLength(3));
+    expect(media.analysisCalls, 0);
+    expect(media.renderRequests, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('six sounds stay scrollable on a narrow phone', (tester) async {
     tester.view.physicalSize = const Size(320, 640);

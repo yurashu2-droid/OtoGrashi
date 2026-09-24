@@ -18,6 +18,7 @@ class ClipCard extends StatefulWidget {
     required this.selectionStartUs,
     required this.selectionDurationUs,
     required this.onPreview,
+    required this.onTrim,
     required this.onRename,
     required this.onMove,
     required this.onRemove,
@@ -32,6 +33,7 @@ class ClipCard extends StatefulWidget {
   final int selectionStartUs;
   final int selectionDurationUs;
   final VoidCallback onPreview;
+  final ValueChanged<Future<AudioWaveform>> onTrim;
   final VoidCallback onRename;
   final ValueChanged<int> onMove;
   final VoidCallback onRemove;
@@ -287,7 +289,7 @@ class _ClipCardState extends State<ClipCard> {
                         selectionStartUs: widget.selectionStartUs,
                         selectionDurationUs: widget.selectionDurationUs,
                         accent: accent,
-                        onTap: widget.onPreview,
+                        onTap: () => widget.onTrim(_waveform),
                       ),
                     ),
                     Row(
@@ -353,9 +355,9 @@ class _ClipWaveform extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Semantics(
     button: true,
-    label: '$clipNameの波形。色のついた範囲を使用します。タップして聴く',
+    label: '$clipNameの波形。色のついた範囲を使用します。タップして範囲を選ぶ',
     child: Tooltip(
-      message: '$clipNameを聴く',
+      message: '$clipNameの使う範囲を選ぶ',
       child: Material(
         color: const Color(0xFFFFF8F1),
         shape: RoundedRectangleBorder(
@@ -400,7 +402,20 @@ class _ClipWaveform extends StatelessWidget {
                     selectionDurationUs: selectionDurationUs,
                     accent: accent,
                   ),
-                  child: const SizedBox.expand(),
+                  child: const Align(
+                    alignment: Alignment.bottomRight,
+                    child: Padding(
+                      padding: EdgeInsets.all(3),
+                      child: Text(
+                        '範囲を選ぶ',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          backgroundColor: Color(0xDDFFF8F1),
+                        ),
+                      ),
+                    ),
+                  ),
                 );
               },
             ),
@@ -478,6 +493,139 @@ class _ClipWaveformPainter extends CustomPainter {
       oldDelegate.selectionStartUs != selectionStartUs ||
       oldDelegate.selectionDurationUs != selectionDurationUs ||
       oldDelegate.accent != accent;
+}
+
+Future<void> showClipTrimSheet(
+  BuildContext context, {
+  required ClipAsset clip,
+  required Future<AudioWaveform> waveform,
+  required int selectionStartUs,
+  required int selectionDurationUs,
+  required Future<void> Function(int startUs, int durationUs) onSave,
+}) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  showDragHandle: true,
+  builder: (_) => _ClipTrimSheet(
+    clip: clip,
+    waveform: waveform,
+    selectionStartUs: selectionStartUs,
+    selectionDurationUs: selectionDurationUs,
+    onSave: onSave,
+  ),
+);
+
+class _ClipTrimSheet extends StatefulWidget {
+  const _ClipTrimSheet({
+    required this.clip,
+    required this.waveform,
+    required this.selectionStartUs,
+    required this.selectionDurationUs,
+    required this.onSave,
+  });
+
+  final ClipAsset clip;
+  final Future<AudioWaveform> waveform;
+  final int selectionStartUs;
+  final int selectionDurationUs;
+  final Future<void> Function(int startUs, int durationUs) onSave;
+
+  @override
+  State<_ClipTrimSheet> createState() => _ClipTrimSheetState();
+}
+
+class _ClipTrimSheetState extends State<_ClipTrimSheet> {
+  late int _startUs = widget.selectionStartUs;
+  late int _endUs = widget.selectionStartUs + widget.selectionDurationUs;
+  bool _saving = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxUs = widget.clip.durationUs;
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('使う音を選ぶ', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text(
+              widget.clip.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 12),
+            const Text('左右のつまみで、曲に使う音の始まりと終わりを決めます。'),
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 88,
+              child: FutureBuilder<AudioWaveform>(
+                future: widget.waveform,
+                builder: (context, snapshot) {
+                  final waveform = snapshot.data;
+                  if (waveform == null) {
+                    return Center(
+                      child: Text(
+                        snapshot.hasError ? '波形を表示できません' : '波形を読み込んでいます…',
+                      ),
+                    );
+                  }
+                  return DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF8F1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: CustomPaint(
+                      painter: _ClipWaveformPainter(
+                        waveform: waveform,
+                        selectionStartUs: _startUs,
+                        selectionDurationUs: _endUs - _startUs,
+                        accent: AppTokens.coral,
+                      ),
+                      child: const SizedBox.expand(),
+                    ),
+                  );
+                },
+              ),
+            ),
+            RangeSlider(
+              values: RangeValues(_startUs.toDouble(), _endUs.toDouble()),
+              min: 0,
+              max: maxUs.toDouble(),
+              labels: RangeLabels(
+                '${(_startUs / 1e6).toStringAsFixed(1)}秒',
+                '${(_endUs / 1e6).toStringAsFixed(1)}秒',
+              ),
+              onChanged: (values) => setState(() {
+                final start = values.start.round().clamp(0, maxUs - 1);
+                final end = values.end.round().clamp(start + 1, maxUs);
+                _startUs = start;
+                _endUs = end - start > 6000000 ? start + 6000000 : end;
+              }),
+            ),
+            Text(
+              '${(_startUs / 1e6).toStringAsFixed(1)}秒 〜 ${(_endUs / 1e6).toStringAsFixed(1)}秒 ・ ${((_endUs - _startUs) / 1e6).toStringAsFixed(1)}秒を使う',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: _saving
+                  ? null
+                  : () async {
+                      setState(() => _saving = true);
+                      await widget.onSave(_startUs, _endUs - _startUs);
+                      if (context.mounted) Navigator.pop(context);
+                    },
+              child: const Text('この範囲を使う'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _ThumbnailFallback extends StatelessWidget {
