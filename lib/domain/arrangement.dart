@@ -102,16 +102,18 @@ final class SoundEvent {
     if (pitchSteps.length > 64 ||
         targetMidiNote == null ||
         sourceDurationSamples == null ||
-        pitchSteps.first.offsetSamples != 0)
+        pitchSteps.first.offsetSamples != 0) {
       return false;
+    }
     var previous = -1;
     for (final step in pitchSteps) {
       if (step.offsetSamples <= previous ||
           step.offsetSamples >= durationSamples ||
           !step.midiNote.isFinite ||
           step.midiNote < 24 ||
-          step.midiNote > 100)
+          step.midiNote > 100) {
         return false;
+      }
       previous = step.offsetSamples;
     }
     return true;
