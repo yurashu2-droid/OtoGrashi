@@ -16,7 +16,7 @@ jobs:
           flutter-version: '3.47.5'
           channel: stable
           cache: true
-      - name: Apply hash-verified review corrections
+      - name: Apply hash-verified application corrections
         shell: bash
         run: |
           python3 - <<'PY'
@@ -30,6 +30,9 @@ jobs:
           for e in changes:
               p = pathlib.Path(e['path'])
               assert not p.is_absolute() and '..' not in p.parts
+              if p.parts[0] == '.github':
+                  continue
+              assert p.parts[0] in ('lib', 'test')
               old = p.read_bytes()
               assert hashlib.sha256(old).hexdigest() == e['before'], p
               lines = old.decode().splitlines(keepends=True)
@@ -48,10 +51,10 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'fix: tolerate failed thumbnails and align regression tests with everyday music'
-          git push origin HEAD:refs/heads/codex/everyday-mad-overhaul
           mkdir -p ci-logs
           git rev-parse HEAD | tee ci-logs/commit.txt
           git archive --format=zip HEAD -o review-followup-source.zip
+          git push origin HEAD:refs/heads/codex/everyday-mad-overhaul
       - run: flutter pub get
       - name: Analyze
         id: analyze
