@@ -121,7 +121,9 @@ final class VideoRecipe {
        captions = List<VideoCaption>.unmodifiable(captions),
        events = List<VideoSceneEvent>.unmodifiable(events),
        clipNames = Map<String, String>.unmodifiable(clipNames) {
-    if (clipCrops.length > 6 || captions.length > 12 || events.length > 64) {
+    if (clipCrops.length > 6 ||
+        captions.length > 12 ||
+        events.length > Arrangement.maxEvents) {
       throw const MediaContractException('Video recipe exceeds schema limits.');
     }
     final cropIds = clipCrops.map((value) => value.assetId).toList();
@@ -226,7 +228,7 @@ final class VideoRecipe {
       final eventValues = json['events'] as List<Object?>;
       if (cropValues.length > 6 ||
           captionValues.length > 12 ||
-          eventValues.length > 64) {
+          eventValues.length > Arrangement.maxEvents) {
         throw const MediaContractException(
           'Video recipe exceeds schema limits.',
         );

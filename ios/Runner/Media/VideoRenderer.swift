@@ -55,7 +55,10 @@ struct VideoSceneEventPayload: Decodable {
   let assetIds: [String]
   let primaryAssetId: String?
 
-  var destinationEndSample: Int { destinationStartSample + durationSamples }
+  var destinationEndSample: Int {
+    let (end, overflow) = destinationStartSample.addingReportingOverflow(durationSamples)
+    return overflow ? Int.max : end
+  }
 }
 
 struct VideoEffectsPayload: Decodable {
@@ -79,9 +82,16 @@ struct VideoRecipePayload: Decodable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
     layout = try container.decode(VideoLayoutPayload.self, forKey: .layout)
-    clipCrops = try container.decode([ClipCropPayload].self, forKey: .clipCrops)
-    captions = try container.decode([VideoCaptionPayload].self, forKey: .captions)
-    events = try container.decode([VideoSceneEventPayload].self, forKey: .events)
+    clipCrops = try Self.decodeBounded(
+      ClipCropPayload.self, from: container, forKey: .clipCrops, maximum: 6
+    )
+    captions = try Self.decodeBounded(
+      VideoCaptionPayload.self, from: container, forKey: .captions, maximum: 12
+    )
+    events = try Self.decodeBounded(
+      VideoSceneEventPayload.self, from: container, forKey: .events,
+      maximum: ArrangementPayload.maximumEvents
+    )
     effects = try container.decodeIfPresent(VideoEffectsPayload.self, forKey: .effects)
       ?? VideoEffectsPayload(enabled: [])
     clipNames = try container.decodeIfPresent([String: String].self, forKey: .clipNames) ?? [:]
@@ -89,7 +99,7 @@ struct VideoRecipePayload: Decodable {
     guard schemaVersion == 1,
       (1...6).contains(clipCrops.count),
       captions.count <= 12,
-      events.count <= 64,
+      events.count <= ArrangementPayload.maximumEvents,
       !events.isEmpty,
       Set(cropIds).count == cropIds.count,
       clipCrops.allSatisfy({ !$0.assetId.isEmpty && $0.crop.isValid }),
@@ -124,6 +134,24 @@ struct VideoRecipePayload: Decodable {
         end <= ArrangementPayload.totalSamples
       else { throw VideoRenderError.unsupportedContract }
     }
+  }
+
+  private static func decodeBounded<Value: Decodable>(
+    _ type: Value.Type,
+    from container: KeyedDecodingContainer<CodingKeys>,
+    forKey key: CodingKeys,
+    maximum: Int
+  ) throws -> [Value] {
+    var values = try container.nestedUnkeyedContainer(forKey: key)
+    if let count = values.count, count > maximum {
+      throw VideoRenderError.unsupportedContract
+    }
+    var decoded: [Value] = []
+    while !values.isAtEnd {
+      guard decoded.count < maximum else { throw VideoRenderError.unsupportedContract }
+      decoded.append(try values.decode(Value.self))
+    }
+    return decoded
   }
 }
 

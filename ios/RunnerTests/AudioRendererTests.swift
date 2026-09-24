@@ -42,7 +42,7 @@ final class AudioRendererTests: XCTestCase {
     )
     XCTAssertEqual(try decode(json).events[0].effectivePitchSemitones, 0)
     var event = (json["events"] as! [[String: Any]])[0]
-    event["pitchSemitones"] = 4
+    event["pitchSemitones"] = 13
     json["events"] = [event]
     XCTAssertThrowsError(try decode(json)) { error in
       XCTAssertEqual(error as? AudioRenderError, .eventOutOfBounds)
@@ -601,6 +601,45 @@ final class AudioRendererTests: XCTestCase {
     try file.write(from: buffer)
     file.close()
     return url
+  }
+
+  func testScoreSizedPayloadKeepsAudioVideoEventsPairedAndBounded() throws {
+    var json = validJSON(
+      sourceDuration: 4_800,
+      destinationStart: 0,
+      eventDuration: 4_800,
+      fadeIn: 0,
+      fadeOut: 0,
+      loopMode: "once"
+    )
+    var event = (json["events"] as! [[String: Any]])[0]
+    event["pitchSemitones"] = 12.0
+    let video = (json["videoEvents"] as! [[String: Any]])[0]
+    json["events"] = Array(repeating: event, count: 148)
+    json["videoEvents"] = Array(repeating: video, count: 148)
+    XCTAssertEqual(try decode(json).events.count, 148)
+
+    json["videoEvents"] = Array(repeating: video, count: 147)
+    XCTAssertThrowsError(try decode(json))
+    json["videoEvents"] = Array(repeating: video, count: 161)
+    json["events"] = Array(repeating: event, count: 161)
+    XCTAssertThrowsError(try decode(json)) {
+      XCTAssertEqual($0 as? AudioRenderError, .unsupportedContract)
+    }
+  }
+
+  func testOctavePitchKeepsDurationAndImpulseNearOriginalOnset() throws {
+    let renderer = AudioRenderer(accompanimentGain: 0)
+    var source = Array(repeating: Float(0), count: 18_000)
+    source[2_400] = 0.8
+    for semitones in [-12.0, 12.0] {
+      let shifted = try renderer.pitchPreservingDuration(source, semitones: semitones)
+      let peak = try XCTUnwrap(shifted[0..<4_800].indices.max(by: {
+        abs(shifted[$0]) < abs(shifted[$1])
+      }))
+      XCTAssertEqual(shifted.count, source.count)
+      XCTAssertLessThanOrEqual(abs(peak - 2_400), 960)
+    }
   }
 
   private func readMonoFile(_ url: URL) throws -> [Float] {

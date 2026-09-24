@@ -30,7 +30,7 @@ struct SoundEventPayload: Codable, Equatable {
   var effectivePitchSemitones: Double { pitchSemitones ?? 0 }
 }
 
-enum VideoLoopModePayload: String, Codable, Equatable {
+enum VideoLoopModePayload: String, Codable, Hashable {
   case loop
   case hold
   case once
@@ -76,6 +76,7 @@ struct ArrangementPayload: Decodable, Equatable {
   static let supportedSchemaVersion = 1
   static let sampleRate = 48_000
   static let totalSamples = 720_000
+  static let maximumEvents = 160
 
   let schemaVersion: Int
   let sampleRate: Int
@@ -125,10 +126,10 @@ struct ArrangementPayload: Decodable, Equatable {
       String.self, from: container, forKey: .unusableAssetIds, maximum: 6
     )
     events = try Self.decodeBounded(
-      SoundEventPayload.self, from: container, forKey: .events, maximum: 64
+      SoundEventPayload.self, from: container, forKey: .events, maximum: Self.maximumEvents
     )
     videoEvents = try Self.decodeBounded(
-      VideoEventPayload.self, from: container, forKey: .videoEvents, maximum: 64
+      VideoEventPayload.self, from: container, forKey: .videoEvents, maximum: Self.maximumEvents
     )
 
     guard schemaVersion == Self.supportedSchemaVersion,
@@ -162,7 +163,7 @@ struct ArrangementPayload: Decodable, Equatable {
         event.gain.isFinite,
         (0...1).contains(event.gain),
         event.effectivePitchSemitones.isFinite,
-        (-3.0...3.0).contains(event.effectivePitchSemitones),
+        (-12.0...12.0).contains(event.effectivePitchSemitones),
         event.fades.fadeInSamples >= 0,
         event.fades.fadeOutSamples >= 0,
         fadeTotal <= event.durationSamples,
@@ -211,6 +212,18 @@ struct AudioRenderer {
   static let maximumNormalizationGain: Float = 4
   static let targetPeak: Float = 0.92
   static let loopCrossfadeSamples = 240
+  private static let maximumCachedPitchSamples = 4_000_000
+  private static let maximumCacheableEventSamples = 48_000
+
+  private struct PitchedFragmentKey: Hashable {
+    let assetId: String
+    let sourceStartSample: Int
+    let durationSamples: Int
+    let preRoll: Int
+    let postRoll: Int
+    let loopMode: VideoLoopModePayload
+    let pitchSemitones: Double
+  }
 
   let originalGain: Float
   let accompanimentGain: Float
@@ -233,13 +246,22 @@ struct AudioRenderer {
     try checkCancellation(cancellation)
     var mix = Array(repeating: Float(0), count: ArrangementPayload.totalSamples)
     var pitchLatencies: [Double: Int] = [:]
+    var trackRanges: [String: NativePCMReader.TrackRange] = [:]
+    var pitchedFragments: [PitchedFragmentKey: [Float]] = [:]
+    var cachedPitchSamples = 0
 
     for index in arrangement.events.indices {
       try checkCancellation(cancellation)
       let event = arrangement.events[index]
       guard let url = assets[event.assetId] else { throw AudioRenderError.missingAsset }
       let loopMode = arrangement.videoEvents[index].loopMode
-      let trackRange = try reader.trackRange(url: url)
+      let trackRange: NativePCMReader.TrackRange
+      if let cached = trackRanges[event.assetId] {
+        trackRange = cached
+      } else {
+        trackRange = try reader.trackRange(url: url)
+        trackRanges[event.assetId] = trackRange
+      }
       let sourceEnd = event.sourceStartSample + event.durationSamples
       let destinationEnd = event.destinationStartSample + event.durationSamples
       let preRoll = min(
@@ -263,33 +285,52 @@ struct AudioRenderer {
       if loopMode == .once, sourceEnd > trackRange.endSample {
         throw AudioRenderError.sourceOutOfBounds
       }
-      let decoded = try reader.readTimeline(
-        url: url,
-        startSample: event.sourceStartSample - preRoll,
-        durationSamples: renderedDuration,
-        cancellation: cancellation
+      let key = PitchedFragmentKey(
+        assetId: event.assetId,
+        sourceStartSample: event.sourceStartSample,
+        durationSamples: event.durationSamples,
+        preRoll: preRoll,
+        postRoll: postRoll,
+        loopMode: loopMode,
+        pitchSemitones: event.effectivePitchSemitones
       )
-      let eventSamples: [Float]
-      if sourceEnd > trackRange.endSample {
-        guard loopMode != .once,
-          let coveredEnd = decoded.coveredRanges.last?.upperBound
-        else { throw AudioRenderError.sourceOutOfBounds }
-        let availableCount = coveredEnd - decoded.requestedRange.lowerBound
-        guard availableCount > 0 else { throw AudioRenderError.sourceOutOfBounds }
-        eventSamples = loop(
-          Array(decoded.samples.prefix(availableCount)),
-          count: renderedDuration,
-          crossfadeSamples: Self.loopCrossfadeSamples
-        )
+      let pitched: [Float]
+      if let cached = pitchedFragments[key] {
+        pitched = cached
       } else {
-        eventSamples = decoded.samples
+        let decoded = try reader.readTimeline(
+          url: url,
+          startSample: event.sourceStartSample - preRoll,
+          durationSamples: renderedDuration,
+          cancellation: cancellation
+        )
+        let eventSamples: [Float]
+        if sourceEnd > trackRange.endSample {
+          guard loopMode != .once,
+            let coveredEnd = decoded.coveredRanges.last?.upperBound
+          else { throw AudioRenderError.sourceOutOfBounds }
+          let availableCount = coveredEnd - decoded.requestedRange.lowerBound
+          guard availableCount > 0 else { throw AudioRenderError.sourceOutOfBounds }
+          eventSamples = loop(
+            Array(decoded.samples.prefix(availableCount)),
+            count: renderedDuration,
+            crossfadeSamples: Self.loopCrossfadeSamples
+          )
+        } else {
+          eventSamples = decoded.samples
+        }
+        pitched = try pitchPreservingDuration(
+          eventSamples,
+          semitones: event.effectivePitchSemitones,
+          cancellation: cancellation,
+          latencyCache: &pitchLatencies
+        )
+        if pitched.count <= Self.maximumCacheableEventSamples,
+          cachedPitchSamples <= Self.maximumCachedPitchSamples - pitched.count {
+          pitchedFragments[key] = pitched
+          cachedPitchSamples += pitched.count
+        }
       }
-      let pitched = try pitchPreservingDuration(
-        eventSamples,
-        semitones: event.effectivePitchSemitones,
-        cancellation: cancellation,
-        latencyCache: &pitchLatencies
-      )
       mixEvent(
         pitched,
         destinationStart: event.destinationStartSample - preRoll,
@@ -338,7 +379,7 @@ struct AudioRenderer {
     latencyCache: inout [Double: Int]
   ) throws -> [Float] {
     if cancellation?.isCancelled == true { throw AudioRenderError.cancelled }
-    guard semitones.isFinite, (-3.0...3.0).contains(semitones),
+    guard semitones.isFinite, (-12.0...12.0).contains(semitones),
       source.count <= ArrangementPayload.totalSamples,
       source.allSatisfy(\.isFinite)
     else { throw AudioRenderError.pitchProcessingFailed }

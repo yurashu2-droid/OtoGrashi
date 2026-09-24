@@ -197,8 +197,8 @@ final class Arrangement {
        videoEvents = List.unmodifiable(videoEvents) {
     if (sourceAssetIds.length > 6 ||
         unusableAssetIds.length > 6 ||
-        events.length > 64 ||
-        videoEvents.length > 64) {
+        events.length > maxEvents ||
+        videoEvents.length > maxEvents) {
       throw const MediaContractException('Arrangement exceeds schema limits.');
     }
     if (songRoles != null &&
@@ -219,26 +219,32 @@ final class Arrangement {
     if (events.any(
           (event) =>
               event.sourceStartSample < 0 ||
+              event.sourceStartSample >
+                  9223372036854775807 - event.durationSamples ||
               event.destinationStartSample < 0 ||
               event.durationSamples <= 0 ||
-              event.destinationStartSample + event.durationSamples >
-                  totalSamples ||
+              event.destinationStartSample > totalSamples ||
+              event.durationSamples >
+                  totalSamples - event.destinationStartSample ||
               !event.gain.isFinite ||
               event.gain < 0 ||
               event.gain > 1 ||
-              event.pitchSemitones < -3 ||
-              event.pitchSemitones > 3 ||
+              !event.pitchSemitones.isFinite ||
+              event.pitchSemitones < -12 ||
+              event.pitchSemitones > 12 ||
               event.fades.fadeInSamples < 0 ||
               event.fades.fadeOutSamples < 0 ||
-              event.fades.fadeInSamples + event.fades.fadeOutSamples >
-                  event.durationSamples,
+              event.fades.fadeInSamples > event.durationSamples ||
+              event.fades.fadeOutSamples >
+                  event.durationSamples - event.fades.fadeInSamples,
         ) ||
         videoEvents.any(
           (event) =>
               event.destinationStartSample < 0 ||
               event.durationSamples <= 0 ||
-              event.destinationStartSample + event.durationSamples >
-                  totalSamples ||
+              event.destinationStartSample > totalSamples ||
+              event.durationSamples >
+                  totalSamples - event.destinationStartSample ||
               event.sourceVideoStartTime.numerator < 0 ||
               event.sourceVideoStartTime.denominator <= 0 ||
               !_validCrop(event.crop),
@@ -283,8 +289,8 @@ final class Arrangement {
     }
     if (sourceValues.length > 6 ||
         unusableValues.length > 6 ||
-        eventValues.length > 64 ||
-        videoEventValues.length > 64) {
+        eventValues.length > maxEvents ||
+        videoEventValues.length > maxEvents) {
       throw const MediaContractException('Arrangement exceeds schema limits.');
     }
     try {
@@ -326,6 +332,7 @@ final class Arrangement {
   }
 
   static const int schemaVersion = 1;
+  static const int maxEvents = 160;
   static const int barSamples = 90000;
   static const int beatSamples = 22500;
   final int sampleRate;
