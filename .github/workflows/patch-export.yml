@@ -1,0 +1,27 @@
+name: Export exact patch baselines
+on:
+  push:
+    branches: ['codex/patch-export-20260925']
+    paths: ['.github/workflows/patch-export.yml']
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Export immutable source and base
+        run: |
+          mkdir -p patch-snapshots
+          git archive --format=zip e7681d6f19d61241abd54c17d54a98319643dd6c -o patch-snapshots/performance-source.zip
+          git archive --format=zip d7608e334d96aec8075d8e91a008d8d5b82a469d -o patch-snapshots/natural-voice-base.zip
+          git diff --binary d7608e334d96aec8075d8e91a008d8d5b82a469d e7681d6f19d61241abd54c17d54a98319643dd6c -- lib ios test scripts docs > patch-snapshots/recovered-performance.patch
+          sha256sum patch-snapshots/* > patch-snapshots/SHA256SUMS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: exact-performance-patch-snapshots
+          path: patch-snapshots
+          retention-days: 7
