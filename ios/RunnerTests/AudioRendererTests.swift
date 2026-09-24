@@ -22,12 +22,12 @@ final class AudioRendererTests: XCTestCase {
       Float(sin(2 * Double.pi * 220 * Double(frame) / 48_000) * 0.5)
     }
     let renderer = AudioRenderer(accompanimentGain: 0)
-    let shifted = renderer.pitchPreservingDuration(source, semitones: 3)
-    let fractional = renderer.pitchPreservingDuration(source, semitones: 1.25)
+    let shifted = try renderer.pitchPreservingDuration(source, semitones: 3)
+    let fractional = try renderer.pitchPreservingDuration(source, semitones: 1.25)
     XCTAssertEqual(shifted.count, source.count)
     XCTAssertEqual(fractional.count, source.count)
     XCTAssertTrue(fractional.allSatisfy(\.isFinite))
-    XCTAssertEqual(renderer.pitchPreservingDuration(source, semitones: 0), source)
+    XCTAssertEqual(try renderer.pitchPreservingDuration(source, semitones: 0), source)
     XCTAssertTrue(shifted.allSatisfy(\.isFinite))
     XCTAssertGreaterThan(shifted.suffix(2_400).map(\.magnitude).max() ?? 0, 0.05)
     XCTAssertGreaterThan(toneEnergy(shifted, hertz: 261.6), toneEnergy(source, hertz: 261.6) * 3)
@@ -47,6 +47,108 @@ final class AudioRendererTests: XCTestCase {
     XCTAssertThrowsError(try decode(json)) { error in
       XCTAssertEqual(error as? AudioRenderError, .eventOutOfBounds)
     }
+  }
+
+  func testOfflinePitchShiftMovesLowAndHighVoicesInBothDirections() throws {
+    let renderer = AudioRenderer(accompanimentGain: 0)
+    for frequency in [110.0, 440.0] {
+      let source = (0..<24_000).map { frame in
+        Float(sin(2 * Double.pi * frequency * Double(frame) / 48_000) * 0.4)
+      }
+      for semitones in [-3.0, 3.0] {
+        let shifted = try renderer.pitchPreservingDuration(source, semitones: semitones)
+        let target = frequency * pow(2, semitones / 12)
+        XCTAssertEqual(shifted.count, source.count)
+        XCTAssertTrue(shifted.allSatisfy(\.isFinite))
+        XCTAssertGreaterThan(
+          toneEnergy(shifted, hertz: target),
+          toneEnergy(shifted, hertz: frequency) * 2,
+          "\(frequency) Hz shifted by \(semitones) semitones"
+        )
+      }
+    }
+  }
+
+  func testOfflinePitchShiftAlignsImpulseAndPreservesTheLastAudibleSamples() throws {
+    let renderer = AudioRenderer(accompanimentGain: 0)
+    var source = Array(repeating: Float(0), count: 18_000)
+    source[2_400] = 0.8
+    for frame in 15_000..<17_000 {
+      source[frame] = Float(sin(2 * Double.pi * 220 * Double(frame) / 48_000) * 0.3)
+    }
+    let shifted = try renderer.pitchPreservingDuration(source, semitones: -3)
+    let impulsePeak = try XCTUnwrap(
+      shifted[0..<4_800].indices.max(by: {
+        abs(shifted[$0]) < abs(shifted[$1])
+      })
+    )
+    XCTAssertEqual(shifted.count, source.count)
+    XCTAssertLessThanOrEqual(abs(impulsePeak - 2_400), 960)
+    XCTAssertGreaterThan(shifted[15_000..<17_500].map(\.magnitude).max() ?? 0, 0.05)
+  }
+
+  func testOfflinePitchShiftRejectsNonFiniteInputAndHonorsCancellation() throws {
+    let renderer = AudioRenderer(accompanimentGain: 0)
+    var source = Array(repeating: Float(0.2), count: 4_800)
+    source[2_400] = .nan
+    XCTAssertThrowsError(try renderer.pitchPreservingDuration(source, semitones: 2)) {
+      XCTAssertEqual($0 as? AudioRenderError, .pitchProcessingFailed)
+    }
+    let token = CancellationToken(operationId: "pitch-cancelled")
+    token.cancel()
+    XCTAssertThrowsError(
+      try renderer.pitchPreservingDuration(
+        Array(repeating: Float(0.2), count: 4_800),
+        semitones: 2,
+        cancellation: token
+      )
+    ) {
+      XCTAssertEqual($0 as? AudioRenderError, .cancelled)
+    }
+    XCTAssertThrowsError(
+      try renderer.pitchPreservingDuration(
+        Array(repeating: Float(0.2), count: ArrangementPayload.totalSamples + 1),
+        semitones: 2
+      )
+    ) {
+      XCTAssertEqual($0 as? AudioRenderError, .pitchProcessingFailed)
+    }
+  }
+
+  func testPitchedEventKeepsItsVideoClockPositionInTheWrittenMix() async throws {
+    var source = Array(repeating: Float(0), count: 18_000)
+    source[2_400] = 0.8
+    let sourceURL = try makeMonoFile(samples: source)
+    let outputURL = temporaryURL(extension: "caf")
+    defer { remove([sourceURL, outputURL]) }
+    var json = validJSON(
+      sourceDuration: source.count,
+      destinationStart: 90_000,
+      eventDuration: source.count,
+      fadeIn: 0,
+      fadeOut: 0,
+      loopMode: "once"
+    )
+    var event = (json["events"] as! [[String: Any]])[0]
+    event["pitchSemitones"] = 3
+    json["events"] = [event]
+
+    let report = try await AudioRenderer(accompanimentGain: 0).render(
+      arrangement: try decode(json),
+      assets: ["fixture": sourceURL],
+      outputURL: outputURL,
+      cancellation: CancellationToken(operationId: "pitched-onset")
+    )
+    let rendered = try readMonoFile(outputURL)
+    let pulse = try XCTUnwrap(
+      rendered[90_000..<94_800].indices.max(by: {
+        abs(rendered[$0]) < abs(rendered[$1])
+      })
+    )
+    XCTAssertEqual(report.sampleCount, ArrangementPayload.totalSamples)
+    XCTAssertEqual(report.nonFiniteCount, 0)
+    XCTAssertLessThanOrEqual(abs(pulse - 92_400), 960)
+    XCTAssertGreaterThan(abs(rendered[pulse]), 0.05)
   }
 
   private func toneEnergy(_ samples: [Float], hertz: Double) -> Double {

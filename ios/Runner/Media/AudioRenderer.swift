@@ -8,6 +8,7 @@ enum AudioRenderError: Error, Equatable {
   case sourceOutOfBounds
   case readFailed
   case writeFailed
+  case pitchProcessingFailed
   case cancelled
   case duplicateOperationId
 }
@@ -231,6 +232,7 @@ struct AudioRenderer {
   ) async throws -> AudioRenderReport {
     try checkCancellation(cancellation)
     var mix = Array(repeating: Float(0), count: ArrangementPayload.totalSamples)
+    var pitchLatencies: [Double: Int] = [:]
 
     for index in arrangement.events.indices {
       try checkCancellation(cancellation)
@@ -282,9 +284,11 @@ struct AudioRenderer {
       } else {
         eventSamples = decoded.samples
       }
-      let pitched = pitchPreservingDuration(
+      let pitched = try pitchPreservingDuration(
         eventSamples,
-        semitones: event.effectivePitchSemitones
+        semitones: event.effectivePitchSemitones,
+        cancellation: cancellation,
+        latencyCache: &pitchLatencies
       )
       mixEvent(
         pitched,
@@ -310,37 +314,149 @@ struct AudioRenderer {
     return try inspectWrittenOutput(outputURL)
   }
 
-  // Two crossing read heads resample short grains while their output clock
-  // stays fixed. A shifted melody uses the wet signal so its original note
-  // does not continue sounding against the template's target note.
-  func pitchPreservingDuration(_ source: [Float], semitones: Double) -> [Float] {
-    let grainLength = 2_048
-    guard semitones != 0, semitones.isFinite, (-3.0...3.0).contains(semitones),
-      source.count >= grainLength, source.allSatisfy(\.isFinite)
-    else { return source }
-    let ratio = pow(2.0, semitones / 12)
-    var shifted = Array(repeating: Float(0), count: source.count)
-    let windows = (0..<grainLength).map { phase in
-      Float(0.5 - 0.5 * cos(2 * .pi * Double(phase) / Double(grainLength)))
+  // TimePitch retains rate=1 while changing pitch. Its processing latency is
+  // measured with an impulse in the same padded graph, then removed so the
+  // existing audio/video event clock and sample count remain unchanged.
+  func pitchPreservingDuration(
+    _ source: [Float],
+    semitones: Double,
+    cancellation: CancellationToken? = nil
+  ) throws -> [Float] {
+    var latencyCache: [Double: Int] = [:]
+    return try pitchPreservingDuration(
+      source,
+      semitones: semitones,
+      cancellation: cancellation,
+      latencyCache: &latencyCache
+    )
+  }
+
+  private func pitchPreservingDuration(
+    _ source: [Float],
+    semitones: Double,
+    cancellation: CancellationToken?,
+    latencyCache: inout [Double: Int]
+  ) throws -> [Float] {
+    if cancellation?.isCancelled == true { throw AudioRenderError.cancelled }
+    guard semitones.isFinite, (-3.0...3.0).contains(semitones),
+      source.count <= ArrangementPayload.totalSamples,
+      source.allSatisfy(\.isFinite)
+    else { throw AudioRenderError.pitchProcessingFailed }
+    if semitones == 0 || source.isEmpty || source.allSatisfy({ $0 == 0 }) {
+      return source
     }
-    for index in shifted.indices {
-      var weighted: Float = 0
-      var weight: Float = 0
-      for head in 0..<2 {
-        let offset = head * grainLength / 2
-        let phase = (index + offset) % grainLength
-        let position = Double(index) + (ratio - 1) * Double(phase)
-        guard position >= 0, position < Double(source.count - 1) else { continue }
-        let lower = Int(position)
-        let fraction = Float(position - Double(lower))
-        let value = source[lower] * (1 - fraction) + source[lower + 1] * fraction
-        weighted += value * windows[phase]
-        weight += windows[phase]
-      }
-      let wet = weight > 0 ? weighted / weight : source[index]
-      shifted[index] = wet
+
+    let latency: Int
+    if let cached = latencyCache[semitones] {
+      latency = cached
+    } else {
+      let calibration = try renderTimePitch(
+        [0.8], semitones: semitones, cancellation: cancellation
+      )
+      guard let peakIndex = calibration.indices.max(by: {
+        abs(calibration[$0]) < abs(calibration[$1])
+      }),
+        abs(calibration[peakIndex]) > 0.000_1,
+        peakIndex > 0,
+        peakIndex < Self.pitchPaddingSamples + Self.maximumPitchLatencySamples
+      else { throw AudioRenderError.pitchProcessingFailed }
+      latency = peakIndex - Self.pitchPaddingSamples
+      latencyCache[semitones] = latency
     }
+
+    let rendered = try renderTimePitch(
+      source, semitones: semitones, cancellation: cancellation
+    )
+    let start = Self.pitchPaddingSamples + latency
+    let end = start + source.count
+    guard end <= rendered.count else { throw AudioRenderError.pitchProcessingFailed }
+    let shifted = Array(rendered[start..<end])
+    guard shifted.allSatisfy(\.isFinite),
+      shifted.contains(where: { $0 != 0 })
+    else { throw AudioRenderError.pitchProcessingFailed }
     return shifted
+  }
+
+  private static let pitchPaddingSamples = 4_096
+  private static let maximumPitchLatencySamples = 32_768
+  private static let pitchRenderChunkSamples = 4_096
+
+  private func renderTimePitch(
+    _ source: [Float],
+    semitones: Double,
+    cancellation: CancellationToken?
+  ) throws -> [Float] {
+    let frameCount = Self.pitchPaddingSamples + source.count
+      + Self.maximumPitchLatencySamples
+    guard let format = AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: Double(ArrangementPayload.sampleRate),
+      channels: 1,
+      interleaved: false
+    ), let input = AVAudioPCMBuffer(
+      pcmFormat: format,
+      frameCapacity: AVAudioFrameCount(frameCount)
+    ), let inputChannel = input.floatChannelData?[0],
+      let output = AVAudioPCMBuffer(
+        pcmFormat: format,
+        frameCapacity: AVAudioFrameCount(Self.pitchRenderChunkSamples)
+      )
+    else { throw AudioRenderError.pitchProcessingFailed }
+    input.frameLength = AVAudioFrameCount(frameCount)
+    for frame in 0..<frameCount { inputChannel[frame] = 0 }
+    for frame in source.indices {
+      inputChannel[Self.pitchPaddingSamples + frame] = source[frame]
+    }
+
+    let engine = AVAudioEngine()
+    let player = AVAudioPlayerNode()
+    let timePitch = AVAudioUnitTimePitch()
+    timePitch.rate = 1
+    timePitch.pitch = Float(semitones * 100)
+    timePitch.overlap = 16
+    engine.attach(player)
+    engine.attach(timePitch)
+    engine.connect(player, to: timePitch, format: format)
+    engine.connect(timePitch, to: engine.mainMixerNode, format: format)
+    defer {
+      player.stop()
+      engine.stop()
+    }
+
+    do {
+      try engine.enableManualRenderingMode(
+        .offline,
+        format: format,
+        maximumFrameCount: AVAudioFrameCount(Self.pitchRenderChunkSamples)
+      )
+      player.scheduleBuffer(input, completionHandler: nil)
+      try engine.start()
+      player.play()
+
+      var rendered: [Float] = []
+      rendered.reserveCapacity(frameCount)
+      while rendered.count < frameCount {
+        if cancellation?.isCancelled == true { throw AudioRenderError.cancelled }
+        let requested = AVAudioFrameCount(
+          min(Self.pitchRenderChunkSamples, frameCount - rendered.count)
+        )
+        let status = try engine.renderOffline(requested, to: output)
+        guard status == .success,
+          output.frameLength > 0,
+          output.frameLength <= requested,
+          let outputChannel = output.floatChannelData?[0]
+        else { throw AudioRenderError.pitchProcessingFailed }
+        rendered.append(contentsOf: UnsafeBufferPointer(
+          start: outputChannel,
+          count: Int(output.frameLength)
+        ))
+      }
+      return rendered
+    } catch let error as AudioRenderError {
+      throw error
+    } catch {
+      throw AudioRenderError.pitchProcessingFailed
+    }
   }
 
   private func mixEvent(
