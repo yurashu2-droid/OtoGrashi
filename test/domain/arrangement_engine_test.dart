@@ -813,7 +813,8 @@ void main() {
         melodyTemplate: MelodyTemplate.hop,
         seed: 4,
       );
-      expect(legacy.songRoles?.bass, 'old-voice');
+      expect(legacy.songRoles?.melody, 'old-voice');
+    expect(legacy.songRoles?.bass, 'room');
     },
   );
 
