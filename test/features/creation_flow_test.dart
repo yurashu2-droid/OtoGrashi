@@ -184,6 +184,18 @@ void main() {
     await controller.addExisting(fourth);
     await tester.pumpAndSettle();
     expect(find.text('4/6人'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('clip-waveform-clip-0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('この範囲を聴く'));
+    await tester.pumpAndSettle();
+    expect(find.byType(NativeMovieView), findsOneWidget);
+    expect(find.text('曲にする前の、元の動画と音'), findsOneWidget);
+    await tester.tap(find.byTooltip('閉じる'));
+    await tester.pumpAndSettle();
+    expect(find.text('使う音を選ぶ'), findsOneWidget);
+    expect(media.analysisCalls, 0);
+    expect(media.renderRequests, isEmpty);
     expect(tester.takeException(), isNull);
   });
 
@@ -920,6 +932,29 @@ void main() {
       const Offset(60, 0),
     );
     await tester.pumpAndSettle();
+    final editedRange = tester.widget<RangeSlider>(range).values;
+    expect(editedRange.start, greaterThan(0));
+    await tester.tap(find.text('この範囲を聴く'));
+    await tester.pumpAndSettle();
+    final auditionMovie = tester.widget<NativeMovieView>(
+      find.byType(NativeMovieView),
+    );
+    expect(auditionMovie.relativePath, 'originals/clip-0.mp4');
+    expect(auditionMovie.segments, hasLength(1));
+    expect(auditionMovie.segments.single.startUs, editedRange.start.round());
+    expect(
+      auditionMovie.segments.single.durationUs,
+      (editedRange.end - editedRange.start).round(),
+    );
+    expect(controller.comparisonSegments.first.startUs, 0);
+    expect(controller.comparisonSegments.first.durationUs, 3000000);
+    expect(media.analysisCalls, 0);
+    expect(media.renderRequests, isEmpty);
+    await tester.tap(find.byTooltip('閉じる'));
+    await tester.pumpAndSettle();
+    expect(find.text('使う音を選ぶ'), findsOneWidget);
+    expect(tester.widget<RangeSlider>(range).values, editedRange);
+
     await tester.tap(find.text('この範囲を使う'));
     await tester.pumpAndSettle();
     expect(controller.comparisonSegments.first.startUs, greaterThan(0));

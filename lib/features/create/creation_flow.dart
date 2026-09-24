@@ -324,16 +324,22 @@ class _CollectScreen extends StatelessWidget {
   final VoidCallback onPhotos;
 
   Future<void> _previewClip(BuildContext context, ClipAsset clip, int index) =>
-      showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        showDragHandle: true,
-        builder: (_) => _ClipPreviewSheet(
-          clip: clip,
-          segment: controller.comparisonSegments[index],
-          presentation: controller.presentation,
-        ),
-      );
+      _previewClipSegment(context, clip, controller.comparisonSegments[index]);
+
+  Future<void> _previewClipSegment(
+    BuildContext context,
+    ClipAsset clip,
+    PlaybackSegment segment,
+  ) => showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (_) => _ClipPreviewSheet(
+      clip: clip,
+      segment: segment,
+      presentation: controller.presentation,
+    ),
+  );
 
   Future<void> _renameClip(
     BuildContext context,
@@ -597,6 +603,15 @@ class _CollectScreen extends StatelessWidget {
                       state.clips[index].id,
                       startUs,
                       durationUs,
+                    ),
+                    onAudition: (startUs, durationUs) => _previewClipSegment(
+                      context,
+                      state.clips[index],
+                      PlaybackSegment(
+                        relativePath: state.clips[index].relativePath,
+                        startUs: startUs,
+                        durationUs: durationUs,
+                      ),
                     ),
                   ),
                   onRename: () =>

@@ -502,6 +502,7 @@ Future<void> showClipTrimSheet(
   required int selectionStartUs,
   required int selectionDurationUs,
   required Future<void> Function(int startUs, int durationUs) onSave,
+  required Future<void> Function(int startUs, int durationUs) onAudition,
 }) => showModalBottomSheet<void>(
   context: context,
   isScrollControlled: true,
@@ -512,6 +513,7 @@ Future<void> showClipTrimSheet(
     selectionStartUs: selectionStartUs,
     selectionDurationUs: selectionDurationUs,
     onSave: onSave,
+    onAudition: onAudition,
   ),
 );
 
@@ -522,6 +524,7 @@ class _ClipTrimSheet extends StatefulWidget {
     required this.selectionStartUs,
     required this.selectionDurationUs,
     required this.onSave,
+    required this.onAudition,
   });
 
   final ClipAsset clip;
@@ -529,6 +532,7 @@ class _ClipTrimSheet extends StatefulWidget {
   final int selectionStartUs;
   final int selectionDurationUs;
   final Future<void> Function(int startUs, int durationUs) onSave;
+  final Future<void> Function(int startUs, int durationUs) onAudition;
 
   @override
   State<_ClipTrimSheet> createState() => _ClipTrimSheetState();
@@ -611,6 +615,14 @@ class _ClipTrimSheetState extends State<_ClipTrimSheet> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 20),
+            OutlinedButton.icon(
+              onPressed: _saving
+                  ? null
+                  : () async => widget.onAudition(_startUs, _endUs - _startUs),
+              icon: const Icon(Icons.play_arrow_rounded),
+              label: const Text('この範囲を聴く'),
+            ),
+            const SizedBox(height: 8),
             FilledButton(
               onPressed: _saving
                   ? null
