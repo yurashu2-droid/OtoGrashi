@@ -121,7 +121,7 @@ void main() {
       await tester.pumpAndSettle();
     }
     expect(find.text('3/6人'), findsOneWidget);
-    expect(find.text('3人から作成OK · 次の人へスマホを渡そう'), findsOneWidget);
+    expect(find.text('作成OK · 次の人へスマホを渡そう'), findsOneWidget);
     final create = find.text('この音で15秒をつくる  ↗');
     expect(create, findsOneWidget);
     expect(tester.getRect(create).bottom, lessThan(812));
