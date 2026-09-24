@@ -1068,18 +1068,25 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: buildOtogurashiTheme(),
-        home: CreationFlow(controller: controller, media: media),
+        home: MediaQuery(
+          data: MediaQueryData.fromView(tester.view)
+              .copyWith(textScaler: const TextScaler.linear(1.2)),
+          child: CreationFlow(controller: controller, media: media),
+        ),
       ),
     );
 
     expect(find.text('家の中の短い音を、まず3つ。'), findsOneWidget);
     expect(find.text('いつもの音を、\n3つ集めよう。'), findsOneWidget);
+    expect(find.text('0/6'), findsOneWidget);
 
     await controller.startDemo();
     await tester.pumpAndSettle();
 
     expect(find.text('家の中の短い音を、まず3つ。'), findsNothing);
     expect(find.text('STEP 1  /  音の採集ノート'), findsNothing);
+    expect(find.text('3/6'), findsOneWidget);
+    expect(find.text('作成OK · あと3つ追加できます'), findsOneWidget);
     expect(find.byType(NavigationBar), findsOneWidget);
     final createButton = find.ancestor(
       of: find.text('この音で15秒をつくる  ↗'),
@@ -1097,6 +1104,80 @@ void main() {
       cardRect.height,
     );
     expect(visibleAboveCreateButton, greaterThanOrEqualTo(96));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('collection progress covers one to six sounds and stops at six', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+    );
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: MediaQuery(
+          data: MediaQueryData.fromView(tester.view)
+              .copyWith(textScaler: const TextScaler.linear(1.2)),
+          child: CreationFlow(controller: controller, media: media),
+        ),
+      ),
+    );
+
+    final clips = await _FakeDemo(count: 6).install(_UnusedAssets());
+    for (var count = 0; count <= clips.length; count++) {
+      if (count > 0) {
+        await controller.addExisting(clips[count - 1]);
+        await tester.pumpAndSettle();
+      }
+
+      expect(find.text('$count/6'), findsOneWidget);
+      final hint = count < 3
+          ? 'あと${3 - count}つで作成OK · 全6つまで'
+          : count < 6
+          ? '作成OK · あと${6 - count}つ追加できます'
+          : '作成OK · 追加はここまで';
+      if (count == 0) {
+        expect(find.text('コップ、蛇口、キーボード。3つで作成、最大6つまで使えます。'), findsOneWidget);
+      } else {
+        expect(find.text(hint), findsOneWidget);
+      }
+
+      final createButton = find.ancestor(
+        of: find.text('この音で15秒をつくる  ↗'),
+        matching: find.byType(FilledButton),
+      );
+      expect(createButton, count >= 3 ? findsOneWidget : findsNothing);
+      expect(tester.takeException(), isNull);
+    }
+
+    await tester.scrollUntilVisible(
+      find.text('今撮る'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('音は最大6つまで追加できます。'), findsOneWidget);
+    final captureButton = tester.widget<FilledButton>(
+      find.ancestor(of: find.text('今撮る'), matching: find.byType(FilledButton)),
+    );
+    final photosButton = tester.widget<OutlinedButton>(
+      find.ancestor(
+        of: find.text('動画を選ぶ'),
+        matching: find.byType(OutlinedButton),
+      ),
+    );
+    expect(captureButton.onPressed, isNull);
+    expect(photosButton.onPressed, isNull);
     expect(tester.takeException(), isNull);
   });
 

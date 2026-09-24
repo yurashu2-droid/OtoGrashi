@@ -330,6 +330,12 @@ class _CollectScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = controller.state;
     final segments = controller.comparisonSegments;
+    final clipCount = state.clips.length;
+    final collectionHint = clipCount < 3
+        ? 'あと${3 - clipCount}つで作成OK · 全6つまで'
+        : clipCount < 6
+        ? '作成OK · あと${6 - clipCount}つ追加できます'
+        : '作成OK · 追加はここまで';
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -382,50 +388,58 @@ class _CollectScreen extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               const Text(
-                'コップ、蛇口、キーボード。身のまわりの音が15秒の動画になります。',
+                'コップ、蛇口、キーボード。3つで作成、最大6つまで使えます。',
                 style: TextStyle(color: AppTokens.mutedInk, height: 1.5),
               ),
               const SizedBox(height: 22),
-            ] else ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '${state.clips.length}つの音が集まりました',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: AppTokens.ink,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
             ],
             Row(
               children: [
-                for (var index = 0; index < 3; index++) ...[
-                  Expanded(
-                    child: Container(
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: index < state.clips.length
-                            ? AppTokens.coral
-                            : const Color(0xFFE9E1DA),
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                    ),
+                Expanded(
+                  child: Row(
+                    children: [
+                      for (var index = 0; index < 6; index++) ...[
+                        Expanded(
+                          child: Container(
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: index < clipCount
+                                  ? index < 3
+                                        ? AppTokens.coral
+                                        : AppTokens.lavender
+                                  : index < 3
+                                  ? const Color(0xFFE9E1DA)
+                                  : AppTokens.lavender.withValues(alpha: 0.32),
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                          ),
+                        ),
+                        if (index < 5) SizedBox(width: index == 2 ? 12 : 5),
+                      ],
+                    ],
                   ),
-                  if (index < 2) const SizedBox(width: 7),
-                ],
+                ),
                 const SizedBox(width: 12),
                 Text(
-                  '${state.clips.length}/3',
+                  '$clipCount/6',
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
               ],
             ),
-            SizedBox(height: state.clips.isEmpty ? 22 : 12),
+            if (clipCount == 0)
+              const SizedBox(height: 22)
+            else ...[
+              const SizedBox(height: 4),
+              Text(
+                collectionHint,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: AppTokens.mutedInk,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             if (state.clips.isEmpty)
               Container(
                 padding: const EdgeInsets.symmetric(
@@ -489,6 +503,14 @@ class _CollectScreen extends StatelessWidget {
                 ),
               ),
             const SizedBox(height: 12),
+            if (clipCount >= 6) ...[
+              const Text(
+                '音は最大6つまで追加できます。',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppTokens.mutedInk),
+              ),
+              const SizedBox(height: 8),
+            ],
             Row(
               children: [
                 Expanded(
@@ -516,14 +538,6 @@ class _CollectScreen extends StatelessWidget {
                   ),
                 ),
               ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              state.clips.length < 3
-                  ? 'あと${3 - state.clips.length}つで音楽にできます'
-                  : '${state.clips.length}つの音で音楽をつくれます',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: AppTokens.mutedInk),
             ),
             if (state.phase == CreationPhase.preparing) ...[
               const SizedBox(height: 16),
