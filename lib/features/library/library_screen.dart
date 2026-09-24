@@ -149,7 +149,7 @@ class _LibraryScreenState extends State<LibraryScreen>
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
         children: [
           _SectionIntro(
-            title: 'つくった曲',
+            title: 'これまでの作品',
             count: _projects.length,
             description: '完成した動画も、制作中の曲もここに。',
           ),
@@ -215,7 +215,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               child: Column(
                 children: [
                   _SectionIntro(
-                    title: '音のストック',
+                    title: '集めた音',
                     count: _assets.length,
                     description: '聴き直して、名前をつけて、次の曲にも。',
                   ),
