@@ -11,6 +11,7 @@ import 'package:otogurashi/domain/arrangement.dart';
 import 'package:otogurashi/domain/clip_asset.dart';
 import 'package:otogurashi/domain/melody_template.dart';
 import 'package:otogurashi/domain/project.dart';
+import 'package:otogurashi/domain/video_recipe.dart';
 import 'package:otogurashi/features/create/creation_controller.dart';
 import 'package:otogurashi/features/create/creation_flow.dart';
 import 'package:otogurashi/features/create/beat_building_preview.dart';
@@ -24,6 +25,120 @@ import 'package:otogurashi/storage/asset_repository.dart';
 import 'package:otogurashi/storage/project_repository.dart';
 
 void main() {
+  test(
+    'theme, style, layout and seed reuse the same source analysis',
+    () async {
+      final media = _FakeMedia();
+      final controller = CreationController(
+        projects: _MemoryProjects(),
+        assets: _UnusedAssets(),
+        media: media,
+        presentation: _FakePresentation(),
+        demo: _FakeDemo(),
+      );
+      addTearDown(controller.dispose);
+      await controller.startDemo();
+      await controller.createPreview();
+      expect(media.analysisCalls, 3);
+
+      controller.selectStyle(ArrangementStyle.lively);
+      await controller.createPreview();
+      controller.selectMelody(MelodyTemplate.wink);
+      await controller.createPreview();
+      controller.setLayout(VideoLayout.stacked);
+      await controller.createPreview();
+      controller.another();
+      await controller.createPreview();
+
+      expect(media.analysisCalls, 3);
+      expect(media.renderRequests.last.video.layout, VideoLayout.stacked);
+      expect(controller.state.project!.arrangement['melodyTemplate'], 'wink');
+    },
+  );
+
+  test(
+    'trim and source changes invalidate only valid analysis results',
+    () async {
+      final media = _FakeMedia();
+      final controller = CreationController(
+        projects: _MemoryProjects(),
+        assets: _UnusedAssets(),
+        media: media,
+        presentation: _FakePresentation(),
+        demo: _FakeDemo(),
+      );
+      addTearDown(controller.dispose);
+      await controller.startDemo();
+      await controller.createPreview();
+      expect(media.analysisCalls, 3);
+
+      await controller.setTrim('clip-0', 100000, 2000000);
+      expect(media.analysisCalls, 4);
+      expect(media.analysisRequests.last.selectionStartUs, 100000);
+      expect(media.analysisRequests.last.selectionDurationUs, 2000000);
+      await controller.createPreview();
+      expect(media.analysisCalls, 4);
+
+      await controller.removeClip('clip-1');
+      final removed = (await _FakeDemo(count: 2).install(_UnusedAssets())).last;
+      await controller.addExisting(removed);
+      await controller.createPreview();
+      expect(media.analysisCalls, 7);
+
+      controller.startNew();
+      await controller.startDemo();
+      await controller.createPreview();
+      expect(media.analysisCalls, 10);
+    },
+  );
+
+  test(
+    'superseded theme reuses completed analysis but a new project does not',
+    () async {
+      final media = _FakeMedia();
+      final controller = CreationController(
+        projects: _MemoryProjects(),
+        assets: _UnusedAssets(),
+        media: media,
+        presentation: _FakePresentation(),
+        demo: _FakeDemo(),
+      );
+      addTearDown(controller.dispose);
+      await controller.startDemo();
+
+      final pending = Completer<void>();
+      media.analysisGate = pending;
+      final first = controller.createPreview();
+      await Future<void>.delayed(Duration.zero);
+      expect(media.analysisCalls, 3);
+      controller.selectStyle(ArrangementStyle.lively);
+      media.analysisGate = null;
+      pending.complete();
+      await first;
+      await controller.createPreview();
+      expect(media.analysisCalls, 3);
+
+      controller.startNew();
+      await controller.startDemo();
+      await controller.createPreview();
+      expect(media.analysisCalls, 6);
+
+      final stale = Completer<void>();
+      media.analysisGate = stale;
+      final staleTrim = controller.setTrim('clip-0', 100000, 2000000);
+      await Future<void>.delayed(Duration.zero);
+      expect(media.analysisCalls, 7);
+      // The trim request waits on a new analysis; switching projects invalidates it.
+      controller.startNew();
+      await controller.startDemo();
+      media.analysisGate = null;
+      stale.complete();
+      await staleTrim;
+      await controller.createPreview();
+      expect(media.analysisCalls, 10);
+    },
+  );
+
   testWidgets('sound names reach export recipe without reanalyzing on rename', (
     tester,
   ) async {
@@ -314,7 +429,7 @@ void main() {
     expect(controller.state.preview, isNotNull);
 
     media.failAnalysis = true;
-    await controller.createPreview();
+    await controller.setTrim('clip-0', 100000, 2000000);
     expect(controller.state.phase, CreationPhase.failed);
     expect(controller.state.preview, isNull);
   });
@@ -1098,12 +1213,17 @@ final class _FakeMedia implements MediaGateway {
   final renderRequests = <RenderRequest>[];
   bool failAnalysis = false;
   int analysisCalls = 0;
+  final analysisRequests = <MediaAnalysisRequest>[];
+  Completer<void>? analysisGate;
   @override
   Stream<MediaEvent> get events => const Stream.empty();
 
   @override
   Future<AnalyzedClip> analyze(MediaAnalysisRequest request) async {
     analysisCalls += 1;
+    analysisRequests.add(request);
+    final gate = analysisGate;
+    if (gate != null) await gate.future;
     if (failAnalysis) throw StateError('analysis failed');
     return AnalyzedClip(
       assetId: request.assetId,

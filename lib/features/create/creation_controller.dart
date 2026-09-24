@@ -116,6 +116,25 @@ final class BundledDemoAssetSource implements DemoAssetSource {
   }
 }
 
+final class _CachedAnalysis {
+  const _CachedAnalysis(this.clip, this.request, this.result);
+
+  final ClipAsset clip;
+  final MediaAnalysisRequest request;
+  final AnalyzedClip result;
+
+  bool matches(ClipAsset candidate, MediaAnalysisRequest selection) =>
+      clip.id == candidate.id &&
+      clip.relativePath == candidate.relativePath &&
+      clip.sha256 == candidate.sha256 &&
+      clip.durationUs == candidate.durationUs &&
+      request.assetId == selection.assetId &&
+      request.relativePath == selection.relativePath &&
+      request.selectionStartUs == selection.selectionStartUs &&
+      request.selectionDurationUs == selection.selectionDurationUs &&
+      request.audioTrackStartUs == selection.audioTrackStartUs;
+}
+
 final class CreationController extends ChangeNotifier {
   CreationController({
     required this.projects,
@@ -139,6 +158,8 @@ final class CreationController extends ChangeNotifier {
   final RenderController _render;
   CreationState _state = const CreationState();
   Future<void> _mutationTail = Future<void>.value();
+  final Map<String, _CachedAnalysis> _analysisCache = {};
+  var _analysisEpoch = 0;
   var _requestVersion = 0;
   var _disposed = false;
 
@@ -157,6 +178,8 @@ final class CreationController extends ChangeNotifier {
 
   Future<void> startDemo() async {
     if (_disposed || _state.phase == CreationPhase.preparing) return;
+    ++_requestVersion;
+    _clearAnalysisCache();
     _set(_state.copyWith(phase: CreationPhase.preparing, clearError: true));
     try {
       final clips = await demo.install(assets);
@@ -212,6 +235,7 @@ final class CreationController extends ChangeNotifier {
       return;
     }
     ++_requestVersion;
+    _clearAnalysisCache();
     try {
       final current = _state.project ?? await projects.create('今日の音');
       if (_disposed) return;
@@ -245,6 +269,7 @@ final class CreationController extends ChangeNotifier {
   Future<void> openProject(Project project) async {
     if (_disposed) return;
     final version = ++_requestVersion;
+    _clearAnalysisCache();
     try {
       final loaded = await Future.wait(project.clipIds.map(assets.load));
       if (_disposed || version != _requestVersion) return;
@@ -389,6 +414,7 @@ final class CreationController extends ChangeNotifier {
     final current = _state.project;
     if (current == null) return;
     ++_requestVersion;
+    _clearAnalysisCache();
     try {
       final clips = _state.clips
           .where((clip) => clip.id != assetId)
@@ -443,6 +469,7 @@ final class CreationController extends ChangeNotifier {
   void startNew() {
     if (_disposed) return;
     ++_requestVersion;
+    _clearAnalysisCache();
     final project = _state.project;
     if (project != null) _render.open(project);
     _set(const CreationState());
@@ -497,6 +524,7 @@ final class CreationController extends ChangeNotifier {
     ++_requestVersion;
     final current = _state.project;
     if (current == null) return;
+    if (command is SetTrim) _invalidateAnalysis(command.assetId);
     try {
       final updated = ProjectReducer.reduce(current, command);
       await projects.save(updated, expectedRevision: current.revision);
@@ -543,9 +571,11 @@ final class CreationController extends ChangeNotifier {
       ),
     );
     try {
-      final analyses = await Future.wait(
-        _state.clips.map((clip) => media.analyze(_analysisRequest(clip))),
-      );
+      final analysisEpoch = _analysisEpoch;
+      final analyses = await Future.wait([
+        for (final clip in _state.clips)
+          _analyzeCached(clip, _analysisRequest(clip), analysisEpoch),
+      ]);
       if (_disposed || version != _requestVersion) return;
       final arrangement = arrange(
         clips: analyses,
@@ -684,6 +714,33 @@ final class CreationController extends ChangeNotifier {
     );
   }
 
+  Future<AnalyzedClip> _analyzeCached(
+    ClipAsset clip,
+    MediaAnalysisRequest request,
+    int epoch,
+  ) async {
+    final cached = _analysisCache[clip.id];
+    if (cached != null && cached.matches(clip, request)) return cached.result;
+
+    final result = await media.analyze(request);
+    // A superseded theme request may still reuse its analysis. Source edits and
+    // project changes advance the epoch so an old response cannot refill it.
+    if (!_disposed && epoch == _analysisEpoch && result.assetId == clip.id) {
+      _analysisCache[clip.id] = _CachedAnalysis(clip, request, result);
+    }
+    return result;
+  }
+
+  void _clearAnalysisCache() {
+    ++_analysisEpoch;
+    _analysisCache.clear();
+  }
+
+  void _invalidateAnalysis(String assetId) {
+    ++_analysisEpoch;
+    _analysisCache.remove(assetId);
+  }
+
   Future<void> _loadThumbnails(List<ClipAsset> clips) async {
     if (_disposed) return;
     final thumbnails = Map<String, Uint8List>.of(_state.thumbnails);
@@ -730,6 +787,7 @@ final class CreationController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _clearAnalysisCache();
     _render
       ..removeListener(_onRenderState)
       ..dispose();
