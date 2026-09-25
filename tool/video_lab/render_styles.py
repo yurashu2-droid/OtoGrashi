@@ -416,22 +416,20 @@ def shot_stutter(ctx, t, seg):
     return single(ctx, t, lead, zoom=(1 + 0.12 * (step % 4)) * punch(t - lead.t, 0.08))
 
 
-def voice_layout(n, columns_first=False):
+def voice_layout(n):
     if n <= 1:
         return [(0, 0, W, H)]
-    if columns_first and n <= 4:
-        return [(i * W / n, 0, W / n, H) for i in range(n)]
     rows = n if n <= 3 else math.ceil(n / 2) if n <= 6 else 3
     per_row = [n // rows + (1 if r < n % rows else 0) for r in range(rows)]
     return [(c * W / k, r * H / rows, W / k, H / rows) for r, k in enumerate(per_row) for c in range(k)]
 
 
-def shot_voices(ctx, t, seg, columns_first=False):
+def shot_voices(ctx, t, seg):
     """One picture per sounding voice. Repeats of the same sound alternate mirror."""
     live = ctx.voices(t)
     if not live:
         return single(ctx, t, lead_of(ctx, t))
-    rects = voice_layout(len(live), columns_first)
+    rects = voice_layout(len(live))
     canvas = Image.new("RGB", (W, H))
     seen = {}
     for e, (x, y, w, h) in zip(live, rects):
@@ -451,8 +449,46 @@ def shot_burst(ctx, t, seg):
     return shot_voices(ctx, t, seg)
 
 
-def shot_split(ctx, t, seg):
-    return shot_voices(ctx, t, seg, columns_first=True)
+FLIPS = [(False, False), (True, False), (False, True), (True, True)]
+
+
+def repeat_index(ctx, e):
+    """How many times this exact chop has already played back to back."""
+    n, prev = 0, e
+    while True:
+        before = ctx.last_onset(prev.t - 1e-4, lambda x: x.c == e.c)
+        if not before or before.src_start != e.src_start or prev.t - before.t > BEAT * 2:
+            return n
+        n, prev = n + 1, before
+
+
+def flipped(im, k):
+    h, v = FLIPS[k % 4]
+    im = ImageOps.mirror(im) if h else im
+    return ImageOps.flip(im) if v else im
+
+
+def shot_mirror(ctx, t, seg):
+    """Loops read as reflections: each repeat of the same chop flips the picture,
+    and stacked voices of one sound become a symmetric pair or a four-way mirror."""
+    lead = lead_of(ctx, t)
+    same = [e for e in ctx.voices(t) if e.c == lead.c]
+    k = repeat_index(ctx, lead)
+    zoom = 1.06 * punch(t - lead.t, 0.1)
+    if len(same) >= 3:
+        q = panel(ctx, lead, t, W / 2, H / 2, zoom=zoom)
+        canvas = Image.new("RGB", (W, H))
+        for i, (x, y) in enumerate([(0, 0), (W // 2, 0), (0, H // 2), (W // 2, H // 2)]):
+            canvas.paste(flipped(q, i), (x, y))
+    elif len(same) == 2:
+        half = panel(ctx, lead, t, W / 2, H, zoom=zoom)
+        canvas = Image.new("RGB", (W, H))
+        canvas.paste(flipped(half, k), (0, 0))
+        canvas.paste(flipped(half, k + 1), (W // 2, 0))
+    else:
+        canvas = flipped(panel(ctx, lead, t, W, H, zoom=zoom, soft=True), k)
+    voice_label(canvas, ctx, lead, t, (0, 0, W, H), len(same))
+    return canvas
 
 
 # ---------------------------------------------------------------- style 2: パン (camera over a board)
@@ -596,14 +632,14 @@ def shot_pile(ctx, t, seg):
 
 # ---------------------------------------------------------------- director
 
-SHOTS = {"full": shot_full, "flip": shot_flip, "stutter": shot_stutter, "split": shot_split,
+SHOTS = {"full": shot_full, "flip": shot_flip, "stutter": shot_stutter, "mirror": shot_mirror,
          "burst": shot_burst, "pan": shot_pan, "pile": shot_pile}
-BLEED = {"full", "flip", "stutter", "split", "burst"}
+BLEED = {"full", "flip", "stutter", "mirror", "burst"}
 LONG = {"pan", "pile"}  # need two bars to build up
 POOLS = {
     "calm": ["full", "flip", "pan"],
-    "mid": ["split", "stutter", "pile", "pan", "flip"],
-    "high": ["burst", "split", "stutter", "burst"],
+    "mid": ["mirror", "stutter", "pile", "pan", "flip"],
+    "high": ["burst", "mirror", "stutter", "burst"],
 }
 
 
