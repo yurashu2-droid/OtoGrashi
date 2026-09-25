@@ -494,9 +494,10 @@ void main() {
     );
   });
 
-  test('silent assets do not count toward the three usable source minimum', () {
-    expect(
-      () => arrange(
+  test(
+    'one or two audible sources remain usable when another recording is silent',
+    () {
+      final result = arrange(
         clips: [
           threeFixtures[0],
           threeFixtures[1],
@@ -504,18 +505,12 @@ void main() {
         ],
         style: ArrangementStyle.sparse,
         seed: 1,
-      ),
-      throwsA(
-        isA<ArrangementRejected>()
-            .having(
-              (error) => error.reason,
-              'reason',
-              ArrangementRejectionReason.insufficientUsableSources,
-            )
-            .having((error) => error.assetIds, 'assetIds', ['silent']),
-      ),
-    );
-  });
+      );
+      expect(result.unusableAssetIds, ['silent']);
+      expect(result.events, isNotEmpty);
+      expect(result.events.every((e) => e.assetId != 'silent'), isTrue);
+    },
+  );
 
   test(
     'invalid source metadata and unsupported JSON versions are rejected',
@@ -814,7 +809,7 @@ void main() {
         seed: 4,
       );
       expect(legacy.songRoles?.melody, 'old-voice');
-    expect(legacy.songRoles?.bass, 'room');
+      expect(legacy.songRoles?.bass, 'room');
     },
   );
 

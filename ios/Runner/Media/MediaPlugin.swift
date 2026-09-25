@@ -246,6 +246,7 @@ final class MediaPlugin: NSObject, FlutterPlugin {
               expectedWidth: dimensions.width,
               expectedHeight: dimensions.height,
               expectedOnsetSample: nil,
+              expectedTotalSamples: request.arrangement.totalSamples,
               cancellation: token
             )
             guard !token.isCancelled else {

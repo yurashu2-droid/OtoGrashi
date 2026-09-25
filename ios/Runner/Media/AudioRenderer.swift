@@ -25,6 +25,7 @@ struct SoundEventPayload: Codable, Equatable {
   let durationSamples: Int
   let gain: Double
   let fades: EventFadesPayload
+  var partIndex: Int? = nil
   let pitchSemitones: Double?
   var sourceDurationSamples: Int? = nil
   var targetMidiNote: Double? = nil
@@ -35,7 +36,6 @@ struct SoundEventPayload: Codable, Equatable {
   var effectiveSourceDurationSamples: Int { sourceDurationSamples ?? durationSamples }
   var isReversed: Bool { reverse ?? false }
   var effectivePitchSemitones: Double { pitchSemitones ?? 0 }
-
   /// A phrase with a different second beat must not reuse the first phrase's
   /// PCM, even when the file, source window and first note are identical.
   var musicalCacheKey: String {
@@ -79,6 +79,7 @@ struct VideoEventPayload: Codable, Equatable {
   let loopMode: VideoLoopModePayload
   var sourceDurationSamples: Int? = nil
   var reverse: Bool? = nil
+  var partIndex: Int? = nil
   var mirror: Bool? = nil
 
   var effectiveSourceDurationSamples: Int { sourceDurationSamples ?? durationSamples }
@@ -92,7 +93,7 @@ struct VideoEventPayload: Codable, Equatable {
     case sourceVideoStartTime
     case crop
     case loopMode
-    case sourceDurationSamples, reverse, mirror
+    case sourceDurationSamples, reverse, mirror, partIndex
   }
 }
 
@@ -100,7 +101,8 @@ struct ArrangementPayload: Decodable, Equatable {
   static let supportedSchemaVersion = 1
   static let sampleRate = 48_000
   static let totalSamples = 720_000
-  static let maximumEvents = 256
+  static let maximumEvents = 512
+  static let maximumTotalSamples = 1_440_000
 
   let schemaVersion: Int
   let sampleRate: Int
@@ -110,6 +112,7 @@ struct ArrangementPayload: Decodable, Equatable {
   let analysisVersion: Int
   let rendererVersion: Int
   let seed: Int
+  let performanceMode: String
   let style: String
   let sourceAssetIds: [String]
   let unusableAssetIds: [String]
@@ -125,6 +128,7 @@ struct ArrangementPayload: Decodable, Equatable {
     case analysisVersion
     case rendererVersion
     case seed
+    case performanceMode
     case style
     case sourceAssetIds
     case unusableAssetIds
@@ -142,6 +146,7 @@ struct ArrangementPayload: Decodable, Equatable {
     analysisVersion = try container.decode(Int.self, forKey: .analysisVersion)
     rendererVersion = try container.decode(Int.self, forKey: .rendererVersion)
     seed = try container.decode(Int.self, forKey: .seed)
+    performanceMode = try container.decodeIfPresent(String.self, forKey: .performanceMode) ?? "natural"
     style = try container.decode(String.self, forKey: .style)
     sourceAssetIds = try Self.decodeBounded(
       String.self, from: container, forKey: .sourceAssetIds, maximum: 6
@@ -158,7 +163,8 @@ struct ArrangementPayload: Decodable, Equatable {
 
     guard schemaVersion == Self.supportedSchemaVersion,
       sampleRate == Self.sampleRate,
-      totalSamples == Self.totalSamples,
+      [Self.totalSamples, Self.maximumTotalSamples].contains(totalSamples),
+      ["natural", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"].contains(performanceMode),
       templateVersion == 1,
       analysisVersion == 1,
       rendererVersion == 1,
@@ -181,15 +187,18 @@ struct ArrangementPayload: Decodable, Equatable {
       )
       guard !sourceOverflow, !destinationOverflow, !fadeOverflow,
         sourceEnd > event.sourceStartSample,
+        EverydayAudioDSP.validSteps(event.pitchSteps ?? [], count: event.durationSamples),
+        (event.pitchSteps ?? []).isEmpty ||
+          event.sourceDurationSamples != nil,
         event.sourceStartSample >= 0,
         (1...Self.totalSamples).contains(event.effectiveSourceDurationSamples),
-        EverydayAudioDSP.validSteps(event.pitchSteps ?? [], count: event.durationSamples),
-        (event.pitchSteps?.isEmpty ?? true) || event.sourceDurationSamples != nil,
         event.targetMidiNote == nil || (event.targetMidiNote!.isFinite && (24...100).contains(event.targetMidiNote!)),
         (event.targetMidiNote == nil && !event.isReversed) || event.sourceDurationSamples != nil,
         ["original", "phrase", "rhythm", "tuned"].contains(event.treatment ?? "original"),
         event.destinationStartSample >= 0,
-        destinationEnd <= Self.totalSamples,
+        destinationEnd <= totalSamples,
+        (0...15).contains(event.partIndex ?? 0),
+        (event.partIndex ?? 0) == (video.partIndex ?? 0),
         event.gain.isFinite,
         (0...1).contains(event.gain),
         event.effectivePitchSemitones.isFinite,
@@ -230,6 +239,8 @@ struct ArrangementPayload: Decodable, Equatable {
 }
 
 struct AudioRenderReport: Equatable {
+  /// One peak every 1,600 samples for each event, in arrangement order.
+  var eventPeaks: [[Float]] = []
   let url: URL
   let sampleCount: Int
   let fileLength: Int
@@ -276,7 +287,8 @@ struct AudioRenderer {
     cancellation: CancellationToken
   ) async throws -> AudioRenderReport {
     try checkCancellation(cancellation)
-    var mix = Array(repeating: Float(0), count: ArrangementPayload.totalSamples)
+    var mix = Array(repeating: Float(0), count: arrangement.totalSamples)
+    var eventPeaks: [[Float]] = []
     var pitchLatencies: [Double: Int] = [:]
     var trackRanges: [String: NativePCMReader.TrackRange] = [:]
     var pitchedFragments: [PitchedFragmentKey: [Float]] = [:]
@@ -313,7 +325,8 @@ struct AudioRenderer {
           do {
             let shaped = try EverydayAudioDSP.render(leveled,
               count: event.durationSamples, targetMidiNote: event.targetMidiNote,
-              reverse: event.isReversed, pitchSteps: event.pitchSteps ?? [])
+              reverse: event.isReversed, pitchSteps: event.pitchSteps ?? [],
+              hardTune: arrangement.performanceMode == "neonTune")
             processed = event.targetMidiNote == nil && (event.pitchSteps?.isEmpty ?? true) && event.effectivePitchSemitones != 0
               ? try pitchPreservingDuration(shaped, semitones: event.effectivePitchSemitones,
                   cancellation: cancellation, latencyCache: &pitchLatencies) : shaped
@@ -324,9 +337,9 @@ struct AudioRenderer {
             cachedPitchSamples += processed.count
           }
         }
-        mixEvent(processed, destinationStart: event.destinationStartSample,
+        eventPeaks.append(mixEvent(processed, destinationStart: event.destinationStartSample,
           eventGain: Float(event.gain), fadeInSamples: event.fades.fadeInSamples,
-          fadeOutSamples: event.fades.fadeOutSamples, into: &mix)
+          fadeOutSamples: event.fades.fadeOutSamples, into: &mix))
         continue
       }
       let sourceEnd = event.sourceStartSample + event.durationSamples
@@ -341,7 +354,7 @@ struct AudioRenderer {
       let postRoll = min(
         240,
         min(
-          ArrangementPayload.totalSamples - destinationEnd,
+          arrangement.totalSamples - destinationEnd,
           max(0, trackRange.endSample - sourceEnd)
         )
       )
@@ -398,14 +411,14 @@ struct AudioRenderer {
           cachedPitchSamples += pitched.count
         }
       }
-      mixEvent(
+      eventPeaks.append(mixEvent(
         pitched,
         destinationStart: event.destinationStartSample - preRoll,
         eventGain: Float(event.gain),
         fadeInSamples: max(event.fades.fadeInSamples, min(120, renderedDuration / 4)),
         fadeOutSamples: max(event.fades.fadeOutSamples, min(120, renderedDuration / 4)),
         into: &mix
-      )
+      ))
     }
 
     if accompanimentGain > 0 {
@@ -419,7 +432,9 @@ struct AudioRenderer {
       try? FileManager.default.removeItem(at: outputURL)
       throw AudioRenderError.cancelled
     }
-    return try inspectWrittenOutput(outputURL)
+    var report = try inspectWrittenOutput(outputURL, expectedSamples: arrangement.totalSamples)
+    report.eventPeaks = eventPeaks
+    return report
   }
 
   // TimePitch retains rate=1 while changing pitch. Its processing latency is
@@ -594,8 +609,9 @@ struct AudioRenderer {
     fadeInSamples: Int,
     fadeOutSamples: Int,
     into destination: inout [Float]
-  ) {
+  ) -> [Float] {
     let gain = eventGain * originalGain
+    var peaks = [Float](repeating: 0, count: (source.count + 1599) / 1600)
     for offset in source.indices {
       var envelope: Float = 1
       if fadeInSamples > 0, offset < fadeInSamples {
@@ -606,8 +622,11 @@ struct AudioRenderer {
         envelope *= Float(framesFromEnd) / Float(fadeOutSamples)
       }
       let sample = source[offset].isFinite ? source[offset] : 0
-      destination[destinationStart + offset] += sample * gain * envelope
+      let value = sample * gain * envelope
+      destination[destinationStart + offset] += value
+      peaks[offset / 1600] = max(peaks[offset / 1600], abs(value))
     }
+    return peaks
   }
 
   private func loop(
@@ -694,7 +713,7 @@ struct AudioRenderer {
     }
   }
 
-  private func inspectWrittenOutput(_ url: URL) throws -> AudioRenderReport {
+  private func inspectWrittenOutput(_ url: URL, expectedSamples: Int = ArrangementPayload.totalSamples) throws -> AudioRenderReport {
     do {
       let file = try AVAudioFile(forReading: url)
       let format = file.processingFormat
@@ -732,8 +751,8 @@ struct AudioRenderer {
         sampleCount += frameCount
         readChunkFrameCounts.append(frameCount)
       }
-      guard fileLength == ArrangementPayload.totalSamples,
-        sampleCount == ArrangementPayload.totalSamples
+      guard fileLength == expectedSamples,
+        sampleCount == expectedSamples
       else { throw AudioRenderError.writeFailed }
       return AudioRenderReport(
         url: url,

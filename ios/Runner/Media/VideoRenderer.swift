@@ -67,6 +67,7 @@ struct VideoEffectsPayload: Decodable {
 
 struct VideoRecipePayload: Decodable {
   let schemaVersion: Int
+  let totalSamples: Int
   let layout: VideoLayoutPayload
   let clipCrops: [ClipCropPayload]
   let captions: [VideoCaptionPayload]
@@ -75,12 +76,13 @@ struct VideoRecipePayload: Decodable {
   let clipNames: [String: String]
 
   private enum CodingKeys: String, CodingKey {
-    case schemaVersion, layout, clipCrops, captions, events, effects, clipNames
+    case schemaVersion, totalSamples, layout, clipCrops, captions, events, effects, clipNames
   }
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+    totalSamples = try container.decodeIfPresent(Int.self, forKey: .totalSamples) ?? 720_000
     layout = try container.decode(VideoLayoutPayload.self, forKey: .layout)
     clipCrops = try Self.decodeBounded(
       ClipCropPayload.self, from: container, forKey: .clipCrops, maximum: 6
@@ -96,7 +98,7 @@ struct VideoRecipePayload: Decodable {
       ?? VideoEffectsPayload(enabled: [])
     clipNames = try container.decodeIfPresent([String: String].self, forKey: .clipNames) ?? [:]
     let cropIds = clipCrops.map(\.assetId)
-    guard schemaVersion == 1,
+    guard schemaVersion == 1, [720_000, 1_440_000].contains(totalSamples),
       (1...6).contains(clipCrops.count),
       captions.count <= 12,
       events.count <= ArrangementPayload.maximumEvents * 2 + 1,
@@ -111,12 +113,12 @@ struct VideoRecipePayload: Decodable {
       Set(effects.enabled).count == effects.enabled.count,
       effects.enabled.allSatisfy({ ["mirrorCuts", "beatPunch", "echoTiles"].contains($0) }),
       events.first?.destinationStartSample == 0,
-      events.last?.destinationEndSample == ArrangementPayload.totalSamples
+      events.last?.destinationEndSample == totalSamples
     else { throw VideoRenderError.unsupportedContract }
     for (index, event) in events.enumerated() {
       guard event.destinationStartSample >= 0,
         event.durationSamples > 0,
-        event.destinationEndSample <= ArrangementPayload.totalSamples,
+        event.destinationEndSample <= totalSamples,
         (1...6).contains(event.assetIds.count),
         Set(event.assetIds).count == event.assetIds.count,
         event.assetIds.allSatisfy(cropIds.contains),
@@ -133,7 +135,7 @@ struct VideoRecipePayload: Decodable {
         (0...1).contains(caption.x), (0...1).contains(caption.y),
         caption.destinationStartSample >= 0,
         caption.durationSamples > 0,
-        end <= ArrangementPayload.totalSamples
+        end <= totalSamples
       else { throw VideoRenderError.unsupportedContract }
     }
   }
@@ -179,7 +181,7 @@ struct VideoRenderRequestPayload: Decodable {
     arrangement = try container.decode(ArrangementPayload.self, forKey: .arrangement)
     video = try container.decode(VideoRecipePayload.self, forKey: .video)
     quality = try container.decode(RenderQualityPayload.self, forKey: .quality)
-    guard schemaVersion == 1, !operationId.isEmpty, !projectId.isEmpty, revision >= 0,
+    guard video.totalSamples == arrangement.totalSamples, schemaVersion == 1, !operationId.isEmpty, !projectId.isEmpty, revision >= 0,
       Set(video.clipCrops.map(\.assetId)) == Set(arrangement.sourceAssetIds)
     else { throw VideoRenderError.unsupportedContract }
   }
@@ -213,6 +215,7 @@ struct VideoRenderer {
     cancellation: CancellationToken
   ) async throws -> VideoRenderReport {
     try checkCancellation(cancellation)
+    let outputFrames = request.arrangement.totalSamples / 1_600
     let requiredIds = Set(request.arrangement.videoEvents.map(\.assetId))
       .union(request.video.events.flatMap(\.assetIds))
     guard requiredIds.allSatisfy({ assets[$0] != nil }) else {
@@ -220,7 +223,7 @@ struct VideoRenderer {
     }
     let audioURL = outputURL.deletingPathExtension().appendingPathExtension("caf")
     defer { try? FileManager.default.removeItem(at: audioURL) }
-    _ = try await audioRenderer.render(
+    let audioReport = try await audioRenderer.render(
       arrangement: request.arrangement,
       assets: assets,
       outputURL: audioURL,
@@ -229,7 +232,7 @@ struct VideoRenderer {
     videoRenderDiagnostic("VIDEO_STAGE audio_complete")
     try checkCancellation(cancellation)
     let waveformPeaks: [CGFloat]
-    if request.video.layout == .buildUp {
+    if request.video.layout == .buildUp || request.arrangement.performanceMode != "natural" {
       waveformPeaks = (try? Self.waveformPeaks(from: audioURL)) ?? []
     } else {
       waveformPeaks = []
@@ -339,7 +342,7 @@ struct VideoRenderer {
       }
     }
     do {
-      for frame in 0..<Self.frameCount {
+      for frame in 0..<outputFrames {
         try checkCancellation(cancellation)
         try await waitUntilReady(
           videoInput,
@@ -364,6 +367,7 @@ struct VideoRenderer {
             request: request,
             providers: providers,
             waveformPeaks: waveformPeaks,
+            eventPeaks: audioReport.eventPeaks,
             into: buffer,
             width: dimensions.width,
             height: dimensions.height
@@ -381,7 +385,7 @@ struct VideoRenderer {
           throw VideoRenderError.writerFailed
         }
         writerProgress.markProgress()
-        if frame == 0 || frame % 30 == 0 || frame == Self.frameCount - 1 {
+        if frame == 0 || frame % 30 == 0 || frame == outputFrames - 1 {
           videoRenderDiagnostic(
             "VIDEO_STAGE video_frame frame=\(frame) pts=\(CMTime(value: CMTimeValue(frame), timescale: 30))"
           )
@@ -396,7 +400,7 @@ struct VideoRenderer {
       try audioResult.get()
       watchdogTask.cancel()
       _ = await watchdogTask.value
-      writer.endSession(atSourceTime: CMTime(value: 15, timescale: 1))
+      writer.endSession(atSourceTime: CMTime(value: CMTimeValue(request.arrangement.totalSamples), timescale: 48_000))
       videoRenderDiagnostic(
         "VIDEO_STAGE finish_writing begin \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
       )
@@ -410,7 +414,7 @@ struct VideoRenderer {
       try checkCancellation(cancellation)
       return VideoRenderReport(
         url: outputURL,
-        frameCount: Self.frameCount,
+        frameCount: outputFrames,
         width: dimensions.width,
         height: dimensions.height
       )
@@ -665,11 +669,17 @@ struct VideoRenderer {
     request: VideoRenderRequestPayload,
     providers: [String: SourceProvider],
     waveformPeaks: [CGFloat],
+    eventPeaks: [[Float]],
     into buffer: CVPixelBuffer,
     width: Int,
     height: Int
   ) async throws {
     let sample = frame * 1_600
+    if request.arrangement.performanceMode != "natural" {
+      try await drawPerformanceFrame(frame, request: request, providers: providers,
+        waveformPeaks: waveformPeaks, eventPeaks: eventPeaks, into: buffer, width: width, height: height)
+      return
+    }
     guard let scene = request.video.events.first(where: {
       sample >= $0.destinationStartSample && sample < $0.destinationEndSample
     }) else { throw VideoRenderError.unsupportedContract }
@@ -791,6 +801,210 @@ struct VideoRenderer {
       width: width,
       height: height
     )
+  }
+
+  // All performance pictures are driven by the same bounded audio events.
+  // Inactive pads hold a real frame; only sounding pads bounce and emit rings.
+  private struct PerformanceCard {
+    let event: VideoEventPayload
+    let playing: Bool
+    let rect: CGRect
+    let index: Int
+    let age: Int
+    let peaks: [Float]
+    let voices: Int
+  }
+
+  static func performanceRects(count: Int, mode: String, width: CGFloat, height: CGFloat) -> [CGRect] {
+    guard count > 0 else { return [] }
+    let margin = width * 0.06
+    let gap = width * 0.035
+    let top = height * 0.79
+    let usableHeight = height * 0.62
+    let columns = mode == "mosaic" ? 3 : count > 6 ? 3 : count == 1 ? 1 : 2
+    let rows = mode == "mosaic" ? max(3, (count + 2) / 3) : (count + columns - 1) / columns
+    let cellWidth = (width - 2 * margin - CGFloat(columns - 1) * gap) / CGFloat(columns)
+    let cellHeight = (usableHeight - CGFloat(rows - 1) * gap) / CGFloat(rows)
+    return (0..<count).map { i in
+      let w = mode == "vinyl" ? min(cellWidth, cellHeight - width * 0.045) : cellWidth
+      let h = mode == "mosaic" ? min(cellHeight, w * 1.34) : mode == "vinyl" ? w : min(cellHeight, w * 1.14)
+      return CGRect(x: margin + CGFloat(i % columns) * (cellWidth + gap) + (cellWidth - w) / 2,
+        y: top - CGFloat(i / columns) * (cellHeight + gap) - h, width: w, height: h)
+    }
+  }
+
+  private func drawPerformanceFrame(_ frame: Int, request: VideoRenderRequestPayload,
+    providers: [String: SourceProvider], waveformPeaks: [CGFloat], eventPeaks: [[Float]], into buffer: CVPixelBuffer,
+    width: Int, height: Int) async throws {
+    let sample = frame * 1600
+    let mode = request.arrangement.performanceMode
+    let w = CGFloat(width), h = CGFloat(height)
+    let bounds = CGRect(x: 0, y: 0, width: w, height: h)
+    let sorted = request.arrangement.videoEvents.enumerated().sorted {
+      $0.element.destinationStartSample == $1.element.destinationStartSample
+        ? $0.offset < $1.offset
+        : $0.element.destinationStartSample < $1.element.destinationStartSample
+    }.map(\.element)
+    func key(_ e: VideoEventPayload) -> String { "\(e.assetId)#\(e.partIndex ?? 0)" }
+    var keys: [String] = []
+    for event in sorted where !keys.contains(key(event)) { keys.append(key(event)) }
+    let active = sorted.filter { sample >= $0.destinationStartSample && sample < $0.destinationStartSample + $0.durationSamples }
+    let activeKeys = Set(active.map(key))
+    // Protect audible cards when a large bank needs pagination.
+    if keys.count > 18 {
+      let live = keys.filter(activeKeys.contains)
+      keys = live + keys.filter { !activeKeys.contains($0) }.prefix(max(0, 18 - live.count))
+    }
+    var rects = Self.performanceRects(count: keys.count, mode: mode, width: w, height: h)
+    if mode == "voiceLead", let phrase = request.arrangement.events.last(where: {
+      $0.treatment == "phrase" && sample >= $0.destinationStartSample && sample < $0.destinationStartSample + $0.durationSamples
+    }), let main = keys.firstIndex(of: "\(phrase.assetId)#\(phrase.partIndex ?? 0)") {
+      // The speaker is foreground, but every backing source remains visible.
+      let others = keys.indices.filter { $0 != main }
+      rects[main] = CGRect(x: w * 0.06, y: h * 0.36, width: w * 0.88, height: h * 0.43)
+      for (position, index) in others.enumerated() {
+        let columns = max(1, min(4, others.count)), row = position / max(1, min(4, others.count))
+        let rows = max(1, (others.count + columns - 1) / columns)
+        let gap = w * 0.02
+        let size = min(w * 0.2, (h * 0.22 - CGFloat(rows - 1) * gap) / CGFloat(rows))
+        rects[index] = CGRect(x: w * 0.06 + CGFloat(position % columns) * w * 0.225,
+          y: h * 0.32 - CGFloat(row + 1) * size - CGFloat(row) * gap, width: size, height: size)
+      }
+    }
+    var canvas = CIImage(color: CIColor(red: 0.035, green: 0.04, blue: 0.065)).cropped(to: bounds)
+    var cards: [PerformanceCard] = []
+    for (index, identity) in keys.enumerated() {
+      let all = sorted.filter { key($0) == identity }
+      let live = active.filter { key($0) == identity }
+      let historical = all.last { $0.destinationStartSample <= sample }
+      if (mode == "mosaic" || mode == "loopStation"), historical == nil { continue }
+      guard let event = live.last ?? historical ?? all.first, let provider = providers[event.assetId] else { continue }
+      let audioIndex = request.arrangement.videoEvents.firstIndex(of: event)
+      let peaks = audioIndex.flatMap { $0 < eventPeaks.count ? eventPeaks[$0] : nil } ?? []
+      let localFrame = max(0, sample - event.destinationStartSample) / 1600
+      let audible = peaks.isEmpty || (localFrame < peaks.count && peaks[localFrame] > 0.0001)
+      let isPlaying = !live.isEmpty && audible
+      let age = isPlaying ? sample - event.destinationStartSample : 48000
+      // Beat-aware punch inside a long word, without rewinding its video.
+      let curve = audioIndex.flatMap { request.arrangement.events[$0].pitchSteps } ?? []
+      let onset = curve.last { $0.offsetSamples <= age }?.offsetSamples ?? 0
+      let punch = isPlaying ? CGFloat(max(0, 1 - Double(age - onset) / 6500)) : 0
+      let baseRect = rects[index]
+      let factor: CGFloat = mode == "sampler" || mode == "neonTune" ? 0.94 + 0.06 * punch : 1
+      var tile = baseRect.insetBy(dx: baseRect.width * (1 - factor) / 2, dy: baseRect.height * (1 - factor) / 2)
+      tile.origin.y += punch * w * 0.009
+      let timeSample = event.destinationStartSample + min(max(0, sample - event.destinationStartSample), event.durationSamples - 1)
+      let sourceTime = Self.sourceTime(assetId: event.assetId, sample: timeSample, events: [event], duration: provider.duration)
+      var image = CIImage(cgImage: try await provider.image(at: sourceTime))
+      if let crop = request.video.clipCrops.first(where: { $0.assetId == event.assetId })?.crop {
+        image = image.cropped(to: CGRect(x: image.extent.minX + CGFloat(crop.x) * image.extent.width,
+          y: image.extent.minY + CGFloat(1 - crop.y - crop.height) * image.extent.height,
+          width: CGFloat(crop.width) * image.extent.width, height: CGFloat(crop.height) * image.extent.height))
+      }
+      if event.isMirrored && mode != "vinyl" {
+        image = image.transformed(by: CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: image.extent.midX * 2, ty: 0))
+      }
+      let scale = max(tile.width / image.extent.width, tile.height / image.extent.height)
+      image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+      image = image.transformed(by: CGAffineTransform(translationX: tile.midX - image.extent.midX, y: tile.midY - image.extent.midY))
+      if mode == "vinyl" {
+        // Rotation follows source time, so the disc also reverses on scratches.
+        let angle = CGFloat(CMTimeGetSeconds(sourceTime) * 2.4)
+        let rotate = CGAffineTransform(translationX: tile.midX, y: tile.midY)
+          .rotated(by: angle).translatedBy(x: -tile.midX, y: -tile.midY)
+        image = image.transformed(by: rotate)
+      } else if mode == "neonTune" && isPlaying {
+        image = image.clampedToExtent().applyingFilter("CITwirlDistortion", parameters: [
+          "inputCenter": CIVector(x: tile.midX, y: tile.midY),
+          "inputRadius": min(tile.width, tile.height) * 0.75,
+          "inputAngle": sin(Double(sample) / 48000 * 4) * 0.24
+        ]).applyingFilter("CIHueAdjust", parameters: ["inputAngle": Double(sample) / 48000 * 0.9])
+      }
+      image = image.cropped(to: tile)
+      if !isPlaying { image = image.applyingFilter("CIColorControls", parameters: ["inputSaturation": 0.25, "inputBrightness": -0.16]) }
+      if mode == "vinyl" {
+        let radius = min(tile.width, tile.height) / 2
+        guard let mask = CIFilter(name: "CIRadialGradient", parameters: [
+          "inputCenter": CIVector(x: tile.midX, y: tile.midY), "inputRadius0": radius - 1,
+          "inputRadius1": radius, "inputColor0": CIColor.white, "inputColor1": CIColor.black
+        ])?.outputImage else { throw VideoRenderError.writerFailed }
+        canvas = image.applyingFilter("CIBlendWithMask", parameters: ["inputBackgroundImage": canvas, "inputMaskImage": mask]).cropped(to: bounds)
+      } else { canvas = image.composited(over: canvas) }
+      cards.append(PerformanceCard(event: event, playing: isPlaying, rect: tile, index: index, age: age, peaks: peaks, voices: live.count))
+    }
+    context.render(canvas, to: buffer, bounds: bounds, colorSpace: CGColorSpace(name: CGColorSpace.itur_709))
+    try drawPerformanceOverlay(cards, frame: frame, request: request, peaks: waveformPeaks,
+      into: buffer, width: width, height: height)
+    try drawCaptions(request.video.captions.filter { sample >= $0.destinationStartSample && sample < $0.destinationStartSample + $0.durationSamples }, into: buffer, width: width, height: height)
+  }
+
+  private func drawPerformanceOverlay(_ cards: [PerformanceCard], frame: Int,
+    request: VideoRenderRequestPayload, peaks: [CGFloat], into buffer: CVPixelBuffer,
+    width: Int, height: Int) throws {
+    CVPixelBufferLockBaseAddress(buffer, [])
+    defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+    guard let base = CVPixelBufferGetBaseAddress(buffer), let g = CGContext(data: base,
+      width: width, height: height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue)
+    else { throw VideoRenderError.writerFailed }
+    let w = CGFloat(width), h = CGFloat(height), mode = request.arrangement.performanceMode
+    let palette: [CGColor] = [CGColor(red: 0.7, green: 1, blue: 0.28, alpha: 1),
+      CGColor(red: 1, green: 0.39, blue: 0.59, alpha: 1), CGColor(red: 0.35, green: 0.85, blue: 1, alpha: 1),
+      CGColor(red: 1, green: 0.76, blue: 0.27, alpha: 1)]
+    func text(_ string: String, _ x: CGFloat, _ y: CGFloat, _ size: CGFloat, _ color: CGColor) {
+      let attrs: [NSAttributedString.Key: Any] = [NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("HiraginoSans-W6" as CFString, size, nil), NSAttributedString.Key(kCTForegroundColorAttributeName as String): color]
+      let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: attrs))
+      g.textPosition = CGPoint(x: x, y: y); CTLineDraw(line, g)
+    }
+    let white = CGColor(gray: 1, alpha: 1)
+    let title = ["mosaic": "MEMORY WALL", "vinyl": "VOICE VINYL", "sampler": "DAILY SAMPLER", "voiceLead": "VOICE & MELODY", "neonTune": "RAINBOW TUNE", "loopStation": "LOOP STATION"][mode] ?? "OTOGRASHI"
+    text("OTOGRASHI / 128 BPM", w * 0.06, h * 0.937, w * 0.024, palette[0])
+    text(title, w * 0.06, h * 0.871, w * 0.06, white)
+    let seconds = request.arrangement.totalSamples / 48000
+    text("\(cards.filter(\.playing).count) VOICES  ·  \(String(format: "%02d", frame / 30)) / \(seconds)s", w * 0.06, h * 0.833, w * 0.025, CGColor(gray: 0.67, alpha: 1))
+    for card in cards {
+      let color = palette[card.index % palette.count], r = card.rect
+      g.setStrokeColor(card.playing ? color : CGColor(gray: 0.35, alpha: 0.5))
+      g.setLineWidth(w * (card.playing ? 0.006 : 0.002))
+      if mode == "vinyl" {
+        g.strokeEllipse(in: r)
+        for k in [0.06, 0.12, 0.18] { g.strokeEllipse(in: r.insetBy(dx: r.width * k, dy: r.height * k)) }
+        g.setFillColor(CGColor(gray: 0.04, alpha: 0.9)); g.fillEllipse(in: r.insetBy(dx: r.width * 0.35, dy: r.height * 0.35))
+        g.setFillColor(color); g.fillEllipse(in: r.insetBy(dx: r.width * 0.465, dy: r.height * 0.465))
+      } else { g.stroke(r) }
+      let title = request.video.clipNames[card.event.assetId] ?? "SOUND \(card.index + 1)"
+      let part = card.event.partIndex ?? 0
+      let name = part > 0 ? "\(title) ·\(part + 1)" : title
+      g.saveGState(); g.clip(to: CGRect(x: r.minX, y: r.minY - w * 0.04, width: r.width, height: w * 0.05))
+      text(String(name.prefix(14)), r.minX + 2, r.minY - w * 0.033, min(w * 0.027, r.width * 0.09), card.playing ? white : CGColor(gray: 0.55, alpha: 1)); g.restoreGState()
+      if card.playing && (mode == "sampler" || mode == "neonTune" || mode == "loopStation") {
+        let radius = min(r.width, r.height) * 0.44
+        // Each pad follows its OWN post-fade rendered samples, not another voice in the mix.
+        for k in 0..<40 {
+          let a = Double(k) * Double.pi * 2 / 40
+          let envelopeFrame = card.age / 1600 + k / 5 - 4
+          let level = card.peaks.isEmpty ? CGFloat(0) : CGFloat(card.peaks[max(0, min(card.peaks.count - 1, envelopeFrame))])
+          let length = w * 0.01 + min(1, level) * w * 0.038
+          let x = CGFloat(cos(a)), y = CGFloat(sin(a))
+          g.move(to: CGPoint(x: r.midX + x * radius, y: r.midY + y * radius))
+          g.addLine(to: CGPoint(x: r.midX + x * (radius + length), y: r.midY + y * (radius + length)))
+        }
+        g.setLineWidth(w * 0.003); g.strokePath()
+      }
+      if card.voices > 1 {
+        text("×\(card.voices)", r.maxX - w * 0.055, r.maxY - w * 0.037, w * 0.029, color)
+      }
+      if card.playing && card.event.isReversed {
+        text("REVERSE", r.minX + 5, r.maxY - w * 0.037, w * 0.026, palette[1])
+      }
+    }
+    let beat = frame * 1600 / 22500
+    for index in 0..<16 {
+      let x = w * 0.06 + CGFloat(index) * w * 0.055
+      g.setFillColor(index == beat % 16 ? palette[0] : CGColor(gray: 0.3, alpha: 0.8))
+      g.fill(CGRect(x: x, y: h * 0.082, width: w * 0.038, height: h * 0.008))
+    }
+    text("RECORDED LIFE. REMIXED.", w * 0.06, h * 0.046, w * 0.025, CGColor(gray: 0.7, alpha: 1))
   }
 
   static func targetRects(
@@ -947,14 +1161,14 @@ struct VideoRenderer {
     let file = try AVAudioFile(forReading: url)
     guard let buffer = AVAudioPCMBuffer(
       pcmFormat: file.processingFormat,
-      frameCapacity: AVAudioFrameCount(ArrangementPayload.totalSamples)
+      frameCapacity: AVAudioFrameCount(min(file.length, 1_440_000))
     ) else { throw VideoRenderError.sourceReadFailed }
     try file.read(into: buffer, frameCount: buffer.frameCapacity)
     guard let samples = buffer.floatChannelData?[0] else {
       throw VideoRenderError.sourceReadFailed
     }
-    var peaks = Array(repeating: CGFloat(0), count: frameCount)
-    for sample in 0..<min(Int(buffer.frameLength), ArrangementPayload.totalSamples) {
+    var peaks = Array(repeating: CGFloat(0), count: max(1, (Int(buffer.frameLength) + 1599) / 1600))
+    for sample in 0..<Int(buffer.frameLength) {
       let frame = sample / 1_600
       peaks[frame] = max(peaks[frame], CGFloat(abs(samples[sample])))
     }
@@ -1166,7 +1380,7 @@ struct VideoRenderer {
       let elapsed = sample - event.destinationStartSample
       return elapsed >= 0 && elapsed < 28_800
     }
-    guard !active.isEmpty || (waveformEvent != nil && waveformPeaks.count == Self.frameCount)
+    guard !active.isEmpty || (waveformEvent != nil && !waveformPeaks.isEmpty)
     else { return }
     CVPixelBufferLockBaseAddress(buffer, [])
     defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
@@ -1184,7 +1398,7 @@ struct VideoRenderer {
     else { throw VideoRenderError.writerFailed }
 
     graphics.setLineCap(.round)
-    if let waveformEvent, waveformPeaks.count == Self.frameCount {
+    if let waveformEvent, !waveformPeaks.isEmpty {
       let fade = CGFloat(1 - Double(sample - waveformEvent.destinationStartSample) / 28_800)
       let centerY = CGFloat(height) * (visibleAssetIds.count > 1 ? 0.45 : 0.22)
       let step = CGFloat(width) * 0.88 / 48
@@ -1192,7 +1406,7 @@ struct VideoRenderer {
       let path = CGMutablePath()
       for bar in 0..<48 {
         let frame = currentFrame + bar - 24
-        let peak = waveformPeaks[max(0, min(Self.frameCount - 1, frame))]
+        let peak = waveformPeaks[max(0, min(waveformPeaks.count - 1, frame))]
         let barHeight = CGFloat(height) * (0.004 + 0.068 * min(CGFloat(1), peak).squareRoot())
         let x = CGFloat(width) * 0.06 + (CGFloat(bar) + 0.5) * step
         path.move(to: CGPoint(x: x, y: centerY - barHeight / 2))

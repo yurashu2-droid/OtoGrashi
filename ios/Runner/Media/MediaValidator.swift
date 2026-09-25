@@ -29,8 +29,12 @@ struct MediaValidator {
     expectedHeight: Int,
     expectedOnsetSample: Int?,
     expectedVideoCueFrame: Int? = nil,
+    expectedTotalSamples: Int = 720_000,
     cancellation: CancellationToken? = nil
   ) async throws -> MediaValidationReport {
+    guard [720_000, 1_440_000].contains(expectedTotalSamples) else {
+      throw VideoRenderError.unsupportedContract
+    }
     try checkCancellation(cancellation)
     let asset = AVURLAsset(url: url)
     let duration = try await asset.load(.duration)
@@ -111,7 +115,7 @@ struct MediaValidator {
     let decoded = try NativePCMReader().readTimeline(
       url: url,
       startSample: range.startSample,
-      durationSamples: min(ArrangementPayload.totalSamples, range.endSample - range.startSample)
+      durationSamples: min(expectedTotalSamples, range.endSample - range.startSample)
     )
     guard let audibleOffset = decoded.samples.firstIndex(where: { abs($0) > 0.001 }) else {
       throw VideoRenderError.sourceReadFailed
@@ -136,11 +140,11 @@ struct MediaValidator {
       videoCueTimeUs: cue?.timeUs,
       audioVideoDeltaUs: syncDelta
     )
-    guard durationUs == 15_000_000,
-      frames == VideoRenderer.frameCount,
+    guard durationUs == Int64(expectedTotalSamples) * 1_000_000 / 48_000,
+      frames == expectedTotalSamples / 1_600,
       width == expectedWidth,
       height == expectedHeight,
-      audioDurationUs == 15_000_000,
+      audioDurationUs == Int64(expectedTotalSamples) * 1_000_000 / 48_000,
       frameTimestampsValid,
       colorPrimaries == "ITU_R_709_2",
       transferFunction == "ITU_R_709_2",

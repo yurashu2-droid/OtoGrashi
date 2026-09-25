@@ -3,6 +3,16 @@ import 'melody_template.dart';
 
 export '../media/media_messages.dart';
 
+enum PerformanceMode {
+  natural,
+  mosaic,
+  vinyl,
+  sampler,
+  voiceLead,
+  neonTune,
+  loopStation,
+}
+
 enum ArrangementStyle { sparse, swaying, lively }
 
 enum VideoLoopMode { loop, hold, once }
@@ -44,7 +54,6 @@ final class EventFades {
   );
 }
 
-/// A note change on a continuing phrase; all times are relative 48 kHz samples.
 final class PitchStep {
   const PitchStep({
     required this.offsetSamples,
@@ -74,6 +83,7 @@ final class SoundEvent {
     required this.durationSamples,
     required this.gain,
     required this.fades,
+    this.partIndex = 0,
     this.pitchSemitones = 0,
     this.sourceDurationSamples,
     this.targetMidiNote,
@@ -88,14 +98,11 @@ final class SoundEvent {
   final int durationSamples;
   final double gain;
   final EventFades fades;
+  final int partIndex;
   final double pitchSemitones;
   final int? sourceDurationSamples;
   final double? targetMidiNote;
   final List<PitchStep> pitchSteps;
-  final bool reverse;
-  final SoundTreatment treatment;
-  int get effectiveSourceDurationSamples =>
-      sourceDurationSamples ?? durationSamples;
 
   bool get hasValidPitchSteps {
     if (pitchSteps.length > 128) return false;
@@ -115,19 +122,25 @@ final class SoundEvent {
     return pitchSteps.isEmpty || sourceDurationSamples != null;
   }
 
+  final bool reverse;
+  final SoundTreatment treatment;
+  int get effectiveSourceDurationSamples =>
+      sourceDurationSamples ?? durationSamples;
+
   Map<String, Object?> toJson() => {
     'assetId': assetId,
     'sourceStartSample': sourceStartSample,
     'destinationStartSample': destinationStartSample,
     'durationSamples': durationSamples,
     'gain': gain,
+    if (partIndex != 0) 'partIndex': partIndex,
     'fades': fades.toJson(),
     if (pitchSemitones != 0) 'pitchSemitones': pitchSemitones,
     if (sourceDurationSamples != null)
       'sourceDurationSamples': sourceDurationSamples,
     if (targetMidiNote != null) 'targetMidiNote': targetMidiNote,
     if (pitchSteps.isNotEmpty)
-      'pitchSteps': pitchSteps.map((p) => p.toJson()).toList(),
+      'pitchSteps': pitchSteps.map((s) => s.toJson()).toList(),
     if (reverse) 'reverse': true,
     if (treatment != SoundTreatment.original) 'treatment': treatment.name,
   };
@@ -138,6 +151,7 @@ final class SoundEvent {
     destinationStartSample: json['destinationStartSample'] as int,
     durationSamples: json['durationSamples'] as int,
     gain: (json['gain'] as num).toDouble(),
+    partIndex: json['partIndex'] as int? ?? 0,
     fades: EventFades.fromJson((json['fades'] as Map<Object?, Object?>).cast()),
     pitchSemitones: (json['pitchSemitones'] as num?)?.toDouble() ?? 0,
     sourceDurationSamples: json['sourceDurationSamples'] as int?,
@@ -218,6 +232,7 @@ final class VideoEvent {
     this.sourceDurationSamples,
     this.reverse = false,
     this.mirror = false,
+    this.partIndex = 0,
   });
 
   final String assetId;
@@ -229,6 +244,7 @@ final class VideoEvent {
   final int? sourceDurationSamples;
   final bool reverse;
   final bool mirror;
+  final int partIndex;
   int get effectiveSourceDurationSamples =>
       sourceDurationSamples ?? durationSamples;
 
@@ -243,6 +259,7 @@ final class VideoEvent {
       'sourceDurationSamples': sourceDurationSamples,
     if (reverse) 'reverse': true,
     if (mirror) 'mirror': true,
+    if (partIndex != 0) 'partIndex': partIndex,
   };
 
   factory VideoEvent.fromJson(Map<String, Object?> json) => VideoEvent(
@@ -259,6 +276,7 @@ final class VideoEvent {
     sourceDurationSamples: json['sourceDurationSamples'] as int?,
     reverse: json['reverse'] as bool? ?? false,
     mirror: json['mirror'] as bool? ?? false,
+    partIndex: json['partIndex'] as int? ?? 0,
   );
 }
 
@@ -278,6 +296,7 @@ final class Arrangement {
     required List<VideoEvent> videoEvents,
     this.sampleRate = 48000,
     this.totalSamples = 720000,
+    this.performanceMode = PerformanceMode.natural,
   }) : sourceAssetIds = List.unmodifiable(sourceAssetIds),
        unusableAssetIds = List.unmodifiable(unusableAssetIds),
        events = List.unmodifiable(events),
@@ -297,7 +316,8 @@ final class Arrangement {
         ].whereType<String>().any((id) => !sourceAssetIds.contains(id))) {
       throw const MediaContractException('Song role source is not in project.');
     }
-    if (sampleRate != 48000 || totalSamples != 720000) {
+    if (sampleRate != 48000 ||
+        !const [720000, 1440000].contains(totalSamples)) {
       throw const MediaContractException('Unsupported arrangement clock.');
     }
     if (templateVersion != 1 || analysisVersion != 1 || rendererVersion != 1) {
@@ -305,6 +325,8 @@ final class Arrangement {
     }
     if (events.any(
           (event) =>
+              event.partIndex < 0 ||
+              event.partIndex > 15 ||
               !event.hasValidPitchSteps ||
               event.sourceStartSample < 0 ||
               event.effectiveSourceDurationSamples <= 0 ||
@@ -361,6 +383,7 @@ final class Arrangement {
           audio.effectiveSourceDurationSamples !=
               video.effectiveSourceDurationSamples ||
           audio.reverse != video.reverse ||
+          audio.partIndex != video.partIndex ||
           video.sourceVideoStartTime.numerator != audio.sourceStartSample ||
           video.sourceVideoStartTime.denominator != sampleRate) {
         throw const MediaContractException(
@@ -424,6 +447,9 @@ final class Arrangement {
             .toList(),
         sampleRate: json['sampleRate'] as int,
         totalSamples: json['totalSamples'] as int,
+        performanceMode: PerformanceMode.values.byName(
+          json['performanceMode'] as String? ?? 'natural',
+        ),
       );
     } on TypeError {
       throw const MediaContractException('Malformed arrangement JSON.');
@@ -431,11 +457,12 @@ final class Arrangement {
   }
 
   static const int schemaVersion = 1;
-  static const int maxEvents = 256;
+  static const int maxEvents = 512;
   static const int barSamples = 90000;
   static const int beatSamples = 22500;
   final int sampleRate;
   final int totalSamples;
+  final PerformanceMode performanceMode;
   final String templateId;
   final int templateVersion;
   final int analysisVersion;
@@ -453,6 +480,8 @@ final class Arrangement {
     'schemaVersion': schemaVersion,
     'sampleRate': sampleRate,
     'totalSamples': totalSamples,
+    if (performanceMode != PerformanceMode.natural)
+      'performanceMode': performanceMode.name,
     'templateId': templateId,
     'templateVersion': templateVersion,
     'analysisVersion': analysisVersion,

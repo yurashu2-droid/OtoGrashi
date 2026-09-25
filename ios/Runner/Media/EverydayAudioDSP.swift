@@ -117,6 +117,8 @@ enum EverydayAudioDSP {
     let midiNote: Double
   }
 
+  typealias PitchStep = NoteStep
+
   static func validSteps(_ steps: [NoteStep], count: Int) -> Bool {
     guard steps.count <= 128 else { return false }
     var end = 0
@@ -138,9 +140,9 @@ enum EverydayAudioDSP {
   /// source separation. Large transpositions still sound deliberately edited.
   static func render(
     _ input: [Float], count: Int, targetMidiNote: Double?, reverse: Bool = false,
-    pitchSteps: [NoteStep] = []
+    pitchSteps: [NoteStep] = [], hardTune: Bool = false
   ) throws -> [Float] {
-    guard count > 0, count <= 720_000, !input.isEmpty, input.count <= 720_000,
+    guard count > 0, count <= 1_440_000, !input.isEmpty, input.count <= 720_000,
       input.allSatisfy(\.isFinite), validSteps(pitchSteps, count: count),
       targetMidiNote == nil || (targetMidiNote!.isFinite && (24...100).contains(targetMidiNote!))
     else { throw Failure.invalidInput }
@@ -168,7 +170,7 @@ enum EverydayAudioDSP {
       while stepIndex + 1 < steps.count && steps[stepIndex + 1].offsetSamples <= t {
         stepIndex += 1
       }
-      let note = noteAt(t, steps: steps, index: stepIndex)
+      let note = noteAt(t, steps: steps, index: stepIndex, transition: hardTune ? 48 : 384)
       let targetPeriod = Double(sampleRate) / (440 * pow(2, (note - 69) / 12))
       while nearest + 1 < marks.count &&
         abs(Double(marks[nearest + 1]) - position) < abs(Double(marks[nearest]) - position) {
@@ -280,14 +282,13 @@ enum EverydayAudioDSP {
     return marks
   }
 
-  private static func noteAt(_ offset: Int, steps: [NoteStep], index: Int) -> Double {
+  private static func noteAt(_ offset: Int, steps: [NoteStep], index: Int, transition: Int = 384) -> Double {
     let current = steps[index]
     guard index > 0 else { return current.midiNote }
     let previous = steps[index - 1]
     let gap = current.offsetSamples - (previous.offsetSamples + previous.durationSamples)
     // Eight milliseconds, not an audible beat-long glide. Natural syllables
     // continue through small articulation gaps in the source score.
-    let transition = 384
     if gap <= 1920 && offset < current.offsetSamples + transition {
       let f = max(0, min(1, Double(offset - current.offsetSamples) / Double(transition)))
       let smooth = f * f * (3 - 2 * f)

@@ -254,6 +254,7 @@ abstract final class ProjectReducer {
       y: y,
       destinationStartSample: destinationStartSample,
       durationSamples: durationSamples,
+      totalSamples: project.arrangement['totalSamples'] as int? ?? 720000,
     );
     final recipe = _mutableMap(project.videoRecipe);
     final captions = _mutableListOfMaps(recipe['captions']);
@@ -426,6 +427,7 @@ void _validateCaption(
   required double y,
   required int destinationStartSample,
   required int durationSamples,
+  int totalSamples = 720000,
 }) {
   if (text.runes.length > 80 ||
       !x.isFinite ||
@@ -436,7 +438,7 @@ void _validateCaption(
       y > 1 ||
       destinationStartSample < 0 ||
       durationSamples <= 0 ||
-      destinationStartSample + durationSamples > 720000) {
+      destinationStartSample + durationSamples > totalSamples) {
     throw const ProjectValidationException('Caption is out of range.');
   }
 }
