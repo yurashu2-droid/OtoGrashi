@@ -109,6 +109,7 @@ class Event:
         self.start = raw["destinationStartSample"]
         self.dur = raw["durationSamples"]
         self.kind = raw.get("treatment", "rhythm")
+        self.role = raw.get("role")  # melody / bass / kick / snare / hat in score arrangements
         self.midi = raw.get("targetMidiNote")
         self.src_start = raw["sourceStartSample"]
         self.src_dur = raw.get("sourceDurationSamples") or raw["durationSamples"]
@@ -130,7 +131,9 @@ class Event:
         return start + offset % window
 
 
-def render_audio(events, sources, total):
+def render_audio(events, sources, total, source_pitch=None):
+    """source_pitch: measured MIDI pitch per clip index. Without it the legacy
+    recipes keep a gentle ±semitone range around middle C."""
     mix = np.zeros(total, np.float32)
     for e in events:
         src = sources[e.c]
@@ -138,7 +141,10 @@ def render_audio(events, sources, total):
         start = e.src_start % max(1, src.samples - window + 1)
         chunk = src.pcm[start:start + window]
         if e.kind == "tuned" and e.midi:
-            ratio = float(np.clip(2 ** ((e.midi - 60) / 12), 0.72, 1.45))
+            if source_pitch:
+                ratio = float(np.clip(2 ** ((e.midi - source_pitch[e.c]) / 12), 0.3, 2.6))
+            else:
+                ratio = float(np.clip(2 ** ((e.midi - 60) / 12), 0.72, 1.45))
             pos = (np.arange(e.dur) * ratio) % len(chunk)
             buf = np.interp(pos, np.arange(len(chunk)), chunk).astype(np.float32)
         else:
@@ -185,11 +191,12 @@ def text_center(draw, xy, s, f, fill, stroke=0, stroke_fill=None, anchor="mm"):
 
 
 class Ctx:
-    def __init__(self, events, sources, total):
+    def __init__(self, events, sources, total, title=None):
         self.events = events
         self.sources = sources
         self.total_t = total / SR
         self.names = [s.name for s in sources]
+        self.title = title
 
     def active(self, t, kinds=None):
         return [e for e in self.events if e.active(t) and (kinds is None or e.kind in kinds)]
@@ -243,10 +250,10 @@ def draw_op(canvas, ctx, t, style):
     if style == "paper":
         ld = ImageDraw.Draw(layer)
         ld.rounded_rectangle((36, 64, 580, 236), 18, fill=(*PAPER, int(240 * a)))
-        ld.text((64, 88), "なんでもない日の音", font=font(FONT_HAND, 50), fill=(*INK, alpha))
+        ld.text((64, 88), ctx.title or "なんでもない日の音", font=font(FONT_HAND, 50), fill=(*INK, alpha))
         ld.text((66, 164), cast, font=font(FONT_HAND, 28), fill=(*CORAL, alpha))
     else:
-        soft_text(layer, (46, 84), "なんでもない日の音", font(FONT_BOLD, 60), (255, 255, 255), alpha)
+        soft_text(layer, (46, 84), ctx.title or "なんでもない日の音", font(FONT_BOLD, 60), (255, 255, 255), alpha)
         soft_text(layer, (48, 170), cast, font(FONT_BOLD, 26), (255, 255, 255), alpha)
         ImageDraw.Draw(layer).rounded_rectangle((48, 214, 120, 220), 3, fill=(*CORAL, alpha))
     return Image.alpha_composite(canvas.convert("RGBA"), layer).convert("RGB")
@@ -284,8 +291,12 @@ def draw_ed(canvas, ctx, t, style):
     if logo_a > 0:
         size = int(96 + 30 * (1 - logo_a))
         text_center(d, (W / 2, H * 0.76), "オトグラシ", font(FONT_BOLD, size), fg)
-        text_center(d, (W / 2, H * 0.84), "・".join(ctx.names) + " でできた15秒",
-                    font(FONT_HAND, 30), CORAL)
+        if ctx.title:
+            text_center(d, (W / 2, H * 0.835), ctx.title, font(FONT_HAND, 34), CORAL)
+            text_center(d, (W / 2, H * 0.875), "演奏：" + "・".join(ctx.names), font(FONT_HAND, 26), fg)
+        else:
+            text_center(d, (W / 2, H * 0.84), "・".join(ctx.names) + " でできた15秒",
+                        font(FONT_HAND, 30), CORAL)
     # the curtain wipes up over the running footage for the first 0.2s
     wipe = ease_out(k / 0.2)
     if wipe < 1:
@@ -326,7 +337,8 @@ def sequencer_ribbon(canvas, ctx, t):
 def lead_of(ctx, t):
     """Newest sounding melodic voice, else newest sounding voice, else the last one heard."""
     live = ctx.voices(t)
-    melodic = [e for e in live if e.kind != "rhythm"]
+    melodic = [e for e in live if e.role == "melody"] or [
+        e for e in live if e.kind != "rhythm" and e.role is None]
     if melodic or live:
         return (melodic or live)[-1]
     return ctx.last_onset(t) or ctx.events[0]
@@ -528,10 +540,13 @@ def shot_pan(ctx, t, seg):
         rects.append((cx, cy, pw, ph, c, mirrored))
     # camera: whip to the slot of the newest melodic/phrase sound, pull back on section changes
     target_slot = next((r for r in rects if r[4] == lead.c and not r[5]), rects[0])
-    # pull back to the whole board at the start of the shot, then dive in
-    bar = 0
+    # pull back to every placed photo at the start of the shot, then dive in
     reveal = (t - seg[0]) < BEAT * 1.5
-    prev = ctx.last_onset(lead.t - 1e-4, lambda e: e.kind != "rhythm")
+    left = min(r[0] - r[2] / 2 for r in rects) - 40
+    right = max(r[0] + r[2] / 2 for r in rects) + 40
+    top = min(r[1] - r[3] / 2 for r in rects) - 40
+    bottom = max(r[1] + r[3] / 2 for r in rects) + 40
+    prev = ctx.last_onset(lead.t - 1e-4, lambda e: e.kind != "rhythm" and e.role in (None, "melody"))
     prev_slot = next((r for r in rects if prev and r[4] == prev.c and not r[5]), target_slot)
     k = ease_in_out((t - lead.t) / 0.22)
     cx = prev_slot[0] + (target_slot[0] - prev_slot[0]) * k
@@ -539,9 +554,9 @@ def shot_pan(ctx, t, seg):
     zoom = min(W / (target_slot[2] + 60), H / (target_slot[3] + 60)) * 0.98
     if reveal:
         r = 1 - ease_in_out((t - seg[0] - BEAT) / (BEAT * 0.5))
-        zoom = zoom + (max(W / board_w, H / board_h) * 1.02 - zoom) * r
-        cx = cx + (board_w / 2 - cx) * r
-        cy = cy + (board_h / 2 - cy) * r
+        zoom = zoom + (min(W / (right - left), H / (bottom - top)) - zoom) * r
+        cx = cx + ((left + right) / 2 - cx) * r
+        cy = cy + ((top + bottom) / 2 - cy) * r
     rhythm = ctx.last_onset(t, lambda e: e.kind == "rhythm")
     if rhythm and t - rhythm.t < 0.1:
         zoom *= 1 + 0.03 * (1 - (t - rhythm.t) / 0.1)
@@ -690,14 +705,15 @@ def main():
     sources = [Source(src_dir / f"s{i}.mp4", src_dir / f"s{i}.wav", names[i]) for i in range(len(order))]
     events = [Event(raw, order.index(raw["assetId"]), i) for i, raw in enumerate(arrangement["events"])]
     total = arrangement["totalSamples"]
-    audio = render_audio(events, sources, total)
+    pitch = arrangement.get("sourcePitch")
+    audio = render_audio(events, sources, total, [pitch[i] for i in order] if pitch else None)
     wav_path = out_dir / "mix.wav"
     with wave.open(str(wav_path), "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(SR)
         wf.writeframes((audio * 32767).astype(np.int16).tobytes())
-    ctx = Ctx(events, sources, total)
+    ctx = Ctx(events, sources, total, arrangement.get("title"))
     frames = total // SPF
     for seed in seeds:
         plan = plan_shots(total / SR, seed)
