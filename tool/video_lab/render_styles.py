@@ -6,7 +6,9 @@ can be compared on Windows without an iOS build. Audio is a simplified
 re-implementation of the arrangement (chops, loops, resampled pitch); it is
 for judging picture/sound sync, not final sound quality.
 
-    python tool/video_lab/render_styles.py RECIPE.json SRC_DIR OUT_DIR [style ...]
+    python tool/video_lab/render_styles.py RECIPE.json SRC_DIR OUT_DIR [seed ...]
+
+Each seed plans a different sequence of shots along the song's energy curve.
 
 SRC_DIR holds s0.mp4/s0.wav, s1.mp4/s1.wav, ... and names.txt (one per line).
 """
@@ -319,55 +321,78 @@ def grid_cells(n):
     return [(c * W / cols, r * H / rows, W / cols, H / rows) for r in range(rows) for c in range(cols)]
 
 
-def style_burst(ctx, t):
-    bar = int(t / BAR)
-    bar_t = t - bar * BAR
-    lead = ctx.last_onset(t, lambda e: e.kind != "rhythm") or ctx.last_onset(t)
-    canvas = Image.new("RGB", (W, H), (0, 0, 0))
-    mode = ["full", "flip", "mirror", "burst", "stutter", "burst", "kaleido", "burst"][bar % 8]
-    if mode == "flip":
-        notes = ctx.onsets_between(bar * BAR, t + 1e-6, lambda e: e.kind != "rhythm")
-        age = t - lead.t
-        canvas.paste(cover(ctx.frame(lead, t), W, H, zoom=1.08 + 0.1 * max(0, 1 - age / 0.12),
-                           mirror=len(notes) % 2 == 1, dx=0.04 * (len(notes) % 3 - 1)))
-    if mode in ("full", "stutter"):
-        age = t - lead.t
-        pitch = (lead.midi or 60) - 60
-        zoom = 1 + 0.04 * max(-3, min(6, pitch)) / 6 + 0.14 * max(0, 1 - age / 0.12)
-        if mode == "stutter":
-            # every 16th note re-cuts to a tighter crop of the same moment
-            step = int(bar_t / (BEAT / 2))
-            zoom *= 1 + 0.12 * (step % 4)
-        canvas.paste(cover(ctx.frame(lead, t), W, H, zoom=zoom))
-    elif mode == "mirror":
-        half = cover(ctx.frame(lead, t), W / 2, H, zoom=1.05)
-        canvas.paste(half, (0, 0))
-        canvas.paste(ImageOps.mirror(half), (W // 2, 0))
-    elif mode == "kaleido":
-        q = cover(ctx.frame(lead, t), W / 2, H / 2, zoom=1.1)
-        canvas.paste(q, (0, 0))
-        canvas.paste(ImageOps.mirror(q), (W // 2, 0))
-        canvas.paste(ImageOps.flip(q), (0, H // 2))
-        canvas.paste(ImageOps.flip(ImageOps.mirror(q)), (W // 2, H // 2))
-    else:
-        # screens multiply with every hit inside the bar, then reset on the downbeat
-        hits = ctx.onsets_between(bar * BAR, t + 1e-6)
-        count = len(hits)
-        n = 1 if count <= 1 else 2 if count == 2 else 4 if count <= 4 else 9 if count <= 8 else 16
-        cells = grid_cells(n)
-        recent = hits[-n:] if hits else [lead]
-        for i, (x, y, w, h) in enumerate(cells):
-            e = recent[i % len(recent)]
-            mirror = (int(x / (W / 4)) + int(y / (H / 4))) % 2 == 1
-            tile = cover(ctx.frame(e, t), w, h, zoom=1.02, mirror=mirror)
-            if e is recent[-1] and t - e.t < 0.1:
-                tile = Image.eval(tile, lambda v: min(255, int(v * 1.35)))
-            canvas.paste(tile, (int(x), int(y)))
-        d = ImageDraw.Draw(canvas)
-        for x, y, w, h in cells:
-            d.rectangle((x, y, x + w, y + h), outline=(0, 0, 0), width=3)
-    if bar in (2, 4, 6) and bar_t < 0.06:
-        canvas = Image.blend(canvas, Image.new("RGB", (W, H), (255, 255, 255)), 0.6 * (1 - bar_t / 0.06))
+def lead_of(ctx, t):
+    return ctx.last_onset(t, lambda e: e.kind != "rhythm") or ctx.last_onset(t) or ctx.events[0]
+
+
+def punch(age, amount=0.14, length=0.12):
+    return 1 + amount * max(0.0, 1 - age / length)
+
+
+def shot_full(ctx, t, seg):
+    lead = lead_of(ctx, t)
+    pitch = max(-3, min(6, (lead.midi or 60) - 60))
+    return cover(ctx.frame(lead, t), W, H, zoom=(1 + 0.04 * pitch / 6) * punch(t - lead.t))
+
+
+def shot_flip(ctx, t, seg):
+    """Every melodic note cuts to a mirrored / shifted crop of the same face."""
+    lead = lead_of(ctx, t)
+    notes = len(ctx.onsets_between(seg[0], t + 1e-6, lambda e: e.kind != "rhythm"))
+    return cover(ctx.frame(lead, t), W, H, zoom=1.08 * punch(t - lead.t, 0.1),
+                 mirror=notes % 2 == 1, dx=0.04 * (notes % 3 - 1))
+
+
+def shot_stutter(ctx, t, seg):
+    """Every 8th note re-cuts to a tighter crop of the same moment."""
+    lead = lead_of(ctx, t)
+    step = int((t - seg[0]) / (BEAT / 2))
+    return cover(ctx.frame(lead, t), W, H, zoom=(1 + 0.12 * (step % 4)) * punch(t - lead.t, 0.08))
+
+
+def shot_mirror(ctx, t, seg):
+    lead = lead_of(ctx, t)
+    half = cover(ctx.frame(lead, t), W / 2, H, zoom=1.05 * punch(t - lead.t, 0.08))
+    canvas = Image.new("RGB", (W, H))
+    canvas.paste(half, (0, 0))
+    canvas.paste(ImageOps.mirror(half), (W // 2, 0))
+    return canvas
+
+
+def shot_kaleido(ctx, t, seg):
+    lead = lead_of(ctx, t)
+    q = cover(ctx.frame(lead, t), W / 2, H / 2, zoom=1.1 * punch(t - lead.t, 0.1))
+    canvas = Image.new("RGB", (W, H))
+    canvas.paste(q, (0, 0))
+    canvas.paste(ImageOps.mirror(q), (W // 2, 0))
+    canvas.paste(ImageOps.flip(q), (0, H // 2))
+    canvas.paste(ImageOps.flip(ImageOps.mirror(q)), (W // 2, H // 2))
+    return canvas
+
+
+def shot_burst(ctx, t, seg):
+    """Screens multiply with every hit, restarting on each downbeat."""
+    bar_start = seg[0] + int((t - seg[0]) / BAR) * BAR
+    hits = ctx.onsets_between(bar_start, t + 1e-6)
+    count = len(hits)
+    n = 1 if count <= 1 else 2 if count == 2 else 4 if count <= 4 else 9 if count <= 8 else 16
+    cells = grid_cells(n)
+    recent = hits[-n:] if hits else [lead_of(ctx, t)]
+    canvas = Image.new("RGB", (W, H))
+    for i, (x, y, w, h) in enumerate(cells):
+        e = recent[i % len(recent)]
+        mirror = (int(x / (W / 4)) + int(y / (H / 4))) % 2 == 1
+        tile = cover(ctx.frame(e, t), w, h, zoom=1.02, mirror=mirror)
+        if e is recent[-1] and t - e.t < 0.1:
+            tile = Image.eval(tile, lambda v: min(255, int(v * 1.35)))
+        canvas.paste(tile, (int(x), int(y)))
+    d = ImageDraw.Draw(canvas)
+    for x, y, w, h in cells:
+        d.rectangle((x, y, x + w, y + h), outline=(0, 0, 0), width=3)
+    return canvas
+
+
+def name_stamp(canvas, ctx, t):
     stamp = ctx.last_onset(t, lambda e: e.kind != "rhythm")
     if stamp and t - stamp.t < 0.45 and t > 1.4:
         a = t - stamp.t
@@ -375,8 +400,6 @@ def style_burst(ctx, t):
         d = ImageDraw.Draw(canvas)
         text_center(d, (W / 2, H * 0.70), ctx.names[stamp.c], font(FONT_BOLD, size),
                     CLIP_COLORS[stamp.c], 12, INK)
-    sequencer_ribbon(canvas, ctx, t)
-    return canvas
 
 
 # ---------------------------------------------------------------- style 2: パン (camera over a board)
@@ -413,7 +436,7 @@ def sound_pill(canvas, ctx, e, t, cx, cy):
                             fill=(*col, 255 if b == bars - 1 else 150 + b * 4))
 
 
-def style_pan(ctx, t):
+def shot_pan(ctx, t, seg):
     board_w, board_h = BOARD_W * W, BOARD_H * H
     board = Image.new("RGB", (int(board_w), int(board_h)), PAPER)
     seen = []
@@ -443,8 +466,9 @@ def style_pan(ctx, t):
         rects.append((cx, cy, pw, ph, c, mirrored))
     # camera: whip to the slot of the newest melodic/phrase sound, pull back on section changes
     target_slot = next((r for r in rects if r[4] == lead.c and not r[5]), rects[0])
-    bar = int(t / BAR)
-    reveal = bar in (3, 5, 7) and (t - bar * BAR) < BEAT * 1.5
+    # pull back to the whole board at the start of the shot, then dive in
+    bar = 0
+    reveal = (t - seg[0]) < BEAT * 1.5
     prev = ctx.last_onset(lead.t - 1e-4, lambda e: e.kind != "rhythm")
     prev_slot = next((r for r in rects if prev and r[4] == prev.c and not r[5]), target_slot)
     k = ease_in_out((t - lead.t) / 0.22)
@@ -452,7 +476,7 @@ def style_pan(ctx, t):
     cy = prev_slot[1] + (target_slot[1] - prev_slot[1]) * k
     zoom = min(W / (target_slot[2] + 60), H / (target_slot[3] + 60)) * 0.98
     if reveal:
-        r = ease_in_out((t - bar * BAR) / (BEAT * 0.5)) * (1 - ease_in_out((t - bar * BAR - BEAT) / (BEAT * 0.5)))
+        r = 1 - ease_in_out((t - seg[0] - BEAT) / (BEAT * 0.5))
         zoom = zoom + (max(W / board_w, H / board_h) * 1.02 - zoom) * r
         cx = cx + (board_w / 2 - cx) * r
         cy = cy + (board_h / 2 - cy) * r
@@ -490,11 +514,15 @@ def scribble_wave(canvas, e, t, cx, cy, width, color):
         d.line(pts, fill=color, width=12, joint="curve")
 
 
-def style_pile(ctx, t):
-    canvas = paper_texture().copy()
-    bar = int(t / BAR)
-    section = bar // 2
-    section_t = section * 2 * BAR
+PAPER_BG = None
+
+
+def shot_pile(ctx, t, seg):
+    global PAPER_BG
+    PAPER_BG = PAPER_BG or paper_texture()
+    canvas = PAPER_BG.copy()
+    section_t = seg[0]
+    section = int(section_t / BAR)
     spawned = ctx.onsets_between(section_t, t + 1e-6)
     carry = ctx.last_onset(section_t - 1e-6, lambda e: e.kind != "rhythm")
     if carry and (not spawned or spawned[0].t > section_t + 0.05):
@@ -503,7 +531,7 @@ def style_pile(ctx, t):
     cards = spawned[-10:]
     rng = np.random.default_rng(section * 101 + 3)
     layout = [(rng.uniform(0.18, 0.82), rng.uniform(0.2, 0.8), rng.uniform(-9, 9)) for _ in range(len(spawned) + 1)]
-    clear = t - section_t > 2 * BAR - 0.12
+    clear = t > seg[1] - 0.12
     for rank, e in enumerate(cards):
         idx = spawned.index(e)
         fx, fy, rot = layout[idx]
@@ -528,7 +556,7 @@ def style_pile(ctx, t):
         cx = fx * W
         cy = fy * H
         if clear:
-            cx += (t - (section_t + 2 * BAR - 0.12)) / 0.12 * W * (1 if idx % 2 else -1)
+            cx += (t - (seg[1] - 0.12)) / 0.12 * W * (1 if idx % 2 else -1)
         canvas.paste(shadow, (int(cx - shadow.width / 2 + 6), int(cy - shadow.height / 2 + 12)), shadow)
         canvas.paste(framed, (int(cx - framed.width / 2), int(cy - framed.height / 2)), framed)
         if rank == len(cards) - 1 and e.kind != "rhythm":
@@ -541,15 +569,60 @@ def style_pile(ctx, t):
     return canvas
 
 
-# ---------------------------------------------------------------- main
+# ---------------------------------------------------------------- director
 
-STYLES = {"burst": style_burst, "pan": style_pan, "pile": style_pile}
-OP_ED_LOOK = {"burst": "bold", "pan": "paper", "pile": "paper"}
+SHOTS = {"full": shot_full, "flip": shot_flip, "stutter": shot_stutter, "mirror": shot_mirror,
+         "kaleido": shot_kaleido, "burst": shot_burst, "pan": shot_pan, "pile": shot_pile}
+BLEED = {"full", "flip", "stutter", "mirror", "kaleido", "burst"}
+LONG = {"pan", "pile"}  # need two bars to build up
+POOLS = {
+    "calm": ["full", "flip", "pan"],
+    "mid": ["mirror", "stutter", "pile", "pan", "flip"],
+    "high": ["burst", "kaleido", "stutter", "burst"],
+}
+
+
+def plan_shots(total_t, seed):
+    """Pick one shot per bar along an energy curve; the seed makes every video different."""
+    rng = np.random.default_rng(seed)
+    bars = int(round(total_t / BAR))
+    plan, bar, last, used = [], 0, None, set()
+    while bar < bars:
+        p = bar / bars
+        energy = "calm" if p < 0.25 else "mid" if p < 0.6 else "high"
+        if bar == bars - 1:
+            energy = "high"
+        choices = [c for c in POOLS[energy] if c != last and not (c in LONG and bar + 2 > bars - 1)]
+        if bar == 0:  # the opening introduces a face, not a board
+            choices = [c for c in choices if c in BLEED]
+        fresh = [c for c in choices if c not in used]
+        choices = fresh or choices
+        shot = choices[rng.integers(len(choices))]
+        used.add(shot)
+        span = 2 if shot in LONG else 1
+        plan.append((shot, bar * BAR, (bar + span) * BAR, energy))
+        bar, last = bar + span, shot
+    if not any(s == "burst" for s, *_ in plan):
+        s0, a0, b0, e0 = plan[-1]
+        plan[-1] = ("burst", a0, b0, e0)
+    return plan
+
+
+def director_frame(ctx, t, plan, hud):
+    shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
+    canvas = SHOTS[shot](ctx, t, (start, end))
+    if shot in BLEED:
+        name_stamp(canvas, ctx, t)
+        if hud:
+            sequencer_ribbon(canvas, ctx, t)
+    if energy != "calm" and t - start < 0.06 and start > 0:
+        canvas = Image.blend(canvas, Image.new("RGB", (W, H), (255, 255, 255)), 0.6 * (1 - (t - start) / 0.06))
+    return canvas
 
 
 def main():
     recipe_path, src_dir, out_dir = map(Path, sys.argv[1:4])
-    wanted = sys.argv[4:] or list(STYLES)
+    seeds = [int(v) for v in sys.argv[4:]] or [1, 2, 3]
     out_dir.mkdir(parents=True, exist_ok=True)
     recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
     arrangement = recipe["arrangement"]
@@ -567,20 +640,22 @@ def main():
         wf.writeframes((audio * 32767).astype(np.int16).tobytes())
     ctx = Ctx(events, sources, total)
     frames = total // SPF
-    for name in wanted:
-        out = out_dir / f"{name}.mp4"
+    for seed in seeds:
+        plan = plan_shots(total / SR, seed)
+        hud = seed % 2 == 1
+        look = "bold" if seed % 3 else "paper"
+        print(f"seed {seed}: look={look} hud={hud} " + " > ".join(p[0] for p in plan))
+        out = out_dir / f"seed{seed}.mp4"
         proc = subprocess.Popen([FFMPEG, "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
                                  "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-i", str(wav_path),
                                  "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "fast",
                                  "-c:a", "aac", "-b:a", "160k", "-shortest", str(out)], stdin=subprocess.PIPE)
         for f in range(frames):
             t = f / FPS
-            img = STYLES[name](ctx, t)
-            img = draw_op(img, ctx, t, OP_ED_LOOK[name])
-            img = draw_ed(img, ctx, t, OP_ED_LOOK[name])
+            img = director_frame(ctx, t, plan, hud)
+            img = draw_op(img, ctx, t, look)
+            img = draw_ed(img, ctx, t, look)
             proc.stdin.write(img.convert("RGB").tobytes())
-            if f % 90 == 0:
-                print(name, f, flush=True)
         proc.stdin.close()
         proc.wait()
         print("wrote", out)
