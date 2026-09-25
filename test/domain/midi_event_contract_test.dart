@@ -28,19 +28,19 @@ void main() {
     }
   });
 
-  test('160 events fit but 161 and mismatched video events are rejected', () {
+  test('512 events fit but 513 and mismatched video events are rejected', () {
     expect(
-      Arrangement.fromJson(_arrangement(160).toJson()).events,
-      hasLength(160),
+      Arrangement.fromJson(_arrangement(Arrangement.maxEvents).toJson()).events,
+      hasLength(Arrangement.maxEvents),
     );
-    final json = _arrangement(160).toJson();
+    final json = _arrangement(Arrangement.maxEvents).toJson();
     final audio = (json['events'] as List<Object?>).first;
     final video = (json['videoEvents'] as List<Object?>).first;
     expect(
       () => Arrangement.fromJson({
         ...json,
-        'events': List<Object?>.filled(161, audio),
-        'videoEvents': List<Object?>.filled(161, video),
+        'events': List<Object?>.filled(Arrangement.maxEvents + 1, audio),
+        'videoEvents': List<Object?>.filled(Arrangement.maxEvents + 1, video),
       }),
       throwsA(isA<MediaContractException>()),
     );
@@ -74,12 +74,14 @@ void main() {
     final event = Map<String, Object?>.from(
       (json['events'] as List<Object?>).first! as Map,
     )..['sourceStartSample'] = 9223372036854775807;
-    final video = Map<String, Object?>.from(
-      (json['videoEvents'] as List<Object?>).first! as Map,
-    )..['sourceVideoStartTime'] = {
-      'numerator': 9223372036854775807,
-      'denominator': 48000,
-    };
+    final video =
+        Map<String, Object?>.from(
+            (json['videoEvents'] as List<Object?>).first! as Map,
+          )
+          ..['sourceVideoStartTime'] = {
+            'numerator': 9223372036854775807,
+            'denominator': 48000,
+          };
     expect(
       () => Arrangement.fromJson({
         ...json,
@@ -93,12 +95,13 @@ void main() {
 
 Arrangement _arrangement(int count) {
   final events = List<SoundEvent>.generate(count, (index) {
-    final start = index * 4_500;
+    const eventSamples = 1_000;
+    final start = index * eventSamples;
     return SoundEvent(
       assetId: 'one',
       sourceStartSample: 0,
       destinationStartSample: start,
-      durationSamples: 4_500,
+      durationSamples: eventSamples,
       gain: 0.5,
       fades: const EventFades(fadeInSamples: 120, fadeOutSamples: 120),
       pitchSemitones: index.isEven ? -12 : 12,

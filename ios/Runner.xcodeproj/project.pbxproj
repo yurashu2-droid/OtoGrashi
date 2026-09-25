@@ -28,6 +28,7 @@
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
+		A82400010000000000000001 /* EverydayAudioDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = A82400020000000000000002 /* EverydayAudioDSP.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -83,6 +84,7 @@
 		97C146FD1CF9000F007C117D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A82400020000000000000002 /* EverydayAudioDSP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EverydayAudioDSP.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -113,6 +115,7 @@
 			children = (
 				A70000040000000000000004 /* AudioSessionCoordinator.swift */,
 				A40000020000000000000002 /* AudioAnalyzer.swift */,
+				A82400020000000000000002 /* EverydayAudioDSP.swift */,
 				A50000120000000000000012 /* AudioRenderer.swift */,
 				A70000020000000000000002 /* CaptureService.swift */,
 				A50000140000000000000014 /* JobRegistry.swift */,
@@ -330,6 +333,7 @@
 			files = (
 				A70000030000000000000003 /* AudioSessionCoordinator.swift in Sources */,
 				A40000010000000000000001 /* AudioAnalyzer.swift in Sources */,
+				A82400010000000000000001 /* EverydayAudioDSP.swift in Sources */,
 				A50000110000000000000011 /* AudioRenderer.swift in Sources */,
 				A70000010000000000000001 /* CaptureService.swift in Sources */,
 				A50000130000000000000013 /* JobRegistry.swift in Sources */,

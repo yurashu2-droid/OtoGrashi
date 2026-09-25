@@ -23,6 +23,7 @@ import '../../media/media_delivery_gateway.dart';
 import '../export/comparison_player.dart';
 import '../export/media_playback.dart';
 import 'beat_building_preview.dart';
+import 'performance_controls.dart';
 import 'clip_card.dart';
 import 'melody_template_card.dart';
 import 'creation_controller.dart';
@@ -428,8 +429,8 @@ class _CollectScreen extends StatelessWidget {
     final state = controller.state;
     final segments = controller.comparisonSegments;
     final clipCount = state.clips.length;
-    final collectionHint = clipCount < 3
-        ? 'あと${3 - clipCount}つで作成OK · 全6つまで'
+    final collectionHint = clipCount == 0
+        ? '1本から作成OK · 全6つまで'
         : clipCount < 6
         ? '作成OK · あと${6 - clipCount}つ追加できます'
         : '作成OK · 追加はここまで';
@@ -480,14 +481,14 @@ class _CollectScreen extends StatelessWidget {
               ),
               const SizedBox(height: 18),
               Text(
-                controller.isRelay ? 'ひとり一音、\nみんなで一曲。' : 'いつもの音を、\n3つ集めよう。',
+                controller.isRelay ? 'ひとり一音、\nみんなで一曲。' : 'いつもの音が、\n音楽に変わる。',
                 style: Theme.of(context).textTheme.displaySmall,
               ),
               const SizedBox(height: 10),
               Text(
                 controller.isRelay
                     ? 'スマホを順番に渡して、一人ずつ短い音を撮ろう。3人から作れます。'
-                    : 'コップ、蛇口、キーボード。3つで作成、最大6つまで使えます。',
+                    : '声やリアクションは1本から。少ない素材は別の場面もパーツに。最大6本。',
                 style: const TextStyle(color: AppTokens.mutedInk, height: 1.5),
               ),
               const SizedBox(height: 22),
@@ -573,7 +574,9 @@ class _CollectScreen extends StatelessWidget {
                       ),
                     const SizedBox(height: 12),
                     Text(
-                      controller.isRelay ? '最初の人の音から始めよう。' : '家の中の短い音を、まず3つ。',
+                      controller.isRelay
+                          ? '最初の人の音から始めよう。'
+                          : '会話や長い音も、そのまま録ってみよう。',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
@@ -677,6 +680,31 @@ class _CollectScreen extends StatelessWidget {
                   ),
                 ],
               ),
+            if (state.clips.isNotEmpty)
+              TextButton.icon(
+                icon: const Icon(Icons.tune_rounded),
+                label: Text(
+                  '演出と長さ · ${PerformanceControls.labels[state.performanceMode]!.$1} · ${state.durationSeconds}秒',
+                ),
+                onPressed: () => showModalBottomSheet<void>(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (sheetContext) => SafeArea(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: AnimatedBuilder(
+                        animation: controller,
+                        builder: (context, _) => PerformanceControls(
+                          mode: controller.state.performanceMode,
+                          seconds: controller.state.durationSeconds,
+                          onMode: controller.selectPerformance,
+                          onDuration: controller.selectDuration,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             if (state.phase == CreationPhase.preparing) ...[
               const SizedBox(height: 16),
               const LinearProgressIndicator(),
@@ -720,7 +748,7 @@ class _CollectScreen extends StatelessWidget {
                                 backgroundColor: AppTokens.ink,
                                 foregroundColor: Colors.white,
                               ),
-                              child: const Text('15秒の曲にする ↗'),
+                              child: Text('${state.durationSeconds}秒の曲にする ↗'),
                             ),
                           ),
                         ],
@@ -731,7 +759,7 @@ class _CollectScreen extends StatelessWidget {
                           backgroundColor: AppTokens.ink,
                           foregroundColor: Colors.white,
                         ),
-                        child: const Text('この音で15秒をつくる  ↗'),
+                        child: Text('この音で${state.durationSeconds}秒をつくる  ↗'),
                       ),
               ),
             )
@@ -1047,10 +1075,16 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
                 );
               },
             ),
+            PerformanceControls(
+              mode: state.performanceMode,
+              seconds: state.durationSeconds,
+              onMode: widget.controller.selectPerformance,
+              onDuration: widget.controller.selectDuration,
+            ),
             if (state.melody == MelodyTemplate.midiScore) ...[
               const SizedBox(height: 8),
               Text(
-                'この楽譜の冒頭8小節を、撮った音で15秒に。',
+                'この楽譜を撮った音で。${state.durationSeconds}秒で再生。',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
@@ -1096,11 +1130,11 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
             const SizedBox(height: 14),
             if (state.phase == CreationPhase.rendering ||
                 state.phase == CreationPhase.preparing)
-              const Column(
+              Column(
                 children: [
-                  LinearProgressIndicator(),
-                  SizedBox(height: 8),
-                  Text('15秒のプレビューをつくっています'),
+                  const LinearProgressIndicator(),
+                  const SizedBox(height: 8),
+                  Text('${state.durationSeconds}秒のプレビューをつくっています'),
                 ],
               )
             else if (state.phase == CreationPhase.failed)
@@ -1395,7 +1429,10 @@ class _CompletedScreenState extends State<_CompletedScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            _PlaybackControls(playback: playback, label: '完成した15秒'),
+            _PlaybackControls(
+              playback: playback,
+              label: '完成した${state.durationSeconds}秒',
+            ),
             const SizedBox(height: 8),
             const Text(
               '映り込みや会話がないか、最後に確認してください。',

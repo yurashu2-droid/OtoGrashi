@@ -40,7 +40,7 @@ class OnboardingScreen extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Text(
-            '友達の「わっ！」も、タイピングの音も。3つの短い動画が重なって、15秒の曲になります。',
+            '友達の「わっ！」も、タイピングの音も。何気ない3つの動画が重なって、15秒の曲になります。',
             style: Theme.of(context).textTheme.bodyLarge,
           ),
           const SizedBox(height: 32),
@@ -54,10 +54,7 @@ class OnboardingScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          const Text(
-            '今撮っても、写真から選んでもOK。',
-            textAlign: TextAlign.center,
-          ),
+          const Text('今撮っても、写真から選んでもOK。', textAlign: TextAlign.center),
           if (error != null) ...[
             const SizedBox(height: 16),
             Text(

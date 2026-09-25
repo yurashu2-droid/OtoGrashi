@@ -99,7 +99,17 @@ class _ClipCardState extends State<ClipCard> {
                 fit: StackFit.expand,
                 children: [
                   widget.thumbnail != null
-                      ? Image.memory(widget.thumbnail!, fit: BoxFit.cover)
+                      ? Image.memory(
+                          widget.thumbnail!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) =>
+                              _ThumbnailFallback(
+                                index: index,
+                                synthetic:
+                                    clip.label.startsWith('synthetic-') ||
+                                    clip.label.startsWith('合成素材'),
+                              ),
+                        )
                       : _ThumbnailFallback(
                           index: index,
                           synthetic:

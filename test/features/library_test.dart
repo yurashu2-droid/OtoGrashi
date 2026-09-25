@@ -210,7 +210,7 @@ void main() {
     expect(find.text('カタカタ'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.text('カタカタ'));
+    await tester.longPress(find.text('カタカタ'));
     await tester.pumpAndSettle();
     expect(find.text('ストックした元の動画と音'), findsOneWidget);
     expect(find.text('名前を変更'), findsOneWidget);
@@ -224,7 +224,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('雨の音'), findsOneWidget);
 
-    await tester.tap(find.text('雨の音'));
+    await tester.longPress(find.text('雨の音'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('曲に使う'));
     expect(reused?.label, '雨の音');

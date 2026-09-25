@@ -86,7 +86,12 @@ void main() {
       ),
       layout: VideoLayout.buildUp,
     );
-    expect(recipe.events[3].assetIds, ['asset-0', 'asset-2']);
+    expect(
+      recipe.events
+          .singleWhere((e) => e.destinationStartSample == 270000)
+          .assetIds,
+      ['asset-2'],
+    );
   });
 
   test('silent rejected source does not take an intro video slot', () {

@@ -40,6 +40,8 @@ final class CreationState {
     this.layout = VideoLayout.buildUp,
     this.compareOriginal = false,
     this.seed = 1,
+    this.performanceMode = PerformanceMode.natural,
+    this.durationSeconds = 15,
     this.preview,
     this.error,
     this.relayPending = false,
@@ -54,6 +56,8 @@ final class CreationState {
   final VideoLayout layout;
   final bool compareOriginal;
   final int seed;
+  final PerformanceMode performanceMode;
+  final int durationSeconds;
   final RenderedMedia? preview;
   final Object? error;
   final bool relayPending;
@@ -68,6 +72,8 @@ final class CreationState {
     VideoLayout? layout,
     bool? compareOriginal,
     int? seed,
+    PerformanceMode? performanceMode,
+    int? durationSeconds,
     RenderedMedia? preview,
     bool clearPreview = false,
     Object? error,
@@ -83,6 +89,8 @@ final class CreationState {
     layout: layout ?? this.layout,
     compareOriginal: compareOriginal ?? this.compareOriginal,
     seed: seed ?? this.seed,
+    performanceMode: performanceMode ?? this.performanceMode,
+    durationSeconds: durationSeconds ?? this.durationSeconds,
     preview: clearPreview ? null : preview ?? this.preview,
     error: clearError ? null : error ?? this.error,
     relayPending: relayPending ?? this.relayPending,
@@ -274,7 +282,7 @@ final class CreationController extends ChangeNotifier {
           project: updated,
           clips: clips,
           relayPending: false,
-          phase: clips.length >= 3
+          phase: clips.isNotEmpty
               ? CreationPhase.readyToCreate
               : CreationPhase.collecting,
           clearPreview: true,
@@ -302,7 +310,7 @@ final class CreationController extends ChangeNotifier {
           project: project,
           clips: clips,
           relayPending: false,
-          phase: clips.length >= 3
+          phase: clips.isNotEmpty
               ? CreationPhase.readyToCreate
               : CreationPhase.collecting,
           clearPreview: true,
@@ -320,6 +328,13 @@ final class CreationController extends ChangeNotifier {
             (value) => value.name == project.videoRecipe['layout'],
             orElse: () => VideoLayout.buildUp,
           ),
+          performanceMode: PerformanceMode.values.firstWhere(
+            (v) => v.name == project.arrangement['performanceMode'],
+            orElse: () => PerformanceMode.natural,
+          ),
+          durationSeconds: project.arrangement['totalSamples'] == 1440000
+              ? 30
+              : 15,
           seed: project.arrangement['seed'] is int
               ? project.arrangement['seed']! as int
               : 1,
@@ -372,7 +387,7 @@ final class CreationController extends ChangeNotifier {
     final project = _state.project;
     if (_disposed ||
         project == null ||
-        _state.clips.length < 3 ||
+        _state.clips.isEmpty ||
         project.arrangement['events'] is! List ||
         project.videoRecipe['events'] is! List) {
       return;
@@ -381,6 +396,72 @@ final class CreationController extends ChangeNotifier {
     _set(_state.copyWith(phase: CreationPhase.rendering, clearError: true));
     _render.open(project);
     _render.generate(RenderQuality.preview);
+  }
+
+  void selectPerformance(PerformanceMode mode) {
+    if (_disposed || mode == _state.performanceMode) return;
+    final regenerate =
+        _state.phase != CreationPhase.collecting &&
+        _state.phase != CreationPhase.readyToCreate;
+    if (regenerate) {
+      _previewRenderTimer?.cancel();
+      final project = _state.project;
+      if (project != null) _render.open(project);
+    }
+    _set(
+      _state.copyWith(
+        performanceMode: mode,
+        compareOriginal: false,
+        phase: regenerate ? CreationPhase.preparing : _state.phase,
+        clearPreview: regenerate,
+        clearError: true,
+      ),
+    );
+    if (_state.phase != CreationPhase.collecting &&
+        _state.phase != CreationPhase.readyToCreate) {
+      unawaited(
+        _requestArrangement(
+          style: _state.style,
+          seed: _state.seed,
+          debouncePreview: true,
+        ),
+      );
+    }
+  }
+
+  void selectDuration(int seconds) {
+    if (_disposed ||
+        !const [15, 30].contains(seconds) ||
+        seconds == _state.durationSeconds) {
+      return;
+    }
+    final regenerate =
+        _state.phase != CreationPhase.collecting &&
+        _state.phase != CreationPhase.readyToCreate;
+    if (regenerate) {
+      _previewRenderTimer?.cancel();
+      final project = _state.project;
+      if (project != null) _render.open(project);
+    }
+    _set(
+      _state.copyWith(
+        durationSeconds: seconds,
+        compareOriginal: false,
+        phase: regenerate ? CreationPhase.preparing : _state.phase,
+        clearPreview: regenerate,
+        clearError: true,
+      ),
+    );
+    if (_state.phase != CreationPhase.collecting &&
+        _state.phase != CreationPhase.readyToCreate) {
+      unawaited(
+        _requestArrangement(
+          style: _state.style,
+          seed: _state.seed,
+          debouncePreview: true,
+        ),
+      );
+    }
   }
 
   void selectStyle(ArrangementStyle style) {
@@ -475,7 +556,7 @@ final class CreationController extends ChangeNotifier {
           project: updated,
           clips: clips,
           thumbnails: thumbnails,
-          phase: clips.length >= 3
+          phase: clips.isNotEmpty
               ? CreationPhase.readyToCreate
               : CreationPhase.collecting,
           clearPreview: true,
@@ -497,7 +578,7 @@ final class CreationController extends ChangeNotifier {
     if (project != null) _render.open(project);
     _set(
       _state.copyWith(
-        phase: _state.clips.length >= 3
+        phase: _state.clips.isNotEmpty
             ? CreationPhase.readyToCreate
             : CreationPhase.collecting,
         clearPreview: true,
@@ -530,7 +611,7 @@ final class CreationController extends ChangeNotifier {
     double x = .5,
     double y = .9,
     int destinationStartSample = 0,
-    int durationSamples = 720000,
+    int? durationSamples,
   }) => _applyEdit(
     SetCaption(
       text,
@@ -538,7 +619,7 @@ final class CreationController extends ChangeNotifier {
       x: x,
       y: y,
       destinationStartSample: destinationStartSample,
-      durationSamples: durationSamples,
+      durationSamples: durationSamples ?? _state.durationSeconds * 48000,
     ),
   );
 
@@ -571,7 +652,7 @@ final class CreationController extends ChangeNotifier {
       await projects.save(updated, expectedRevision: current.revision);
       if (_disposed) return;
       _set(_state.copyWith(project: updated, clearError: true));
-      if (_state.clips.length >= 3 &&
+      if (_state.clips.isNotEmpty &&
           _state.phase != CreationPhase.collecting &&
           _state.phase != CreationPhase.readyToCreate) {
         await _requestArrangement(style: _state.style, seed: _state.seed);
@@ -614,7 +695,7 @@ final class CreationController extends ChangeNotifier {
   ) async {
     if (_disposed || version != _requestVersion) return;
     final project = _state.project;
-    if (project == null || _state.clips.length < 3) return;
+    if (project == null || _state.clips.isEmpty) return;
     _set(
       _state.copyWith(
         phase: CreationPhase.preparing,
@@ -634,6 +715,8 @@ final class CreationController extends ChangeNotifier {
         style: style,
         seed: seed,
         melodyTemplate: _state.melody,
+        performanceMode: _state.performanceMode,
+        durationSeconds: _state.durationSeconds,
       );
       final arrangementJson = _applyArrangementEdits(
         arrangement.toJson(),
@@ -731,7 +814,22 @@ final class CreationController extends ChangeNotifier {
     final crops = previous['clipCrops'];
     final clipNames = previous['clipNames'];
     if (previous['sessionMode'] == 'relay') result['sessionMode'] = 'relay';
-    if (captions is List) result['captions'] = _copyJson(captions);
+    if (captions is List) {
+      final limit = generated['totalSamples'] as int? ?? 720000;
+      result['captions'] = [
+        for (final c in captions)
+          if (c is Map &&
+              c['destinationStartSample'] is int &&
+              (c['destinationStartSample'] as int) < limit)
+            {
+              ...c,
+              'durationSamples': (c['durationSamples'] as int).clamp(
+                1,
+                limit - (c['destinationStartSample'] as int),
+              ),
+            },
+      ];
+    }
     if (clipNames is Map) {
       final validIds = (generated['clipCrops'] as List<Object?>)
           .map((crop) => (crop as Map)['assetId'])

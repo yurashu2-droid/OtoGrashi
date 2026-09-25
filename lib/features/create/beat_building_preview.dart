@@ -168,6 +168,8 @@ class _BeatBuildingPreviewState extends State<BeatBuildingPreview> {
                   fit: BoxFit.cover,
                   gaplessPlayback: true,
                   excludeFromSemantics: true,
+                  errorBuilder: (context, error, stackTrace) =>
+                      ColoredBox(color: fallback),
                 ),
               ),
         const DecoratedBox(

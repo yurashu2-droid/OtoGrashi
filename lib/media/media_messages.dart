@@ -251,19 +251,23 @@ final class AudibleRegion {
   const AudibleRegion({
     required this.startSample,
     required this.durationSamples,
+    this.fundamentalMidiNote,
   });
 
   final int startSample;
   final int durationSamples;
+  final double? fundamentalMidiNote;
 
   factory AudibleRegion.fromJson(Map<String, Object?> json) => AudibleRegion(
     startSample: json['startSample'] as int,
     durationSamples: json['durationSamples'] as int,
+    fundamentalMidiNote: (json['fundamentalMidiNote'] as num?)?.toDouble(),
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
     'startSample': startSample,
     'durationSamples': durationSamples,
+    if (fundamentalMidiNote != null) 'fundamentalMidiNote': fundamentalMidiNote,
   };
 }
 
@@ -279,6 +283,7 @@ final class AnalyzedClip {
     required this.rms,
     required this.suggestedRole,
     this.fundamentalMidiNote,
+    this.registerMidiNote,
     this.analysisVersion = 1,
   }) : onsetSamples = List<int>.unmodifiable(onsetSamples),
        audibleRegions = List<AudibleRegion>.unmodifiable(audibleRegions) {
@@ -303,6 +308,10 @@ final class AnalyzedClip {
           (region) =>
               region.startSample < sourceStartSample ||
               region.durationSamples <= 0 ||
+              (region.fundamentalMidiNote != null &&
+                  (!region.fundamentalMidiNote!.isFinite ||
+                      region.fundamentalMidiNote! < 24 ||
+                      region.fundamentalMidiNote! > 100)) ||
               region.startSample >
                   sourceStartSample + durationSamples - region.durationSamples,
         )) {
@@ -318,10 +327,16 @@ final class AnalyzedClip {
         'Analysis levels must be finite and normalized.',
       );
     }
+    if (registerMidiNote != null &&
+        (!registerMidiNote!.isFinite ||
+            registerMidiNote! < 24 ||
+            registerMidiNote! > 100)) {
+      throw const MediaContractException('Voice register is out of range.');
+    }
     if (fundamentalMidiNote != null &&
         (!fundamentalMidiNote!.isFinite ||
-            fundamentalMidiNote! < 40 ||
-            fundamentalMidiNote! > 88)) {
+            fundamentalMidiNote! < 24 ||
+            fundamentalMidiNote! > 100)) {
       throw const MediaContractException('Fundamental note is out of range.');
     }
   }
@@ -354,6 +369,7 @@ final class AnalyzedClip {
         rms: (json['rms'] as num).toDouble(),
         suggestedRole: role,
         fundamentalMidiNote: (json['fundamentalMidiNote'] as num?)?.toDouble(),
+        registerMidiNote: (json['registerMidiNote'] as num?)?.toDouble(),
         analysisVersion: json['analysisVersion'] as int,
       );
     } on TypeError {
@@ -373,6 +389,7 @@ final class AnalyzedClip {
   final double rms;
   final SuggestedRole suggestedRole;
   final double? fundamentalMidiNote;
+  final double? registerMidiNote;
 
   bool get isUsable => peak >= 0.001 || rms >= 0.0001;
 
@@ -391,8 +408,8 @@ final class AnalyzedClip {
     'peak': peak,
     'rms': rms,
     'suggestedRole': suggestedRole.name,
-    if (fundamentalMidiNote != null)
-      'fundamentalMidiNote': fundamentalMidiNote,
+    if (fundamentalMidiNote != null) 'fundamentalMidiNote': fundamentalMidiNote,
+    if (registerMidiNote != null) 'registerMidiNote': registerMidiNote,
   };
 }
 

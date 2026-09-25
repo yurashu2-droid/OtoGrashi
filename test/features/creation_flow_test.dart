@@ -799,7 +799,7 @@ void main() {
       }
       expect(controller.state.phase, CreationPhase.readyToCreate);
       await controller.removeClip(clips[1].id);
-      expect(controller.state.phase, CreationPhase.collecting);
+      expect(controller.state.phase, CreationPhase.readyToCreate);
       expect(projects.project!.clipIds, [clips[0].id, clips[2].id]);
       await controller.addExisting(clips[3]);
       await controller.createPreview();
@@ -873,7 +873,7 @@ void main() {
     await tester.tap(find.text('新しくつくる'));
     await tester.pumpAndSettle();
     expect(controller.state.clips, isEmpty);
-    expect(find.text('家の中の短い音を、まず3つ。'), findsOneWidget);
+    expect(find.text('会話や長い音も、そのまま録ってみよう。'), findsOneWidget);
   });
 
   testWidgets('collect cards let a sound range be edited at 375 by 812', (
@@ -1203,6 +1203,8 @@ void main() {
       180,
       scrollable: find.byType(Scrollable).first,
     );
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -140));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('音の名前をつける'));
     await tester.pumpAndSettle();
     expect(find.text('合成素材 1'), findsWidgets);
@@ -1218,7 +1220,11 @@ void main() {
     await tester.tap(find.text('はねる'));
     await tester.pumpAndSettle();
     expect(controller.state.melody, MelodyTemplate.hop);
-    await tester.drag(find.byType(ListView).first, const Offset(0, -320));
+    await tester.scrollUntilVisible(
+      find.text('ぽつぽつ'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.pumpAndSettle();
     expect(find.text('ぽつぽつ'), findsOneWidget);
     await tester.tap(find.text('ゆらゆら'));
@@ -1226,7 +1232,7 @@ void main() {
     expect(controller.state.style, ArrangementStyle.swaying);
 
     expect(find.text('拍  合成素材 1'), findsOneWidget);
-    expect(find.text('ベース風  お休み'), findsOneWidget);
+    expect(find.textContaining('ベース風  合成素材'), findsOneWidget);
 
     await tester.scrollUntilVisible(
       find.text('これで完成'),
@@ -1341,14 +1347,14 @@ void main() {
       ),
     );
 
-    expect(find.text('家の中の短い音を、まず3つ。'), findsOneWidget);
-    expect(find.text('いつもの音を、\n3つ集めよう。'), findsOneWidget);
+    expect(find.text('会話や長い音も、そのまま録ってみよう。'), findsOneWidget);
+    expect(find.text('いつもの音が、\n音楽に変わる。'), findsOneWidget);
     expect(find.text('0/6'), findsOneWidget);
 
     await controller.startDemo();
     await tester.pumpAndSettle();
 
-    expect(find.text('家の中の短い音を、まず3つ。'), findsNothing);
+    expect(find.text('会話や長い音も、そのまま録ってみよう。'), findsNothing);
     expect(find.text('STEP 1  /  音の採集ノート'), findsNothing);
     expect(find.text('3/6'), findsOneWidget);
     expect(find.text('作成OK · あと3つ追加できます'), findsOneWidget);
@@ -1407,13 +1413,16 @@ void main() {
       }
 
       expect(find.text('$count/6'), findsOneWidget);
-      final hint = count < 3
-          ? 'あと${3 - count}つで作成OK · 全6つまで'
+      final hint = count == 0
+          ? '1本から作成OK · 全6つまで'
           : count < 6
           ? '作成OK · あと${6 - count}つ追加できます'
           : '作成OK · 追加はここまで';
       if (count == 0) {
-        expect(find.text('コップ、蛇口、キーボード。3つで作成、最大6つまで使えます。'), findsOneWidget);
+        expect(
+          find.text('声やリアクションは1本から。少ない素材は別の場面もパーツに。最大6本。'),
+          findsOneWidget,
+        );
       } else {
         expect(find.text(hint), findsOneWidget);
       }
@@ -1422,7 +1431,7 @@ void main() {
         of: find.text('この音で15秒をつくる  ↗'),
         matching: find.byType(FilledButton),
       );
-      expect(createButton, count >= 3 ? findsOneWidget : findsNothing);
+      expect(createButton, count >= 1 ? findsOneWidget : findsNothing);
       expect(tester.takeException(), isNull);
     }
 

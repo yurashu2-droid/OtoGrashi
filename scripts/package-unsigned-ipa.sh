@@ -1,11 +1,16 @@
 #!/bin/bash
 set -euo pipefail
+[[ "$(uname -s)" == Darwin ]] || { echo 'Unsigned iOS builds require macOS with Xcode and Flutter.' >&2; exit 1; }
+for tool in flutter xcodebuild ditto lipo shasum; do
+  command -v "$tool" >/dev/null || { echo "Required tool not found: $tool" >&2; exit 1; }
+done
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 build_number="${BUILD_NUMBER:-1}"
 [[ "$build_number" =~ ^[1-9][0-9]*$ ]] || { echo 'BUILD_NUMBER must be a positive integer'; exit 1; }
 bundle_id='dev.yurashu2.otogurashi'
 build_root="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/otogurashi-ipa.XXXXXX")"
+trap 'rm -rf "$build_root"' EXIT
 output_root="$repo_root/build/unsigned-ipa-output"
 mkdir -p "$build_root/Payload" "$output_root"
 xcodebuild -version
@@ -38,7 +43,16 @@ unzip -tq "$output_root/OtoGrashi-unsigned.ipa"
   cd "$output_root"
   shasum -a256 OtoGrashi-unsigned.ipa > SHA256SUMS.txt
 )
-git rev-parse HEAD > "$output_root/commit.txt"
+# A patch-applied working tree is not identical to its parent commit.
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git rev-parse HEAD > "$output_root/commit.txt"
+  git status --porcelain --untracked-files=normal > "$output_root/working-tree.txt"
+else
+  printf 'Source archive (no Git metadata)\n' > "$output_root/commit.txt"
+fi
+shasum -a256 lib/domain/performance_arranger.dart ios/Runner/Media/EverydayAudioDSP.swift \
+  ios/Runner/Media/AudioRenderer.swift ios/Runner/Media/VideoRenderer.swift \
+  > "$output_root/source-SHA256SUMS.txt"
 printf 'Bundle ID: %s\nTeam ID: (empty)\nBuild: %s\nConfiguration: Release / iPhoneOS arm64\nSigning: disabled; sign with iLoader on Windows\n' \
   "$bundle_id" "$build_number" > "$output_root/build-info.txt"
 if [[ -d "$build_root/OtoGrashi.xcarchive/dSYMs" ]]; then
