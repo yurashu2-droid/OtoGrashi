@@ -22,7 +22,7 @@ import wave
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 import imageio_ffmpeg
 
@@ -205,42 +205,50 @@ class Ctx:
         return [e for e in self.events if a <= e.t < b and pred(e)]
 
     def frame(self, e, t):
+        """Picture for event e at time t. A finished sound holds its last frame."""
         src = self.sources[e.c]
+        t = min(max(t, e.t), e.end_t - 1 / FPS)
         return src.frame_at_sample(e.source_sample(t, src))
+
+    def voices(self, t, limit=9):
+        """Events sounding at t, oldest first: one picture per voice."""
+        live = sorted(self.active(t), key=lambda e: (e.t, e.idx))
+        return live[-limit:]
 
     def level(self, e, t):
         i = int((t - e.t) * FPS)
         return float(e.env[i]) if 0 <= i < len(e.env) else 0.0
 
+    def norm_level(self, e, t):
+        peak = float(e.env.max()) if len(e.env) else 0.0
+        return self.level(e, t) / peak if peak > 1e-5 else 0.0
+
+
+def soft_text(layer, xy, s, f, fill, alpha):
+    """Type lifted by a soft shadow instead of a hard outline."""
+    shadow = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).text((xy[0], xy[1] + 3), s, font=f, fill=(0, 0, 0, int(alpha * 0.55)))
+    layer.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(8)))
+    ImageDraw.Draw(layer).text(xy, s, font=f, fill=(*fill, alpha))
+
 
 def draw_op(canvas, ctx, t, style):
-    """0–1.4s: three flash cuts introduce the sounds, then the title holds."""
-    if t >= 1.4:
+    """0–1.6s: the title rests on the first sounding picture."""
+    if t >= 1.6:
         return canvas
-    d = ImageDraw.Draw(canvas)
-    if t < 0.45:
-        i = int(t / 0.15) % len(ctx.sources)
-        src = ctx.sources[i]
-        canvas.paste(cover(src.frames[min(len(src.frames) - 1, 6)], W, H))
-        d = ImageDraw.Draw(canvas)
-        text_center(d, (W / 2, H * 0.80), ctx.names[i], font(FONT_BOLD, 92), (255, 255, 255), 10, INK)
-        text_center(d, (W / 2, H * 0.72), f"SOUND {i + 1}/{len(ctx.sources)}", font(FONT_BOLD, 30),
-                    CLIP_COLORS[i], 6, INK)
-        return canvas
-    a = 1 - ease_in_out((t - 1.1) / 0.3)
-    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    ld = ImageDraw.Draw(layer)
+    a = ease_out(t / 0.2) * (1 - ease_in_out((t - 1.3) / 0.3))
     alpha = int(255 * a)
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    cast = " ・ ".join(ctx.names)
     if style == "paper":
-        ld.rounded_rectangle((40, 70, 560, 240), 20, fill=(*PAPER, int(235 * a)))
-        ld.text((70, 95), "なんでもない日の音", font=font(FONT_HAND, 50), fill=(*INK, alpha))
-        ld.text((72, 170), "9.26 ・ 3つの音でできた15秒", font=font(FONT_HAND, 28), fill=(*CORAL, alpha))
+        ld = ImageDraw.Draw(layer)
+        ld.rounded_rectangle((36, 64, 580, 236), 18, fill=(*PAPER, int(240 * a)))
+        ld.text((64, 88), "なんでもない日の音", font=font(FONT_HAND, 50), fill=(*INK, alpha))
+        ld.text((66, 164), cast, font=font(FONT_HAND, 28), fill=(*CORAL, alpha))
     else:
-        ld.text((48, 90), "なんでもない", font=font(FONT_BOLD, 76), fill=(255, 255, 255, alpha),
-                stroke_width=8, stroke_fill=(*INK, alpha))
-        ld.text((48, 185), "日の音。", font=font(FONT_BOLD, 76), fill=(*CORAL, alpha),
-                stroke_width=8, stroke_fill=(*INK, alpha))
-        ld.text((52, 290), "OTOGRASHI  ·  15 SEC", font=font(FONT_BOLD, 24), fill=(255, 255, 255, alpha))
+        soft_text(layer, (46, 84), "なんでもない日の音", font(FONT_BOLD, 60), (255, 255, 255), alpha)
+        soft_text(layer, (48, 170), cast, font(FONT_BOLD, 26), (255, 255, 255), alpha)
+        ImageDraw.Draw(layer).rounded_rectangle((48, 214, 120, 220), 3, fill=(*CORAL, alpha))
     return Image.alpha_composite(canvas.convert("RGBA"), layer).convert("RGB")
 
 
@@ -315,91 +323,136 @@ def sequencer_ribbon(canvas, ctx, t):
         d.text((12, top + i * (lane_h + 6) + 2), name, font=font(FONT_BOLD, 18), fill=(255, 255, 255, 200))
 
 
-def grid_cells(n):
-    cols = {1: 1, 2: 1, 4: 2, 9: 3, 16: 4}[n]
-    rows = n // cols
-    return [(c * W / cols, r * H / rows, W / cols, H / rows) for r in range(rows) for c in range(cols)]
-
-
 def lead_of(ctx, t):
-    return ctx.last_onset(t, lambda e: e.kind != "rhythm") or ctx.last_onset(t) or ctx.events[0]
+    """Newest sounding melodic voice, else newest sounding voice, else the last one heard."""
+    live = ctx.voices(t)
+    melodic = [e for e in live if e.kind != "rhythm"]
+    if melodic or live:
+        return (melodic or live)[-1]
+    return ctx.last_onset(t) or ctx.events[0]
 
 
 def punch(age, amount=0.14, length=0.12):
     return 1 + amount * max(0.0, 1 - age / length)
 
 
+def dim(im, soft=False):
+    """Silent pictures lose colour; a lone full-screen picture only fades a little."""
+    grey = ImageOps.grayscale(im).convert("RGB")
+    amount, light = (0.35, 0.75) if soft else (0.7, 0.45)
+    return ImageEnhance.Brightness(Image.blend(im, grey, amount)).enhance(light)
+
+
+def panel(ctx, e, t, w, h, mirror=False, zoom=1.0, dx=0.0, soft=False):
+    """One voice's picture: moving and pulsing while it sounds, frozen and dim after."""
+    live = e.active(t)
+    lvl = ctx.norm_level(e, t) if live else 0.0
+    im = cover(ctx.frame(e, t), w, h, zoom=zoom * (1 + 0.04 * lvl), mirror=mirror, dx=dx)
+    if not live:
+        return dim(im, soft)
+    return ImageEnhance.Brightness(im).enhance(1 + 0.18 * lvl)
+
+
+def voice_label(canvas, ctx, e, t, rect, count=1):
+    """Small caption in the panel corner: colour dot, name, live level bars."""
+    x, y, w, h = rect
+    if not e.active(t) or w < 150 or h < 120:
+        return
+    k = min(1.0, max(0.6, w / 520))
+    d = ImageDraw.Draw(canvas, "RGBA")
+    f = font(FONT_BOLD, int(26 * k))
+    name = ctx.names[e.c] + (f"  ×{count}" if count > 1 else "")
+    tw = d.textlength(name, font=f)
+    ph = 46 * k
+    pw = tw + 96 * k
+    x0, y0 = x + 16 * k, y + h - ph - 16 * k
+    d.rounded_rectangle((x0, y0, x0 + pw, y0 + ph), ph / 2, fill=(20, 16, 16, 150))
+    col = CLIP_COLORS[e.c]
+    cy = y0 + ph / 2
+    d.ellipse((x0 + 14 * k, cy - 7 * k, x0 + 28 * k, cy + 7 * k), fill=col)
+    d.text((x0 + 38 * k, cy), name, font=f, fill=(255, 255, 255), anchor="lm")
+    lvl = ctx.norm_level(e, t)
+    for b in range(4):
+        bh = (6 + 18 * min(1.0, lvl * (1.3 - b * 0.2))) * k
+        bx = x0 + 44 * k + tw + b * 9 * k
+        d.rounded_rectangle((bx, cy - bh / 2, bx + 5 * k, cy + bh / 2), 2, fill=col)
+
+
+def pulse_border(canvas, ctx, e, t, rect):
+    """Colour edge that swells with this voice's own loudness."""
+    if not e.active(t):
+        return
+    x, y, w, h = rect
+    width = int(2 + 7 * ctx.norm_level(e, t))
+    ImageDraw.Draw(canvas).rectangle(
+        (x + width // 2, y + width // 2, x + w - width // 2 - 1, y + h - width // 2 - 1),
+        outline=CLIP_COLORS[e.c], width=width)
+
+
+def single(ctx, t, e, **kw):
+    canvas = panel(ctx, e, t, W, H, soft=True, **kw)
+    voice_label(canvas, ctx, e, t, (0, 0, W, H), sum(v.c == e.c for v in ctx.voices(t)))
+    return canvas
+
+
 def shot_full(ctx, t, seg):
     lead = lead_of(ctx, t)
     pitch = max(-3, min(6, (lead.midi or 60) - 60))
-    return cover(ctx.frame(lead, t), W, H, zoom=(1 + 0.04 * pitch / 6) * punch(t - lead.t))
+    return single(ctx, t, lead, zoom=(1 + 0.04 * pitch / 6) * punch(t - lead.t))
 
 
 def shot_flip(ctx, t, seg):
     """Every melodic note cuts to a mirrored / shifted crop of the same face."""
     lead = lead_of(ctx, t)
     notes = len(ctx.onsets_between(seg[0], t + 1e-6, lambda e: e.kind != "rhythm"))
-    return cover(ctx.frame(lead, t), W, H, zoom=1.08 * punch(t - lead.t, 0.1),
-                 mirror=notes % 2 == 1, dx=0.04 * (notes % 3 - 1))
+    return single(ctx, t, lead, zoom=1.08 * punch(t - lead.t, 0.1),
+                  mirror=notes % 2 == 1, dx=0.04 * (notes % 3 - 1))
 
 
 def shot_stutter(ctx, t, seg):
-    """Every 8th note re-cuts to a tighter crop of the same moment."""
+    """Each new sound re-cuts to a tighter crop of the lead face."""
     lead = lead_of(ctx, t)
-    step = int((t - seg[0]) / (BEAT / 2))
-    return cover(ctx.frame(lead, t), W, H, zoom=(1 + 0.12 * (step % 4)) * punch(t - lead.t, 0.08))
+    step = len(ctx.onsets_between(seg[0], t + 1e-6))
+    return single(ctx, t, lead, zoom=(1 + 0.12 * (step % 4)) * punch(t - lead.t, 0.08))
 
 
-def shot_mirror(ctx, t, seg):
-    lead = lead_of(ctx, t)
-    half = cover(ctx.frame(lead, t), W / 2, H, zoom=1.05 * punch(t - lead.t, 0.08))
+def voice_layout(n, columns_first=False):
+    if n <= 1:
+        return [(0, 0, W, H)]
+    if columns_first and n <= 4:
+        return [(i * W / n, 0, W / n, H) for i in range(n)]
+    rows = n if n <= 3 else math.ceil(n / 2) if n <= 6 else 3
+    per_row = [n // rows + (1 if r < n % rows else 0) for r in range(rows)]
+    return [(c * W / k, r * H / rows, W / k, H / rows) for r, k in enumerate(per_row) for c in range(k)]
+
+
+def shot_voices(ctx, t, seg, columns_first=False):
+    """One picture per sounding voice. Repeats of the same sound alternate mirror."""
+    live = ctx.voices(t)
+    if not live:
+        return single(ctx, t, lead_of(ctx, t))
+    rects = voice_layout(len(live), columns_first)
     canvas = Image.new("RGB", (W, H))
-    canvas.paste(half, (0, 0))
-    canvas.paste(ImageOps.mirror(half), (W // 2, 0))
-    return canvas
-
-
-def shot_kaleido(ctx, t, seg):
-    lead = lead_of(ctx, t)
-    q = cover(ctx.frame(lead, t), W / 2, H / 2, zoom=1.1 * punch(t - lead.t, 0.1))
-    canvas = Image.new("RGB", (W, H))
-    canvas.paste(q, (0, 0))
-    canvas.paste(ImageOps.mirror(q), (W // 2, 0))
-    canvas.paste(ImageOps.flip(q), (0, H // 2))
-    canvas.paste(ImageOps.flip(ImageOps.mirror(q)), (W // 2, H // 2))
+    seen = {}
+    for e, (x, y, w, h) in zip(live, rects):
+        seen[e.c] = seen.get(e.c, 0) + 1
+        im = panel(ctx, e, t, w, h, mirror=seen[e.c] % 2 == 0, zoom=punch(t - e.t, 0.1, 0.1))
+        canvas.paste(im, (int(x), int(y)))
+    d = ImageDraw.Draw(canvas)
+    for x, y, w, h in rects:
+        d.rectangle((x, y, x + w, y + h), outline=(0, 0, 0), width=3)
+    for e, rect in zip(live, rects):
+        pulse_border(canvas, ctx, e, t, rect)
+        voice_label(canvas, ctx, e, t, rect)
     return canvas
 
 
 def shot_burst(ctx, t, seg):
-    """Screens multiply with every hit, restarting on each downbeat."""
-    bar_start = seg[0] + int((t - seg[0]) / BAR) * BAR
-    hits = ctx.onsets_between(bar_start, t + 1e-6)
-    count = len(hits)
-    n = 1 if count <= 1 else 2 if count == 2 else 4 if count <= 4 else 9 if count <= 8 else 16
-    cells = grid_cells(n)
-    recent = hits[-n:] if hits else [lead_of(ctx, t)]
-    canvas = Image.new("RGB", (W, H))
-    for i, (x, y, w, h) in enumerate(cells):
-        e = recent[i % len(recent)]
-        mirror = (int(x / (W / 4)) + int(y / (H / 4))) % 2 == 1
-        tile = cover(ctx.frame(e, t), w, h, zoom=1.02, mirror=mirror)
-        if e is recent[-1] and t - e.t < 0.1:
-            tile = Image.eval(tile, lambda v: min(255, int(v * 1.35)))
-        canvas.paste(tile, (int(x), int(y)))
-    d = ImageDraw.Draw(canvas)
-    for x, y, w, h in cells:
-        d.rectangle((x, y, x + w, y + h), outline=(0, 0, 0), width=3)
-    return canvas
+    return shot_voices(ctx, t, seg)
 
 
-def name_stamp(canvas, ctx, t):
-    stamp = ctx.last_onset(t, lambda e: e.kind != "rhythm")
-    if stamp and t - stamp.t < 0.45 and t > 1.4:
-        a = t - stamp.t
-        size = int(110 * (1.4 - 0.4 * ease_out(a / 0.08)))
-        d = ImageDraw.Draw(canvas)
-        text_center(d, (W / 2, H * 0.70), ctx.names[stamp.c], font(FONT_BOLD, size),
-                    CLIP_COLORS[stamp.c], 12, INK)
+def shot_split(ctx, t, seg):
+    return shot_voices(ctx, t, seg, columns_first=True)
 
 
 # ---------------------------------------------------------------- style 2: パン (camera over a board)
@@ -415,27 +468,6 @@ BOARD_SLOTS = [  # (x, y, w, h, rotation) in screen units on the board
 ]
 
 
-def sound_pill(canvas, ctx, e, t, cx, cy):
-    """Capsule with the sound's name and its own live waveform."""
-    d = ImageDraw.Draw(canvas, "RGBA")
-    col = CLIP_COLORS[e.c]
-    f = font(FONT_BOLD, 30)
-    name_w = d.textlength(ctx.names[e.c], font=f)
-    bars = 22
-    w = name_w + 56 + bars * 9
-    x0, y0 = cx - w / 2, cy - 36
-    d.rounded_rectangle((x0, y0, x0 + w, y0 + 72), 36, fill=(255, 255, 255, 240))
-    d.text((x0 + 28, cy), ctx.names[e.c], font=f, fill=INK, anchor="lm")
-    i_now = int((t - e.t) * FPS)
-    for b in range(bars):
-        i = i_now - bars + 1 + b
-        lvl = e.env[i] if 0 <= i < len(e.env) else 0
-        hh = 6 + min(1, lvl * 1.6) ** 0.6 * 44
-        x = x0 + name_w + 44 + b * 9
-        d.rounded_rectangle((x, cy - hh / 2, x + 5, cy + hh / 2), 3,
-                            fill=(*col, 255 if b == bars - 1 else 150 + b * 4))
-
-
 def shot_pan(ctx, t, seg):
     board_w, board_h = BOARD_W * W, BOARD_H * H
     board = Image.new("RGB", (int(board_w), int(board_h)), PAPER)
@@ -443,21 +475,15 @@ def shot_pan(ctx, t, seg):
     for e in ctx.events:
         if e.t <= t and e.c not in seen:
             seen.append(e.c)
-    slots = []
-    for i in range(len(BOARD_SLOTS)):
-        c = seen[i % len(seen)] if seen else 0
-        slots.append((c, BOARD_SLOTS[i], i >= len(seen)))
+    slots = [(c, BOARD_SLOTS[i], False) for i, c in enumerate(seen or [0])]
     lead = ctx.last_onset(t, lambda e: e.kind != "rhythm") or ctx.last_onset(t)
     rects = []
     for i, (c, (x, y, w, h, rot), mirrored) in enumerate(slots):
         live = [e for e in ctx.active(t) if e.c == c]
         e = live[-1] if live else (ctx.last_onset(t, lambda ev, c=c: ev.c == c) or lead)
         pw, ph = w * W, h * H
-        hit = ctx.last_onset(t, lambda ev, c=c: ev.c == c)
-        pop = 1 + 0.05 * max(0, 1 - (t - hit.t) / 0.15) if hit else 1
-        tile = cover(ctx.frame(e, t), pw * pop, ph * pop, mirror=mirrored)
-        if not live:
-            tile = Image.blend(tile, ImageOps.grayscale(tile).convert("RGB"), 0.6)
+        pop = punch(t - e.t, 0.05, 0.15) if live else 1
+        tile = panel(ctx, e, t, pw * pop, ph * pop, mirror=mirrored)
         framed = Image.new("RGB", (tile.width + 20, tile.height + 20), (255, 255, 255))
         framed.paste(tile, (10, 10))
         framed = framed.rotate(rot, expand=True, resample=Image.BICUBIC, fillcolor=PAPER)
@@ -491,9 +517,8 @@ def shot_pan(ctx, t, seg):
     moving = 0 < (t - lead.t) < 0.22 and prev_slot is not target_slot
     if moving:
         view = view.filter(ImageFilter.BoxBlur(6 * math.sin(math.pi * (t - lead.t) / 0.22)))
-    for e in ctx.active(t):
-        if e.kind != "rhythm" and e is lead:
-            sound_pill(view, ctx, e, t, W / 2, H * 0.86)
+    count = sum(v.c == lead.c for v in ctx.voices(t))
+    voice_label(view, ctx, lead, t, (0, 0, W, H - 40), count)
     return view
 
 
@@ -544,8 +569,8 @@ def shot_pile(ctx, t, seg):
         live = e.active(t)
         mirror = idx % 3 == 2
         tile = cover(ctx.frame(e, t) if live else ctx.frame(e, e.end_t - 1 / FPS), w, h, mirror=mirror)
-        if not live and depth > 0:
-            tile = Image.blend(tile, ImageOps.grayscale(tile).convert("RGB"), 0.35)
+        if not live:
+            tile = dim(tile)
         border = max(6, int(w * 0.035))
         framed = Image.new("RGB", (tile.width + border * 2, tile.height + border * 2), (255, 255, 255))
         framed.paste(tile, (border, border))
@@ -563,7 +588,7 @@ def shot_pile(ctx, t, seg):
             d = ImageDraw.Draw(canvas)
             label_y = cy + framed.height / 2 + 36
             label_y = min(label_y, H - 150)
-            text_center(d, (cx, label_y), ctx.names[e.c], font(FONT_HAND, 54), INK, 8, (255, 255, 255))
+            text_center(d, (cx, label_y), ctx.names[e.c], font(FONT_HAND, 50), INK)
             if live:
                 scribble_wave(canvas, e, t, cx, label_y + 70, min(W * 0.8, framed.width * 1.1), CLIP_COLORS[e.c])
     return canvas
@@ -571,14 +596,14 @@ def shot_pile(ctx, t, seg):
 
 # ---------------------------------------------------------------- director
 
-SHOTS = {"full": shot_full, "flip": shot_flip, "stutter": shot_stutter, "mirror": shot_mirror,
-         "kaleido": shot_kaleido, "burst": shot_burst, "pan": shot_pan, "pile": shot_pile}
-BLEED = {"full", "flip", "stutter", "mirror", "kaleido", "burst"}
+SHOTS = {"full": shot_full, "flip": shot_flip, "stutter": shot_stutter, "split": shot_split,
+         "burst": shot_burst, "pan": shot_pan, "pile": shot_pile}
+BLEED = {"full", "flip", "stutter", "split", "burst"}
 LONG = {"pan", "pile"}  # need two bars to build up
 POOLS = {
     "calm": ["full", "flip", "pan"],
-    "mid": ["mirror", "stutter", "pile", "pan", "flip"],
-    "high": ["burst", "kaleido", "stutter", "burst"],
+    "mid": ["split", "stutter", "pile", "pan", "flip"],
+    "high": ["burst", "split", "stutter", "burst"],
 }
 
 
@@ -611,10 +636,8 @@ def plan_shots(total_t, seed):
 def director_frame(ctx, t, plan, hud):
     shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
     canvas = SHOTS[shot](ctx, t, (start, end))
-    if shot in BLEED:
-        name_stamp(canvas, ctx, t)
-        if hud:
-            sequencer_ribbon(canvas, ctx, t)
+    if shot in BLEED and hud:
+        sequencer_ribbon(canvas, ctx, t)
     if energy != "calm" and t - start < 0.06 and start > 0:
         canvas = Image.blend(canvas, Image.new("RGB", (W, H), (255, 255, 255)), 0.6 * (1 - (t - start) / 0.06))
     return canvas
@@ -642,7 +665,7 @@ def main():
     frames = total // SPF
     for seed in seeds:
         plan = plan_shots(total / SR, seed)
-        hud = seed % 2 == 1
+        hud = False
         look = "bold" if seed % 3 else "paper"
         print(f"seed {seed}: look={look} hud={hud} " + " > ".join(p[0] for p in plan))
         out = out_dir / f"seed{seed}.mp4"
