@@ -1169,33 +1169,24 @@ def face_disc(ctx, c, size):
 
 def cover_title(ctx, canvas):
     """The first frame is the cover a friend (and a feed thumbnail) sees before
-    pressing play: what song, made of whose sounds, with their faces. Complete
+    pressing play: whose everyday this is, and that オトグラシ made it. Complete
     from frame 0, kept clear of the app's own buttons at the bottom and right."""
-    song = (ctx.title or "なんでもない日の音").split("（")[0]
-    cast = ctx.heard
-    card = Image.new("RGBA", (W - 90, 250), (0, 0, 0, 0))
+    owner = __import__("os").environ.get("OTO_OWNER") or "わたし"
+    headline = f"{owner}の日常"
+    card = Image.new("RGBA", (W - 110, 210), (0, 0, 0, 0))
     d = ImageDraw.Draw(card)
     d.rounded_rectangle((0, 0, card.width - 1, card.height - 1), 26, fill=(*PAPER, 250))
-    d.text((34, 30), f"日常の音 {len(cast)}つで", font=font(FONT_HAND, 38), fill=(*CORAL, 255))
     size = 104
-    while size > 48 and d.textlength(song, font=font(FONT_BOLD, size)) > card.width - 68:
+    while size > 48 and d.textlength(headline, font=font(FONT_BOLD, size)) > card.width - 68:
         size -= 2
-    d.text((32, 88), song, font=font(FONT_BOLD, size), fill=(*INK, 255))
-    d.text((card.width - 34, card.height - 30), "弾いてみた", font=font(FONT_HAND, 30),
-           fill=(*INK, 200), anchor="rm")
+    d.text((34, 26), headline, font=font(FONT_BOLD, size), fill=(*INK, 255))
+    d.text((card.width - 34, card.height - 36), "by オトグラシ", font=font(FONT_HAND, 32),
+           fill=(*CORAL, 255), anchor="rm")
     card = card.rotate(3, expand=True, resample=Image.BICUBIC)
     shadow = Image.new("RGBA", card.size, (0, 0, 0, 0))
     shadow.putalpha(card.getchannel("A").point(lambda v: v * 0.4))
-    canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(14)), (36, 150))
-    canvas.alpha_composite(card, (30, 138))
-    # the cast as round face stickers, overlapping a little like a group photo
-    n = len(cast)
-    disc = 118 if n <= 4 else 96
-    step = min(disc + 14, (W - 120) // max(1, n))
-    x0 = (W - 70 - (step * (n - 1) + disc)) // 2
-    for k, c in enumerate(cast):
-        face = face_disc(ctx, c, disc).rotate((-6, 4, -3, 6, -5, 3)[k % 6], expand=True, resample=Image.BICUBIC)
-        canvas.alpha_composite(face, (x0 + k * step, 440 + (12 if k % 2 else 0)))
+    canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(14)), (46, 172))
+    canvas.alpha_composite(card, (40, 160))
     return canvas
 
 
