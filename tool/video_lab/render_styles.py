@@ -114,6 +114,7 @@ class Event:
         self.midi = raw.get("targetMidiNote")
         self.notes = raw.get("notes")  # sung events: [[offset, midi], ...]
         self.tune = raw.get("tune", 1.0)
+        self.ref = raw.get("refMidi")  # syllable events keep their own contour
         self.rate = raw.get("rate")  # sampler-style speed change (drums)
         self.src_start = raw["sourceStartSample"]
         self.src_dur = raw.get("sourceDurationSamples") or raw["durationSamples"]
@@ -149,7 +150,8 @@ def render_audio(events, sources, total, source_pitch=None, master=True):
             from lab_audio import Voice, sing
             if e.c not in voices:
                 voices[e.c] = Voice(src.pcm)
-            buf = sing(voices[e.c], e.src_start, e.dur, e.notes, e.tune, e.rate or 1.0)
+            buf = sing(voices[e.c], e.src_start, e.dur, e.notes, e.tune, e.rate or 1.0,
+                       accent=e.ref is None, ref=e.ref)
         elif e.rate:
             pos = e.src_start + np.arange(e.dur) * e.rate  # picture follows the same speed
             buf = np.interp(pos, np.arange(src.samples), src.pcm, right=0.0).astype(np.float32)

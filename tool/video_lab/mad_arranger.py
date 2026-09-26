@@ -26,6 +26,8 @@ BEAT = 22_500
 BAR = BEAT * 4
 SIXTEENTH = BEAT // 4
 BARS = 16
+FLATTEN = float(__import__("os").environ.get("OTO_FLATTEN", "0.6"))  # 0 natural glide … 1 flat
+GUIDE = float(__import__("os").environ.get("OTO_GUIDE", "0"))  # forced-melody layer, 0 = off
 
 
 class Arrangement:
@@ -118,9 +120,49 @@ class Arrangement:
         flush()
         return ri, pos
 
+    def syllable_line(self, clip, cursor, notes, bar_offset, gain, role):
+        """One note = attack of the next syllable + a sung body.
+
+        Each note opens with the raw first ~40 ms of the next syllable (コッ, ケッ,
+        あ, り...), so every note is visibly and audibly a new hit of the real
+        sound; its body comes from the clip's clearest voiced stretch, read
+        forward note by note and tuned to the note, so the tune is heard. Notes
+        stop a little early, so the line never melts into one continuous tone.
+        cursor = (syllable index, body read position)."""
+        voice = self.voices[clip]
+        syl = voice.syllables() or [(a, b, None) for a, b in sorted(voice.regions)]
+        runs = voice.voiced_runs() or sorted(voice.regions)
+        body = max(runs, key=lambda r: r[1] - r[0])  # the clearest sustained part
+        k, pos = cursor
+        pos = body[0] if pos is None else pos
+        attack = int(0.04 * SR)
+        for b, length, midi in notes:
+            start = int((b + bar_offset * 4) * BEAT)
+            dur = int(length * BEAT * 0.85)
+            a0, a1, _ = syl[k % len(syl)]
+            hit = min(attack, a1 - a0, dur // 3)
+            self.add(clip, start, hit, a0, "rhythm", role, gain)
+            rest = dur - hit
+            if rest > int(0.03 * SR):
+                if pos + rest > body[1]:
+                    pos = body[0]
+                src = pos
+                if rest > body[1] - body[0]:  # a very long note: read the body slower
+                    extra = {"rate": round((body[1] - body[0]) / rest, 4)}
+                    src = body[0]
+                else:
+                    extra = {}
+                    pos += rest
+                self.add(clip, start + hit, rest, src, "sung", role, gain, notes=[[0, float(midi)]], **extra)
+            k += 1
+        return (k % len(syl), pos)
+
     def guide_line(self, clip, notes, bar_offset, gain):
-        """The forced-melody layer: the singer's steadiest instant held and
+        """Off when gain is 0.
+        The forced-melody layer: the singer's steadiest instant held and
         retuned note by note, in its own timbre, under the moving words."""
+        if gain <= 0:
+            return
         src = self.voices[clip].steadiest()
         group = []
 
@@ -275,12 +317,12 @@ def main():
 
     # bars 5-12: the melody, sung continuously; two singers trade every two bars
     arr.drums(kit, 4, 12)
-    cursors = {s: (0, sorted(voices[s].regions)[0][0]) for s in singers}
+    cursors = {s: (0, None) for s in singers}
     for chunk in range(4):
         s = singers[chunk % len(singers)]
         part = [(b, l, m) for b, l, m in sung[s] if chunk * 8 <= b < chunk * 8 + 8]
-        cursors[s] = arr.sung_line(s, cursors[s], part, 4, 0.95, "melody")
-        arr.guide_line(s, part, 4, 0.75)
+        cursors[s] = arr.syllable_line(s, cursors[s], part, 4, 0.95, "melody")
+        arr.guide_line(s, part, 4, GUIDE)
     bass_cursor = bass_part(bass_cursor, bass_notes, 4, 0.55)
     # chops answer in the gaps of bars 9-12, from clips that have not sung
     answer = [i for i in others if i not in singers] or others or [lead]
@@ -300,8 +342,8 @@ def main():
     arr.drums(kit, 14, 16)
     s = singers[-1]
     hook = [(b, l, m) for b, l, m in sung[s] if b < 8]
-    arr.sung_line(s, cursors[s], hook, 14, 1.0, "melody")
-    arr.guide_line(s, hook, 14, 0.6)
+    arr.syllable_line(s, cursors[s], hook, 14, 1.0, "melody")
+    arr.guide_line(s, hook, 14, GUIDE)
     bass_part(bass_cursor, [(b, l, m) for b, l, m in bass_notes if b < 8], 14, 0.55)
     for k, i in enumerate(order):
         arr.stutter_head(i, 15 * BAR + 2 * BEAT + k * SIXTEENTH * 2 % (2 * BEAT), longest[i], times=2,

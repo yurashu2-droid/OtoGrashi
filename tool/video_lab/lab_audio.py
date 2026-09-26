@@ -129,6 +129,27 @@ class Voice:
                     best, where = spread, i
         return (where if where is not None else int(np.argmax(self.rms))) * HOP
 
+    def syllables(self, min_len=0.06):
+        """Split audible regions at loudness valleys: コ / ケ / コッ / コー, あ / り / が / と / う.
+        Returns (start, end, median_midi or None) in time order."""
+        smooth = np.convolve(self.rms, np.ones(3) / 3, "same")
+        out = []
+        for a, b in sorted(self.regions):
+            fa, fb = a // HOP, min(len(smooth), b // HOP)
+            cuts = [fa]
+            for i in range(fa + 3, fb - 3):
+                left = smooth[max(fa, i - 15):i].max()
+                right = smooth[i + 1:min(fb, i + 16)].max()
+                if smooth[i] <= smooth[i - 1] and smooth[i] <= smooth[i + 1]                         and smooth[i] < 0.7 * min(left, right) and i - cuts[-1] >= min_len * 100:
+                    cuts.append(i)
+            cuts.append(fb)
+            for s0, s1 in zip(cuts, cuts[1:]):
+                if (s1 - s0) * HOP < min_len * SR:
+                    continue
+                v = self.midi[s0:s1][self.voiced[s0:s1]]
+                out.append((s0 * HOP, s1 * HOP, float(np.median(v)) if len(v) >= 3 else None))
+        return out
+
     def voiced_seconds(self):
         return float(self.voiced.sum()) * HOP / SR
 
@@ -137,10 +158,12 @@ class Voice:
         return float(np.median(v)) if len(v) else 60.0
 
 
-def sing(voice, src_start, duration, notes, tune=1.0, rate=1.0, accent=True):
+def sing(voice, src_start, duration, notes, tune=1.0, rate=1.0, accent=True, ref=None):
     """Pitch-synchronous overlap-add (TD-PSOLA) with the source moving at 1x.
 
     notes: [(offset_samples, midi), ...] target steps from the event start.
+    ref: when given, the whole event is moved by (note - ref) semitones so the
+    sound keeps its own rise and fall, flattened only by `tune`.
     In voiced frames, two-period grains are cut at the source's own pitch
     marks and laid down at the target period, which moves the pitch while
     keeping the voice's timbre. Unvoiced frames (consonants, breath) are
@@ -173,7 +196,13 @@ def sing(voice, src_start, duration, notes, tune=1.0, rate=1.0, accent=True):
         f = int(min(max(s // HOP, 0), len(voice.midi) - 1))
         if voice.voiced[f]:
             src_midi = voice.midi[f]
-            goal = float(np.clip(src_midi + (notes[note_i][1] - src_midi) * tune, src_midi - 12, src_midi + 12))
+            if ref is not None:
+                # move the syllable as a whole, then flatten its own glide by `tune`
+                # (0 keeps the natural rise and fall, 1 is a flat autotuned note)
+                moved = src_midi + float(np.clip(notes[note_i][1] - ref, -12, 12))
+                goal = moved + tune * (notes[note_i][1] - moved)
+            else:
+                goal = float(np.clip(src_midi + (notes[note_i][1] - src_midi) * tune, src_midi - 12, src_midi + 12))
             p_src = SR / (440 * 2 ** ((src_midi - 69) / 12))
             p_out = SR / (440 * 2 ** ((goal - 69) / 12))
             if mark is None or abs(mark - s) > p_src:

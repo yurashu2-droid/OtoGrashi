@@ -34,24 +34,26 @@ def main():
     rest = stem(lambda r: r.get("role") not in ("melody", "guide"))
     notes = []
     for r in raw:
-        if r.get("role") != "melody":
-            continue
-        steps = r.get("notes") or [[0, r.get("targetMidiNote", 60)]]
+        if r.get("role") != "melody" or not (r.get("notes") or r.get("targetMidiNote")):
+            continue  # raw attacks carry no pitch of their own
+        steps = r.get("notes") or [[0, r["targetMidiNote"]]]
         for k, (off, midi) in enumerate(steps):
             end = steps[k + 1][0] if k + 1 < len(steps) else r["durationSamples"]
             notes.append((r["destinationStartSample"] + off, r["destinationStartSample"] + end, midi))
     hits = []
     for a, b, midi in notes:
         frames = range(a, max(a + 1, b - 1_920), 480)
-        good = 0
+        good = sounding = 0
         for i in frames:
             seg = melody[i:i + 1_920]
             if len(seg) < 1_920 or np.sqrt(np.mean(seg ** 2)) < 0.02:
                 continue
+            sounding += 1
             m, clarity = yin_frame(seg, SR // 800, SR // 65)
             if clarity > 0.6 and abs(((m - midi + 6) % 12) - 6) < 1.0:
                 good += 1
-        hits.append(good / max(1, len(frames)))
+        # judged on the part that sounds: a syllable may end before its note does
+        hits.append(good / max(1, sounding) if sounding >= 3 else 0.0)
     hits = np.array(hits)
     starts = np.array([a for a, _, _ in notes])
     # loudness of melody vs everything else while the melody plays
