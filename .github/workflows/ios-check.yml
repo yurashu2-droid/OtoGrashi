@@ -162,13 +162,13 @@ jobs:
             local file="ci-logs/$1.txt" title="$1" pattern="$2"
             [ -f "$file" ] || return 0
             local lines
-            lines="$(grep -nE "$pattern" "$file" | head -60 | cut -c1-240)"
+            lines="$( (grep -nE "$pattern" "$file" || true) | head -60 | cut -c1-240)"
             [ -n "$lines" ] || return 0
             lines="${lines//'%'/'%25'}"
             lines="${lines//$'\n'/'%0A'}"
             echo "::warning title=${title}::${lines:0:3800}"
           }
-          summarize analyze 'error|warning|info - '
+          summarize analyze 'error|warning|info|•|issues? found'
           summarize test '\[E\]|Expected:|Actual:|Error:|Exception|FAILED|Some tests failed|All tests passed'
           summarize ios-simulator-build 'error:|Error'
           summarize xctest 'error:|failed|Executed|TEST SUCCEEDED|TEST FAILED|XCTAssert'
