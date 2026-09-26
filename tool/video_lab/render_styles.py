@@ -645,18 +645,6 @@ def cutout(ctx, e, t, height, close=False, outline=0, max_width=W * 0.8):
     if outline:
         # pad first so the white edge is not clipped at the cut-out's bounding box
         a = ImageOps.expand(piece.getchannel("A"), outline, 0).filter(ImageFilter.MaxFilter(outline * 2 + 1))
-        # where the subject runs off the edge of the shot there is no outline to draw
-        fw, fh = frame.size
-        edge_a = np.asarray(a).copy()
-        if box[0] <= 2:
-            edge_a[:, :outline + 2] = 0
-        if box[2] >= fw - 2:
-            edge_a[:, -outline - 2:] = 0
-        if box[1] <= 2 and not close:
-            edge_a[:outline + 2, :] = 0
-        if box[3] >= fh - 2 and not close:
-            edge_a[-outline - 2:, :] = 0
-        a = Image.fromarray(edge_a)
         board = Image.new("RGBA", a.size, (255, 255, 255, 255))
         board.putalpha(a.filter(ImageFilter.GaussianBlur(1)))
         board.alpha_composite(piece, (outline, outline))
@@ -724,39 +712,48 @@ def shot_cutout(ctx, t, seg):
     return canvas.convert("RGB")
 
 
-def jump_height(phase):
-    """Measured on the reference: up in ~0.1 s, hang ~0.17 s, down in ~0.18 s."""
-    if phase < 0.1:
-        return ease_out(phase / 0.1)
-    if phase < 0.27:
-        return 1.0
-    if phase < 0.45:
-        u = (phase - 0.27) / 0.18
-        return 1 - u * u
-    return 0.0
-
-
 def shot_sticker(ctx, t, seg):
-    """White-edged sticker of the sounding subject over blurred scenery from the
-    other sounds, after the reference: the scenery hard-cuts on every beat, and
-    every other beat the sticker jumps (quick up, hang, drop)."""
+    """On each hit the sounding subject is lifted out as a white-edged sticker over
+    blurred scenery from another sound; then the subject's *real* surroundings
+    rise from the bottom and replace the blur. The sticker sits exactly where
+    the subject is in its shot, so the returning scene closes around it; the
+    next hit lifts it onto a different blurred scene."""
     lead = lead_of(ctx, t)
-    others = sorted({e.c for e in ctx.events if e.t <= t and e.c != lead.c and e.role != "guide"}) or [lead.c]
-    beat = int(t / BEAT)
-    src = ctx.sources[others[beat % len(others)]]
-    still = src.frames[(beat * 7) % len(src.frames)]
-    bg = cover(still, W, H, zoom=1.08).filter(ImageFilter.GaussianBlur(14))
-    bg = ImageEnhance.Brightness(bg).enhance(0.85).convert("RGBA")
-    if not ctx.voices(t) and t - lead.end_t > 0.12:
-        return bg.convert("RGB")
-    lift = jump_height(t - beat * BEAT) if beat % 2 == 0 else 0.0
-    piece = cutout(ctx, lead, t, H * 0.6, outline=10, max_width=W * 0.85)
-    if piece is not None:
-        x = int(W / 2 - piece.width / 2)
-        y = int(H * 0.99 - piece.height - lift * H * 0.14)
-        bg.alpha_composite(piece, (x, y))
-    voice_label(bg, ctx, lead, t, (0, 0, W, H), sum(v.c == lead.c for v in ctx.voices(t)))
-    return bg.convert("RGB")
+    src = ctx.sources[lead.c]
+    if not getattr(src, "has_subject", False):
+        return single(ctx, t, lead)
+    full = cover(ctx.frame(lead, t), W, H)
+    hits = [e for e in ctx.events if e.c == lead.c and e.role != "guide" and e.t <= t and e.kind != "sung"]
+    hit_t = max((e.t for e in hits), default=lead.t)
+    since = t - hit_t
+    # blurred scenery from another sound, a different one on every hit
+    others = sorted({e.c for e in ctx.events if e.c != lead.c and e.role != "guide"}) or [lead.c]
+    n = len(hits)
+    other = ctx.sources[others[n % len(others)]]
+    scene = cover(other.frames[(n * 11) % len(other.frames)], W, H, zoom=1.08).filter(ImageFilter.GaussianBlur(14))
+    canvas = ImageEnhance.Brightness(scene).enhance(0.85).convert("RGBA")
+    rise = ease_out((since - 0.08) / 0.35)
+    if rise > 0:
+        top = int(H * (1 - rise))
+        canvas.paste(full.crop((0, top, W, H)).convert("RGBA"), (0, top))
+        if rise < 1:
+            ImageDraw.Draw(canvas).rectangle((0, top - 3, W, top + 3), fill=(255, 255, 255, 200))
+    mask = cover(ctx.mask(lead, t), W, H).point(lambda v: 255 if v > 96 else 0)
+    edge = mask.filter(ImageFilter.MaxFilter(21)).filter(ImageFilter.GaussianBlur(1))
+    # where the subject runs off the frame, pull it in so the white edge closes around it too
+    inner = np.asarray(mask).copy()
+    inner[:10, :] = 0
+    inner[-10:, :] = 0
+    inner[:, :10] = 0
+    inner[:, -10:] = 0
+    white = Image.new("RGBA", (W, H), (255, 255, 255, 255))
+    white.putalpha(edge)
+    subject = full.convert("RGBA")
+    subject.putalpha(Image.fromarray(inner).filter(ImageFilter.GaussianBlur(1)))
+    canvas.alpha_composite(white)
+    canvas.alpha_composite(subject)
+    voice_label(canvas, ctx, lead, t, (0, 0, W, H), sum(v.c == lead.c for v in ctx.voices(t)))
+    return canvas.convert("RGB")
 
 
 def shot_burst(ctx, t, seg):
