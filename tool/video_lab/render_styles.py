@@ -243,6 +243,7 @@ class Ctx:
         self.sources = sources
         self.total_t = total / SR
         self.names = [s.name for s in sources]
+        self.runs = repeat_runs(events)
         # clips that actually sound; silent ones stay out of the credits
         self.heard = sorted({e.c for e in events})
         self.title = title
@@ -292,6 +293,64 @@ def soft_text(layer, xy, s, f, fill, alpha):
     ImageDraw.Draw(shadow).text((xy[0], xy[1] + 3), s, font=f, fill=(0, 0, 0, int(alpha * 0.55)))
     layer.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(8)))
     ImageDraw.Draw(layer).text(xy, s, font=f, fill=(*fill, alpha))
+
+
+REPEATABLE = {"chop", "fx", "echo", "phrase", None}
+
+
+def repeat_runs(events):
+    """Groups of the same sound played again and again: the same clip and the
+    same place in it, each hit within 3/4 of a beat of the previous one.
+    Drum hits repeat all song long, so they never count."""
+    hits = sorted((e for e in events if e.role in REPEATABLE and e.kind != "sung"), key=lambda e: e.t)
+    runs, open_runs = [], {}
+    for e in hits:
+        key = (e.c, e.src_start)
+        run = open_runs.get(key)
+        if run and e.t - run[-1].t <= 0.75 * BEAT:
+            run.append(e)
+        else:
+            run = [e]
+            open_runs[key] = run
+            runs.append(run)
+    return [r for r in runs if len(r) >= 2]
+
+
+def repeat_moment(canvas, ctx, t):
+    """While a sound repeats, a still captured at each hit is laid next to the last."""
+    run = next((r for r in ctx.runs if r[0].t <= t < r[-1].end_t + 0.3), None)
+    if run is None:
+        return canvas
+    shown = [e for e in run if e.t <= t]
+    if len(shown) < 2:
+        return canvas
+    base = ImageEnhance.Brightness(canvas).enhance(0.7).convert("RGBA")
+    n = len(shown)
+    per_row = min(n, 5)
+    size = H * (0.34 if n <= 5 else 0.24)
+    step = (W * 0.84) / max(1, per_row)
+    for i, e in enumerate(shown):
+        row, col = divmod(i, 5)
+        src = ctx.sources[e.c]
+        still_t = e.t  # the picture at the moment of this hit, frozen
+        piece = cutout(ctx, e, still_t, size, max_width=step * 1.3) if getattr(src, "has_subject", False) else None
+        if piece is not None and piece.width > piece.height * 1.6:
+            piece = None  # a flat sliver is a poor cut-out (tracks, ground): show the still itself
+        if piece is None:
+            photo = cover(ctx.frame(e, still_t), size * 0.75, size).convert("RGBA")
+            edge = max(5, int(size * 0.03))
+            piece = Image.new("RGBA", (photo.width + 2 * edge, photo.height + 2 * edge), (255, 255, 255, 255))
+            piece.alpha_composite(photo, (edge, edge))
+        newest = i == n - 1
+        pop = 1 + 0.18 * max(0.0, 1 - (t - e.t) / 0.08) if newest else 1
+        if pop != 1:
+            piece = piece.resize((int(piece.width * pop), int(piece.height * pop)))
+        tilt = (-5, 3, -2, 5, -4)[i % 5]
+        piece = piece.rotate(tilt, expand=True, resample=Image.BICUBIC)
+        cx = W * 0.08 + step * (col + 0.5)
+        cy = H * (0.42 if n <= 5 else 0.34 + 0.28 * row) + (18 if i % 2 else -18)
+        base.alpha_composite(piece, (int(cx - piece.width / 2), int(cy - piece.height / 2)))
+    return base.convert("RGB")
 
 
 def draw_op(canvas, ctx, t, style):
@@ -881,6 +940,7 @@ def plan_shots(total_t, seed, sections=None):
 def director_frame(ctx, t, plan, hud):
     shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
     canvas = SHOTS[shot](ctx, t, (start, end))
+    canvas = repeat_moment(canvas, ctx, t)
     if shot in BLEED and hud:
         sequencer_ribbon(canvas, ctx, t)
     if energy != "calm" and t - start < 0.06 and start > 0:
