@@ -80,7 +80,8 @@ class Source:
         self.frames = [Image.fromarray(f) for f in arr]
         with wave.open(str(audio)) as wf:
             pcm = np.frombuffer(wf.readframes(wf.getnframes()), np.int16).astype(np.float32) / 32768
-        self.pcm = pcm
+        # phone clips vary a lot in level; even them out before mixing
+        self.pcm = pcm * (0.9 / max(1e-4, float(np.abs(pcm).max())))
         self.samples = len(pcm)
 
     def frame_at_sample(self, sample):
