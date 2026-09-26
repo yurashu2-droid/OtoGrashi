@@ -13,6 +13,7 @@ on:
       - 'pubspec.yaml'
       - 'pubspec.lock'
       - 'analysis_options.yaml'
+      - '.github/workflows/ios-check.yml'
 
 permissions:
   contents: read
