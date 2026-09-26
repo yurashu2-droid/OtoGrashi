@@ -800,6 +800,10 @@ def main():
         hud = False
         look = "bold" if seed % 3 else "paper"
         print(f"seed {seed}: look={look} hud={hud} " + " > ".join(p[0] for p in plan))
+        finish = None
+        if __import__("os").environ.get("OTO_LOOK") == "pop":
+            from lab_look import PopGlitch
+            finish = PopGlitch(ctx, plan, seed)
         out = out_dir / f"seed{seed}.mp4"
         proc = subprocess.Popen([FFMPEG, "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
                                  "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-i", str(wav_path),
@@ -809,6 +813,8 @@ def main():
             t = f / FPS
             img = director_frame(ctx, video_time(t, master_fx), plan, hud)
             img = video_post(img, t, master_fx)
+            if finish and t < ctx.total_t - 1.3:
+                img = finish.apply(img, t)
             img = draw_op(img, ctx, t, look)
             img = draw_ed(img, ctx, t, look)
             proc.stdin.write(img.convert("RGB").tobytes())
