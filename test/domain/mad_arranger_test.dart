@@ -3,7 +3,7 @@ import 'package:otogurashi/domain/arrangement.dart';
 import 'package:otogurashi/domain/arrangement_engine.dart';
 import 'package:otogurashi/domain/melody_template.dart';
 
-AnalyzedClip _clip(int i, {bool voiced = true}) => AnalyzedClip(
+AnalyzedClip _clip(int i, {bool voiced = true, double? register}) => AnalyzedClip(
   assetId: 'clip-$i',
   sourceStartSample: 4800,
   durationSamples: 144000,
@@ -16,7 +16,7 @@ AnalyzedClip _clip(int i, {bool voiced = true}) => AnalyzedClip(
   peak: .8,
   rms: .2,
   suggestedRole: i == 0 ? SuggestedRole.transient : SuggestedRole.sustain,
-  registerMidiNote: 50.0 + i * 4,
+  registerMidiNote: register ?? 50.0 + i * 4,
   syllables: const [
     AudibleRegion(startSample: 9600, durationSamples: 9600, fundamentalMidiNote: 55),
     AudibleRegion(startSample: 19200, durationSamples: 12000, fundamentalMidiNote: 57),
@@ -117,9 +117,9 @@ void main() {
     expect(variants.length, greaterThan(4));
   });
 
-  test('a whistle-like clip is retuned by speed, not by grains', () {
+  test('a high whistle is retuned by speed, not by grains', () {
     final a = arrange(
-      clips: [_clip(1)],
+      clips: [_clip(1, register: 92)],
       style: ArrangementStyle.lively,
       seed: 2,
       melodyTemplate: MelodyTemplate.midiScore,
@@ -129,6 +129,20 @@ void main() {
     final bodies = a.events.where((e) => e.role == 'melody' && e.rate != null);
     expect(bodies, isNotEmpty);
     expect(bodies.every((e) => e.targetMidiNote == null), isTrue);
+  });
+
+  test('a pure but lower voice keeps its own sound through the grains', () {
+    final a = arrange(
+      clips: [_clip(1, register: 80)],
+      style: ArrangementStyle.lively,
+      seed: 2,
+      melodyTemplate: MelodyTemplate.midiScore,
+      performanceMode: PerformanceMode.mad,
+      durationSeconds: 15,
+    );
+    final melody = a.events.where((e) => e.role == 'melody');
+    expect(melody.where((e) => e.targetMidiNote != null), isNotEmpty);
+    expect(melody.every((e) => e.rate == null), isTrue);
   });
 
   test('every clip is heard beyond the drum kit, cameos quietly behind the melody', () {

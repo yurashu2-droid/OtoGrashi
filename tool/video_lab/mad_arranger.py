@@ -134,7 +134,10 @@ class Arrangement:
         voice = self.voices[clip]
         syl = voice.syllables() or [(a, b, None) for a, b in sorted(voice.regions)]
         runs = voice.voiced_runs() or sorted(voice.regions)
-        pure = voice.purity() > 0.6  # whistle-like: retune by speed, not by grains
+        # a high, pure whistle is retuned by speed (grains would add a low buzz when
+        # it is shifted down); anything lower keeps its own voice through the grains,
+        # even when it measures as nearly pure (a distant rooster, a call)
+        pure = voice.purity() > 0.6 and voice.median_midi() >= 88
         body = max(runs, key=lambda r: r[1] - r[0])  # the clearest sustained part
         k, pos = cursor
         pos = body[0] if pos is None else pos

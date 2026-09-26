@@ -147,7 +147,10 @@ class _Voice {
           : voicedRuns.isEmpty
           ? 99
           : 12);
-  bool get pure => (clip.purity ?? 0) > .6;
+  /// A high, pure whistle is retuned by speed: grains would add a low buzz
+  /// when it is shifted down. Anything lower keeps its own voice through the
+  /// grains, even when it measures as nearly pure (a distant rooster, a call).
+  bool get pure => (clip.purity ?? 0) > .6 && medianMidi >= 88;
 
   /// The clearest sustained stretch: the body every sung note is read from.
   _Span get body => voicedRuns.isEmpty
