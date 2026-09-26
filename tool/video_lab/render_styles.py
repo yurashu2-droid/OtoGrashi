@@ -91,6 +91,9 @@ class Source:
     def frame_at_sample(self, sample):
         return self.frames[int(sample // SPF) % len(self.frames)]
 
+    def mask_at_sample(self, sample):
+        return self.masks[int(sample // SPF) % len(self.masks)]
+
 
 def cover(im, w, h, zoom=1.0, focus_y=0.42, mirror=False, dx=0.0):
     """Crop-to-fill with a face-friendly vertical focus."""
@@ -262,6 +265,11 @@ class Ctx:
         src = self.sources[e.c]
         t = min(max(t, e.t), e.end_t - 1 / FPS)
         return src.frame_at_sample(e.source_sample(t, src))
+
+    def mask(self, e, t):
+        src = self.sources[e.c]
+        t = min(max(t, e.t), e.end_t - 1 / FPS)
+        return src.mask_at_sample(e.source_sample(t, src))
 
     def voices(self, t, limit=9):
         """Events sounding at t, oldest first: one picture per voice."""
@@ -527,6 +535,113 @@ def shot_voices(ctx, t, seg, limit=4):
     return canvas
 
 
+BACKDROPS = [(247, 190, 205), (196, 226, 242), (240, 232, 205), (204, 236, 214)]
+
+
+def cutout(ctx, e, t, height, close=False, outline=0, max_width=W * 0.8):
+    """The sounding subject on transparency, scaled to `height`. close=True keeps
+    the top of the subject (a face or head) for a close-up."""
+    frame = ctx.frame(e, t)
+    if not getattr(ctx.sources[e.c], "has_subject", True):
+        # nothing to cut out (a landscape, a crowd blur): use the shot as a photo card
+        ph = height * (0.62 if not close else 0.8)
+        pw = min(max_width, ph * 0.75)
+        photo = cover(frame, pw, ph).convert("RGBA")
+        edge = max(6, int(pw * 0.03))
+        board = Image.new("RGBA", (photo.width + 2 * edge, photo.height + 2 * edge), (255, 255, 255, 255))
+        board.alpha_composite(photo, (edge, edge))
+        return board.rotate(-3, expand=True, resample=Image.BICUBIC)
+    mask = ctx.mask(e, t).resize(frame.size, Image.BILINEAR)
+    box = mask.point(lambda v: 255 if v > 96 else 0).getbbox()
+    if not box:
+        return None
+    x0, y0, x1, y1 = box
+    if close:
+        y1 = y0 + int((y1 - y0) * 0.5)
+    rgba = frame.convert("RGBA")
+    rgba.putalpha(mask)
+    piece = rgba.crop((x0, y0, x1, y1))
+    scale = min(height / max(1, piece.height), max_width / max(1, piece.width))
+    piece = piece.resize((max(1, int(piece.width * scale)), max(1, int(piece.height * scale))), Image.BILINEAR)
+    if outline:
+        a = piece.getchannel("A").filter(ImageFilter.MaxFilter(outline * 2 + 1))
+        board = Image.new("RGBA", (piece.width + 2 * outline, piece.height + 2 * outline), (0, 0, 0, 0))
+        white = Image.new("RGBA", piece.size, (255, 255, 255, 255))
+        white.putalpha(a)
+        board.alpha_composite(white, (outline, outline))
+        board.alpha_composite(piece, (outline, outline))
+        piece = board
+    return piece
+
+
+def shot_cutout(ctx, t, seg):
+    """Flat pastel ground, the subject cut out and cloned on repeats.
+
+    - one clone per hit of the lead sound within the last beat, trailing left,
+      older clones fainter (a repeated sound reads as a row of the same figure)
+    - silence leaves the empty ground: the figure only exists while it sounds
+    - each bar switches between full figure, close-up and a jump
+    """
+    rng = np.random.default_rng(getattr(ctx, "seed", 0))
+    bg = BACKDROPS[int(rng.integers(len(BACKDROPS)))]
+    canvas = Image.new("RGBA", (W, H), (*bg, 255))
+    live = ctx.voices(t)
+    lead = lead_of(ctx, t)
+    if not live and t - lead.end_t > 0.12:
+        return canvas.convert("RGB")
+    bar = int(t / BAR)
+    mode = ["full", "close", "jump", "full"][(bar + int(rng.integers(4))) % 4]
+    hits = [e for e in ctx.events if e.c == lead.c and e.role != "guide" and 0 <= t - e.t < BEAT and e.kind != "sung"]
+    hits = sorted(hits, key=lambda e: e.t)[-5:] or [lead]
+    # a burst of 4+ hits in half a beat smears into many thin copies
+    smear = len([e for e in hits if t - e.t < BEAT / 2]) >= 4
+    height = H * (0.95 if mode == "close" else 0.78)
+    base_x = W * (0.5 if mode == "close" else 0.42)
+    base_y = H * (0.98 if mode != "jump" else 0.98 - 0.16 * (int(t / (BEAT / 2)) % 2))
+    for i, e in enumerate(hits):
+        piece = cutout(ctx, e, t, height, close=mode == "close", max_width=W * (0.9 if mode == "close" else 0.8))
+        if piece is None:
+            continue
+        back = len(hits) - 1 - i
+        fade = 1.0 if back == 0 else max(0.35, 0.8 - 0.15 * back)
+        copies = range(8, 0, -1) if smear and back == 0 else [0]
+        for k in copies:
+            ghost = piece
+            if k or fade < 1:
+                ghost = piece.copy()
+                ghost.putalpha(ghost.getchannel("A").point(lambda v: int(v * (fade if not k else 0.18))))
+            x = int(base_x - piece.width / 2 - back * W * 0.12 - k * W * 0.018)
+            canvas.alpha_composite(ghost, (x, int(base_y - piece.height)))
+    d = ImageDraw.Draw(canvas)
+    name = ctx.names[lead.c]
+    for j, ch in enumerate(name[:10]):
+        d.text((W * 0.86, H * 0.36 + j * 34), ch, font=font(FONT_HAND, 28), fill=(255, 255, 255, 235), anchor="mm")
+    return canvas.convert("RGB")
+
+
+def shot_sticker(ctx, t, seg):
+    """The sounding subject as a white-edged sticker over blurred scenery from the
+    other sounds, the scenery swapping on every beat."""
+    lead = lead_of(ctx, t)
+    others = sorted({e.c for e in ctx.events if e.t <= t and e.c != lead.c and e.role != "guide"}) or [lead.c]
+    pick = others[int(t / BEAT) % len(others)]  # a new scene on every beat
+    src = ctx.sources[pick]
+    still = src.frames[len(src.frames) // 2]
+    drift = 1.06 + 0.04 * ((t / BEAT) % 1)
+    bg = cover(still, W, H, zoom=drift).filter(ImageFilter.GaussianBlur(14))
+    bg = ImageEnhance.Brightness(bg).enhance(0.85).convert("RGBA")
+    if not ctx.voices(t) and t - lead.end_t > 0.12:
+        return bg.convert("RGB")
+    bounce = 1 - min(1, (t - lead.t) / 0.12)
+    piece = cutout(ctx, lead, t, H * 0.62, outline=10)
+    if piece is not None:
+        x = int(W / 2 - piece.width / 2)
+        y = int(H * 0.99 - piece.height - bounce * H * 0.03)
+        bg.alpha_composite(piece, (x, y))
+    voice_label(bg, ctx, lead, t, (0, 0, W, H), sum(v.c == lead.c for v in ctx.voices(t)))
+    return bg.convert("RGB")
+
+
 def shot_burst(ctx, t, seg):
     return shot_voices(ctx, t, seg)
 
@@ -721,14 +836,15 @@ def shot_pile(ctx, t, seg):
 
 # ---------------------------------------------------------------- director
 
-SHOTS = {"full": shot_full, "flip": shot_flip, "stutter": shot_stutter, "mirror": shot_mirror,
+SHOTS = {"cutout": shot_cutout, "sticker": shot_sticker,
+         "full": shot_full, "flip": shot_flip, "stutter": shot_stutter, "mirror": shot_mirror,
          "burst": shot_burst, "pan": shot_pan, "pile": shot_pile}
 BLEED = {"full", "flip", "stutter", "mirror", "burst"}
 LONG = {"pan", "pile"}  # need two bars to build up
 POOLS = {
-    "calm": ["full", "flip", "pan"],
-    "mid": ["mirror", "stutter", "pile", "pan", "flip"],
-    "high": ["burst", "mirror", "stutter", "burst"],
+    "calm": ["full", "flip", "pan", "sticker"],
+    "mid": ["mirror", "stutter", "pile", "pan", "flip", "cutout", "sticker"],
+    "high": ["burst", "mirror", "stutter", "burst", "cutout"],
 }
 
 
@@ -793,10 +909,17 @@ def main():
         wf.setframerate(SR)
         wf.writeframes((audio * 32767).astype(np.int16).tobytes())
     ctx = Ctx(events, sources, total, arrangement.get("title"))
+    from lab_cutout import attach_masks
+    attach_masks(sources, src_dir)
     sys.path.insert(0, str(Path(__file__).parent))
     frames = total // SPF
     for seed in seeds:
+        ctx.seed = seed
         plan = plan_shots(total / SR, seed, arrangement.get("sections"))
+        forced = __import__("os").environ.get("OTO_SHOTS")  # e.g. "cutout,sticker" to audition shots
+        if forced:
+            names_forced = forced.split(",")
+            plan = [(names_forced[i % len(names_forced)], a, b, en) for i, (_, a, b, en) in enumerate(plan)]
         hud = False
         look = "bold" if seed % 3 else "paper"
         print(f"seed {seed}: look={look} hud={hud} " + " > ".join(p[0] for p in plan))
