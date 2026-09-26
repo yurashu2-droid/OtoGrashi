@@ -317,7 +317,11 @@ def repeat_runs(events):
 
 
 def repeat_moment(canvas, ctx, t):
-    """While a sound repeats, a still captured at each hit is laid next to the last."""
+    """While a sound repeats, a still captured at each hit joins a strip.
+
+    Every still keeps its size and its place relative to the others once laid;
+    nothing is squeezed to fit. Only the strip as a whole slides sideways so
+    the newest still settles in the centre, older ones drifting off-screen."""
     run = next((r for r in ctx.runs if r[0].t <= t < r[-1].end_t + 0.3), None)
     if run is None:
         return canvas
@@ -325,12 +329,17 @@ def repeat_moment(canvas, ctx, t):
     if len(shown) < 2:
         return canvas
     base = ImageEnhance.Brightness(canvas).enhance(0.7).convert("RGBA")
-    n = len(shown)
-    per_row = min(n, 5)
-    size = H * (0.34 if n <= 5 else 0.24)
-    step = (W * 0.84) / max(1, per_row)
+    size = H * 0.34
+    step = W * 0.36
+    # the strip slides from the previous newest to the new one in a tenth of a second
+    k = len(shown) - 1
+    glide = ease_out((t - shown[k].t) / 0.1)
+    centre = step * (k - 1 + glide)
+    offset = W / 2 - centre
     for i, e in enumerate(shown):
-        row, col = divmod(i, 5)
+        x = offset + i * step
+        if x < -step or x > W + step:
+            continue  # scrolled out of view
         src = ctx.sources[e.c]
         still_t = e.t  # the picture at the moment of this hit, frozen
         piece = cutout(ctx, e, still_t, size, max_width=step * 1.3) if getattr(src, "has_subject", False) else None
@@ -343,15 +352,9 @@ def repeat_moment(canvas, ctx, t):
             edge = max(5, int(size * 0.03))
             piece = Image.new("RGBA", (photo.width + 2 * edge, photo.height + 2 * edge), (255, 255, 255, 255))
             piece.alpha_composite(photo, (edge, edge))
-        newest = i == n - 1
-        pop = 1 + 0.18 * max(0.0, 1 - (t - e.t) / 0.08) if newest else 1
-        if pop != 1:
-            piece = piece.resize((int(piece.width * pop), int(piece.height * pop)))
-        tilt = (-5, 3, -2, 5, -4)[i % 5]
-        piece = piece.rotate(tilt, expand=True, resample=Image.BICUBIC)
-        cx = W * 0.08 + step * (col + 0.5)
-        cy = H * (0.42 if n <= 5 else 0.34 + 0.28 * row) + (18 if i % 2 else -18)
-        base.alpha_composite(piece, (int(cx - piece.width / 2), int(cy - piece.height / 2)))
+        piece = piece.rotate((-5, 3, -2, 5, -4)[i % 5], expand=True, resample=Image.BICUBIC)
+        y = H * 0.42 + (18 if i % 2 else -18)
+        base.alpha_composite(piece, (int(x - piece.width / 2), int(y - piece.height / 2)))
     return base.convert("RGB")
 
 
