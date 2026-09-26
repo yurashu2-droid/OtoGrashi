@@ -353,8 +353,22 @@ def repeat_moment(canvas, ctx, t):
             edge = max(5, int(size * 0.03))
             piece = Image.new("RGBA", (photo.width + 2 * edge, photo.height + 2 * edge), (255, 255, 255, 255))
             piece.alpha_composite(photo, (edge, edge))
-        piece = piece.rotate((-5, 3, -2, 5, -4)[i % 5], expand=True, resample=Image.BICUBIC)
-        y = H * 0.42 + (18 if i % 2 else -18)
+        # entrance: each still drops in from above, lands with a small hop and
+        # settles its tilt; the size never changes. Fast repeats get a quicker entrance.
+        nxt = run[run.index(e) + 1].t if run.index(e) + 1 < len(run) else e.t + 1.0
+        dur = max(1 / 30, min(0.14, 0.7 * (nxt - e.t)))
+        age = t - e.t
+        tilt = (-5, 3, -2, 5, -4)[i % 5]
+        if age < dur:
+            u = age / dur
+            drop = -H * 0.3 * (1 - u * u)
+            tilt += 10 * (1 - u) * (1 if i % 2 else -1)
+        elif age < dur + 0.1:
+            drop = -H * 0.025 * math.sin(math.pi * (age - dur) / 0.1)
+        else:
+            drop = 0.0
+        piece = piece.rotate(tilt, expand=True, resample=Image.BICUBIC)
+        y = H * 0.42 + (18 if i % 2 else -18) + drop
         base.alpha_composite(piece, (int(x - piece.width / 2), int(y - piece.height / 2)))
     return base.convert("RGB")
 
