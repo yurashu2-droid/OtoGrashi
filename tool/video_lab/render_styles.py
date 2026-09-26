@@ -298,7 +298,15 @@ def soft_text(layer, xy, s, f, fill, alpha):
     ImageDraw.Draw(layer).text(xy, s, font=f, fill=(*fill, alpha))
 
 
-REPEATABLE = {"chop", "fx", "echo", "phrase", None}
+# a delay throw's echoes fade out behind a line; they are not a sound repeated
+REPEATABLE = {"chop", "fx", "phrase", None}
+
+
+def run_until(run):
+    """A repeat strip stays up a beat after its last hit starts, not until a long
+    sound finishes, so a held phrase never leaves frozen stills behind."""
+    last = run[-1]
+    return min(last.end_t, last.t + BEAT) + 0.3
 
 
 def repeat_runs(events):
@@ -325,7 +333,7 @@ def repeat_moment(canvas, ctx, t, dim=True):
     Every still keeps its size and its place relative to the others once laid;
     nothing is squeezed to fit. Only the strip as a whole slides sideways so
     the newest still settles in the centre, older ones drifting off-screen."""
-    active = [r for r in ctx.runs if r[0].t <= t < r[-1].end_t + 0.3]
+    active = [r for r in ctx.runs if r[0].t <= t < run_until(r)]
     if not active:
         return canvas
     # a long roll wins outright; otherwise the run heard most recently
@@ -1103,7 +1111,7 @@ def backing_stickers(canvas, ctx, t, plan):
     """A clip playing quietly behind the melody pops up as a small sticker in
     the bottom-right corner, sways with its own level and pops away after."""
     shot = next((p for p in plan if p[1] <= t < p[2]), plan[-1])[0]
-    if shot not in SOLO or any(len(r) >= 4 and r[0].t <= t < r[-1].end_t + 0.3 for r in ctx.runs):
+    if shot not in SOLO or any(len(r) >= 4 and r[0].t <= t < run_until(r) for r in ctx.runs):
         return canvas
     out = None
     for e in ctx.backing:
@@ -1369,7 +1377,7 @@ def director_frame(ctx, t, plan, hud):
         # the sticker holds the first bar of the song instead of a board of drum hits
         return sticker_moment(ctx, posts[-1][0], t, intro_end)
     shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
-    long_run = any(len(r) >= 4 and r[0].t <= t < r[-1].end_t + 0.3 for r in ctx.runs)
+    long_run = any(len(r) >= 4 and r[0].t <= t < run_until(r) for r in ctx.runs)
     if long_run and shot in ("cutout", "sticker"):
         # a roll is the moment: show its strip on a clean ground instead of the clones
         rng = np.random.default_rng(getattr(ctx, "seed", 0))

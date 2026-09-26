@@ -1846,8 +1846,16 @@ final class MadDirector {
 
   // MARK: plan
 
+  /// A repeat strip stays up a beat after its last hit starts, not until a
+  /// long sound finishes, so a held phrase never leaves frozen stills behind.
+  static func runUntil(_ run: [MadVideoEvent]) -> Int {
+    guard let last = run.last else { return 0 }
+    return min(last.end, last.start + beat) + 14_400
+  }
+
   static func repeatRuns(_ events: [MadVideoEvent]) -> [[MadVideoEvent]] {
-    let repeatable: Set<String> = ["chop", "fx", "echo", "phrase"]
+    // a delay throw's echoes fade out behind a line; they are not a sound repeated
+    let repeatable: Set<String> = ["chop", "fx", "phrase"]
     var runs: [[MadVideoEvent]] = []
     var open: [String: Int] = [:]
     for e in events.sorted(by: { $0.start < $1.start })
@@ -1954,7 +1962,7 @@ final class MadDirector {
     let canvasRect = CGRect(x: 0, y: 0, width: W, height: H)
     var canvas: CIImage
     var overlays: [(CGContext) -> Void] = []
-    let longRun = runs.contains { $0.count >= 4 && $0[0].start <= s && s < $0[$0.count - 1].end + 14_400 }
+    let longRun = runs.contains { $0.count >= 4 && $0[0].start <= s && s < Self.runUntil($0) }
     if longRun && (current.shot == .cutout || current.shot == .sticker) {
       canvas = CIImage(color: backdrop()).cropped(to: canvasRect)
       canvas = try await strip(s, over: canvas, dim: false, W: W, H: H, image: image)
@@ -2551,7 +2559,7 @@ final class MadDirector {
   /// sits in the centre, each one dropping in with a little hop.
   private func strip(_ s: Int, over canvas: CIImage, dim: Bool, W: CGFloat, H: CGFloat,
                      image: (MadVideoEvent, Int) async throws -> CIImage) async throws -> CIImage {
-    let active = runs.filter { $0[0].start <= s && s < $0[$0.count - 1].end + 14_400 }
+    let active = runs.filter { $0[0].start <= s && s < Self.runUntil($0) }
     guard let run = active.max(by: { a, b in
       let la = a.filter { $0.start <= s }.map(\.start).max() ?? 0
       let lb = b.filter { $0.start <= s }.map(\.start).max() ?? 0
