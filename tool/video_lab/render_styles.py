@@ -327,7 +327,7 @@ def repeat_runs(events):
     return [r for r in runs if len(r) >= 2]
 
 
-def repeat_moment(canvas, ctx, t, dim=True):
+def repeat_moment(canvas, ctx, t, dim=True, scale=1.0, y_at=0.42):
     """While a sound repeats, a still captured at each hit joins a strip.
 
     Every still keeps its size and its place relative to the others once laid;
@@ -349,8 +349,8 @@ def repeat_moment(canvas, ctx, t, dim=True):
         return canvas
     # footage behind the strip steps back; a plain ground stays as it is
     base = (ImageEnhance.Brightness(canvas).enhance(0.7) if dim else canvas).convert("RGBA")
-    size = H * 0.42
-    step = W * 0.2  # neighbours overlap heavily, like a row of clones
+    size = H * 0.42 * scale
+    step = W * 0.2 * scale  # neighbours overlap heavily, like a row of clones
     # the strip slides to the new still and settles before the next hit arrives
     k = len(shown) - 1
     gap = max(BEAT / 4, shown[k].t - shown[k - 1].t) if k else BEAT / 4
@@ -389,7 +389,7 @@ def repeat_moment(canvas, ctx, t, dim=True):
         else:
             drop = 0.0
         piece = piece.rotate(tilt, expand=True, resample=Image.BICUBIC)
-        y = H * 0.42 + (18 if i % 2 else -18) + drop
+        y = H * y_at + (18 if i % 2 else -18) * scale + drop
         base.alpha_composite(piece, (int(x - piece.width / 2), int(y - piece.height / 2)))
     return base.convert("RGB")
 
@@ -804,10 +804,24 @@ def shot_cutout(ctx, t, seg):
         at = t if e.active(t) else e.t  # clones hold the pose of their own hit
         piece = cutout(ctx, e, at, height, close=close, max_width=W * (0.9 if close else 0.75), outline=8)
         if piece is not None:
-            pieces.append((i, piece))
+            pieces.append((i, e, piece))
     # draw back to front: later clones sit behind and to the right of earlier ones
-    for i, piece in reversed(pieces):
-        x = int(base_x - piece.width / 2 + i * piece.width * 0.25)
+    for i, e, piece in reversed(pieces):
+        age = t - e.t
+        if i == 0 and not fall:
+            # the front figure lands on its hit: a springy pop and a small hop,
+            # so a new beat never just swaps the picture
+            scale = 0.84 + 0.16 * overshoot(age / 0.2)
+            hop = -height * 0.05 * math.sin(math.pi * min(1.0, age / 0.2))
+            piece = piece.resize((max(1, int(piece.width * scale)), max(1, int(piece.height * scale))),
+                                 Image.BILINEAR)
+            x = int(base_x - piece.width / 2)
+            canvas.alpha_composite(piece, (x, int(H * 0.99 - piece.height + hop)))
+            continue
+        # a clone slides out from behind the figure in front of it
+        slide = ease_out(age / 0.12)
+        x = int(base_x - piece.width / 2 + (i - 1 + slide) * piece.width * 0.25) if i else \
+            int(base_x - piece.width / 2)
         canvas.alpha_composite(piece, (x, int(H * 0.99 - piece.height + fall)))
     d = ImageDraw.Draw(canvas)
     for j, ch in enumerate(ctx.names[lead.c][:10]):
@@ -1149,6 +1163,109 @@ def backing_stickers(canvas, ctx, t, plan):
 
 # ---------------------------------------------------------------- opening feed
 
+def reverse_at(ctx, t):
+    """The reverse swell sounding at t, if any."""
+    return next((e for e in ctx.events if e.reverse and e.role == "fx" and e.active(t)), None)
+
+
+def reverse_film(ctx, e, t):
+    """A film strip of the clip running right to left, frames in reverse order."""
+    out = Image.new("RGB", (W, H), (22, 20, 20))
+    d = ImageDraw.Draw(out)
+    fh = int(H * 0.30)
+    fw = int(fh * 0.72)
+    gap = 26
+    u = (t - e.t) / max(1e-3, e.end_t - e.t)
+    shift = (u ** 1.6) * (fw + gap) * 5  # speeds up like the swell
+    for row, (y, lag) in enumerate(((int(H * 0.13), 0.0), (int(H * 0.55), 0.5))):
+        top, bottom = y - 30, y + fh + 30
+        d.rectangle((0, top, W, bottom), fill=(10, 9, 9))
+        for x in range(-40, W + 40, 34):
+            xx = x - int(shift * (1 + 0.3 * row)) % 34
+            d.rounded_rectangle((xx, top + 8, xx + 16, top + 22), 3, fill=(210, 205, 195))
+            d.rounded_rectangle((xx, bottom - 22, xx + 16, bottom - 8), 3, fill=(210, 205, 195))
+        for k in range(-1, 5):
+            x = int(k * (fw + gap) - (shift * (1 + 0.3 * row)) % (fw + gap) + lag * fw)
+            # each frame is a moment further back in the clip
+            back = min(e.end_t, max(e.t, t - (k * 0.12)))
+            frame = cover(ctx.frame(e, back), fw, fh)
+            out.paste(frame, (x, y))
+    return out
+
+
+def reverse_turntable(ctx, e, t):
+    """A record spun backwards under the scene, the clip as its label."""
+    out = Image.new("RGB", (W, H), (36, 32, 30))
+    u = (t - e.t) / max(1e-3, e.end_t - e.t)
+    angle = 40 + 540 * (u ** 1.5)  # counter-clockwise, gathering speed
+    size = int(W * 1.25)
+    disc = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(disc)
+    d.ellipse((0, 0, size - 1, size - 1), fill=(18, 16, 16, 255))
+    for r in range(size // 2 - 8, size // 6, -9):
+        c = size // 2
+        d.ellipse((c - r, c - r, c + r, c + r), outline=(40, 37, 36, 255), width=2)
+    d.pieslice((0, 0, size - 1, size - 1), 200, 230, fill=(60, 56, 54, 90))  # sheen
+    label = cover(ctx.frame(e, t), size // 3, size // 3).convert("RGBA")
+    mask = Image.new("L", label.size, 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, label.width - 1, label.height - 1), fill=255)
+    label.putalpha(mask)
+    disc.alpha_composite(label, (size // 3, size // 3))
+    d.ellipse((size // 2 - 10, size // 2 - 10, size // 2 + 10, size // 2 + 10), fill=(220, 215, 205, 255))
+    disc = disc.rotate(angle, resample=Image.BICUBIC)
+    out.paste(disc, ((W - size) // 2, int(H * 0.5 - size / 2)), disc)
+    d = ImageDraw.Draw(out)
+    d.line((W - 60, 120, W - 90, 520, W * 0.62, H * 0.5 - 60), fill=(200, 195, 185), width=10, joint="curve")
+    return out
+
+
+def reverse_vhs(ctx, e, t):
+    """The clip itself rewinding on tape: scan lines, a tracking band and ◀◀."""
+    frame = cover(ctx.frame(e, t), W, H)
+    jitter = int(6 * np.sin(t * 90))
+    img = Image.new("RGB", (W, H))
+    img.paste(frame, (jitter, 0))
+    arr = np.asarray(img).astype(np.float32)
+    arr[::3] *= 0.72  # scan lines
+    band = int((t * 900) % (H + 120)) - 60
+    lo, hi = max(0, band), min(H, band + 40)
+    if hi > lo:
+        arr[lo:hi] = arr[lo:hi] * 0.6 + 90 + np.random.default_rng(int(t * 30)).random((hi - lo, W, 1)) * 60
+    img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    soft_text(layer, (44, 70), "◀◀", font(FONT_BOLD, 64), (255, 255, 255), 255)
+    soft_text(layer, (160, 82), "REW", font(FONT_BOLD, 44), (255, 255, 255), 255)
+    return Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB")
+
+
+def reverse_record(ctx, e, t):
+    """A small record near the top spins backwards over a flat ground."""
+    rng = np.random.default_rng(getattr(ctx, "seed", 0))
+    out = Image.new("RGB", (W, H), BACKDROPS[int(rng.integers(len(BACKDROPS)))])
+    u = (t - e.t) / max(1e-3, e.end_t - e.t)
+    size = int(W * 0.46)
+    disc = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(disc)
+    d.ellipse((0, 0, size - 1, size - 1), fill=(24, 22, 22, 255), outline=(255, 255, 255, 255), width=8)
+    for r in range(size // 2 - 14, size // 5, -7):
+        c = size // 2
+        d.ellipse((c - r, c - r, c + r, c + r), outline=(48, 45, 44, 255), width=1)
+    label = cover(ctx.frame(e, t), size // 2, size // 2).convert("RGBA")
+    mask = Image.new("L", label.size, 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, label.width - 1, label.height - 1), fill=255)
+    label.putalpha(mask)
+    disc.alpha_composite(label, (size // 4, size // 4))
+    disc = disc.rotate(30 + 600 * (u ** 1.5), resample=Image.BICUBIC)
+    out.paste(disc, ((W - size) // 2, 70), disc)
+    d = ImageDraw.Draw(out)
+    d.text((W / 2, 70 + size + 40), "◀◀", font=font(FONT_BOLD, 44), fill=(*INK, 255), anchor="mm")
+    return out
+
+
+REVERSE_LOOKS = {"film": reverse_film, "turntable": reverse_turntable, "vhs": reverse_vhs,
+                 "record": reverse_record}
+
+
 def feed_posts(ctx, intro_end):
     """The introductions as a feed: one post per clip, in the order they speak.
     Returns [(event, start_t)], a post lasting until the next one starts."""
@@ -1378,6 +1495,15 @@ def director_frame(ctx, t, plan, hud):
         return sticker_moment(ctx, posts[-1][0], t, intro_end)
     shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
     long_run = any(len(r) >= 4 and r[0].t <= t < run_until(r) for r in ctx.runs)
+    rev = reverse_at(ctx, t)
+    look = __import__("os").environ.get("OTO_REVERSE")
+    if rev is not None and look in REVERSE_LOOKS:
+        # the swell is what you hear, so its backwards run is the ground under the scene
+        canvas = REVERSE_LOOKS[look](ctx, rev, t)
+        if long_run:
+            # the repeats stay, smaller and low, so the backwards run reads above them
+            canvas = repeat_moment(canvas, ctx, t, dim=False, scale=0.55, y_at=0.8)
+        return canvas
     if long_run and shot in ("cutout", "sticker"):
         # a roll is the moment: show its strip on a clean ground instead of the clones
         rng = np.random.default_rng(getattr(ctx, "seed", 0))
@@ -1436,11 +1562,15 @@ def main():
             from lab_look import PopGlitch
             finish = PopGlitch(ctx, plan, seed)
         out = out_dir / f"seed{seed}.mp4"
+        span = __import__("os").environ.get("OTO_RANGE")
+        offset = ["-ss", span.split(",")[0]] if span else []
         proc = subprocess.Popen([FFMPEG, "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
-                                 "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-i", str(wav_path),
+                                 "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", *offset, "-i", str(wav_path),
                                  "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "fast",
                                  "-c:a", "aac", "-b:a", "160k", "-shortest", str(out)], stdin=subprocess.PIPE)
-        for f in range(frames):
+        span = __import__("os").environ.get("OTO_RANGE")  # e.g. "6,8.2"
+        first, last = (int(float(v) * FPS) for v in span.split(",")) if span else (0, frames)
+        for f in range(first, min(frames, last)):
             t = f / FPS
             img = director_frame(ctx, video_time(t, master_fx), plan, hud)
             img = backing_stickers(img, ctx, video_time(t, master_fx), plan)
