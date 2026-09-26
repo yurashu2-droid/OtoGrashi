@@ -316,7 +316,7 @@ def repeat_runs(events):
     return [r for r in runs if len(r) >= 2]
 
 
-def repeat_moment(canvas, ctx, t):
+def repeat_moment(canvas, ctx, t, dim=True):
     """While a sound repeats, a still captured at each hit joins a strip.
 
     Every still keeps its size and its place relative to the others once laid;
@@ -336,7 +336,8 @@ def repeat_moment(canvas, ctx, t):
             shown.append(e)
     if len(shown) < (1 if len(run) >= 4 else 2):  # a roll shows from its first hit
         return canvas
-    base = ImageEnhance.Brightness(canvas).enhance(0.7).convert("RGBA")
+    # footage behind the strip steps back; a plain ground stays as it is
+    base = (ImageEnhance.Brightness(canvas).enhance(0.7) if dim else canvas).convert("RGBA")
     size = H * 0.42
     step = W * 0.2  # neighbours overlap heavily, like a row of clones
     # the strip slides to the new still and settles before the next hit arrives
@@ -1019,7 +1020,7 @@ def director_frame(ctx, t, plan, hud):
         # a roll is the moment: show its strip on a clean ground instead of the clones
         rng = np.random.default_rng(getattr(ctx, "seed", 0))
         canvas = Image.new("RGB", (W, H), BACKDROPS[int(rng.integers(len(BACKDROPS)))])
-        canvas = repeat_moment(canvas, ctx, t)
+        canvas = repeat_moment(canvas, ctx, t, dim=False)
     else:
         canvas = SHOTS[shot](ctx, t, (start, end))
         if shot not in ("cutout", "sticker"):  # those already show repeats as clones / a single sticker
