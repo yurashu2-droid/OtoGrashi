@@ -484,8 +484,7 @@ def lead_of(ctx, t):
     featured = [e for e in live if e.role == "fx"]  # rolls, risers, reverses, scratches
     if featured:
         return featured[-1]
-    melodic = ([e for e in live if e.role in ("spotlight", "phrase")]
-               or [e for e in live if e.role == "melody"])
+    melodic = [e for e in live if e.role == "phrase"] or [e for e in live if e.role == "melody"]
     if melodic:
         return melodic[-1]
     # the singer keeps the picture through the small gaps of its line (up to a beat);
@@ -1014,65 +1013,7 @@ def plan_shots(total_t, seed, sections=None):
     return plan
 
 
-def spotlight_at(ctx, t):
-    """The spotlit event on stage at t: its own sound, or the pause just before
-    it (a beat for the first, the breath between two). Returns (event, age)."""
-    spots = sorted((e for e in ctx.events if e.role == "spotlight"), key=lambda e: e.t)
-    for k, e in enumerate(spots):
-        lead_in = BEAT if k == 0 else min(BEAT, e.t - spots[k - 1].end_t)
-        if e.t - lead_in <= t < e.end_t:
-            return e, t - e.t
-    return None, 0.0
-
-
-def shot_spotlight(ctx, t, e, age):
-    """Eye-catch: the band stops, a spot opens on the clip's still, then the
-    clip plays whole, full screen, under its own name."""
-    frame = ctx.frame(e, max(t, e.t))
-    col = CLIP_COLORS[e.c % len(CLIP_COLORS)]
-    if age < 0:
-        # the pause: a round spot opens on the first frame of what is coming
-        u = ease_out((age + BEAT) / (BEAT * 0.7))
-        canvas = Image.new("RGB", (W, H), INK)
-        picture = cover(frame, W, H, zoom=1.08)
-        r = int(60 + u * W * 0.46)
-        mask = Image.new("L", (W, H), 0)
-        ImageDraw.Draw(mask).ellipse((W / 2 - r, H * 0.44 - r, W / 2 + r, H * 0.44 + r), fill=255)
-        canvas.paste(ImageEnhance.Brightness(picture).enhance(0.75), (0, 0), mask.filter(ImageFilter.GaussianBlur(18)))
-        layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        drop = (1 - overshoot(u)) * 60
-        f = font(FONT_BOLD, 76)
-        name = ctx.names[e.c]
-        tw = ImageDraw.Draw(layer).textlength(name, font=f)
-        soft_text(layer, (W / 2 - tw / 2, H * 0.78 - drop), name, f, (255, 255, 255), int(255 * u))
-        return Image.alpha_composite(canvas.convert("RGBA"), layer).convert("RGB")
-    # the sound: whole clip, full screen; the spot's edge fades out as it plays
-    level = ctx.norm_level(e, t)
-    canvas = cover(frame, W, H, zoom=1.04 * punch(age, 0.06, 0.2) * (1 + 0.03 * level))
-    edge = max(0.0, 1 - age / 0.5)
-    if edge > 0:
-        vignette = Image.new("L", (W, H), 0)
-        r = W * 0.5 + (1 - edge) * W
-        ImageDraw.Draw(vignette).ellipse((W / 2 - r, H * 0.44 - r * 1.3, W / 2 + r, H * 0.44 + r * 1.3), fill=255)
-        vignette = vignette.filter(ImageFilter.GaussianBlur(40))
-        canvas = Image.composite(canvas, Image.new("RGB", (W, H), INK), vignette)
-    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    f = font(FONT_BOLD, 76)
-    name = ctx.names[e.c]
-    tw = ImageDraw.Draw(layer).textlength(name, font=f)
-    soft_text(layer, (W / 2 - tw / 2, H * 0.78), name, f, (255, 255, 255), 255)
-    d = ImageDraw.Draw(layer)
-    for b in range(5):  # its own level, under the name
-        bh = 10 + 46 * min(1.0, level * (1.3 - b * 0.15))
-        bx = W / 2 - 2 * 22 + b * 22 - 6
-        d.rounded_rectangle((bx, H * 0.88 - bh / 2, bx + 12, H * 0.88 + bh / 2), 5, fill=(*col, 255))
-    return Image.alpha_composite(canvas.convert("RGBA"), layer).convert("RGB")
-
-
 def director_frame(ctx, t, plan, hud):
-    spot, age = spotlight_at(ctx, t)
-    if spot is not None:
-        return shot_spotlight(ctx, t, spot, age)
     shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
     long_run = any(len(r) >= 4 and r[0].t <= t < r[-1].end_t + 0.3 for r in ctx.runs)
     if long_run and shot in ("cutout", "sticker"):

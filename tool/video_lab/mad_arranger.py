@@ -4,8 +4,7 @@ Structure (16 bars at 128 BPM):
   bars 1-2   introductions: each clip's own phrase, the first one stuttered in
   bars 3-4   beat + bass sung by a low voice, tail echoes as fills
   bars 5-12  the melody sung continuously by the lead voice, chops in rests
-  bars 13-14 break: the band stops for a beat and the clips that had no part
-             of their own play whole, one at a time (the spotlight)
+  bars 13-14 break: drums drop, the longest phrase plays raw up front
   bars 15-16 climax: the hook again, full kit, every clip stutters at the end
 
 Every event says where in which clip it reads, so the renderer shows exactly
@@ -361,8 +360,8 @@ def main():
         if k == 0:
             t += arr.stutter_head(i, t, longest[i])
         dur = arr.phrase(i, t, longest[i], gain=1.0, limit=min(1.4, (slot - 600) / SR))
-        # with many clips each one keeps to its slot, so nobody is squeezed out
-        t += slot if len(order) > 3 else int(np.ceil((t + dur) / BEAT)) * BEAT - t
+        t += max(slot, int(np.ceil(dur / (BEAT // 2))) * (BEAT // 2)) if len(order) > 3 else \
+            int(np.ceil((t + dur) / BEAT)) * BEAT - t
     arr.drums(kit, 1, 2, snare=False, hats=False, gain=0.7)
 
     # bars 3-4: beat + bass, tail echoes as fills
@@ -387,42 +386,19 @@ def main():
         cursors[s] = arr.syllable_line(s, cursors[s], part, 4, 0.95, "melody")
         arr.guide_line(s, part, 4, GUIDE)
     bass_cursor = bass_part(bass_cursor, bass_notes, 4, 0.55)
-    # clips with no part of their own (not singing, not bass) get the spotlight;
-    # the longest-sounding ones first, since they have the most to show
-    whole = {i: (voices[i].regions and (min(a for a, _ in voices[i].regions),
-                                        max(b for _, b in voices[i].regions))) for i in usable}
-    cameo = sorted((i for i in usable if i not in singers and i != bass),
-                   key=lambda i: -(whole[i][1] - whole[i][0]))
-    spot = cameo[:2]
-    # chops answer in the gaps of bars 9-12, the clips left out of the spotlight first
-    answer = cameo[2:] + [i for i in others if i not in singers and i not in cameo[2:]] or others or [lead]
+    # chops answer in the gaps of bars 9-12, from clips that have not sung
+    answer = [i for i in others if i not in singers] or others or [lead]
     for k, bar in enumerate((8, 9, 10, 11)):
         clip = answer[k % len(answer)]
         arr.stutter_head(clip, bar * BAR + 3 * BEAT, longest[clip], times=4, step=SIXTEENTH, gain=0.55)
 
-    # bars 13-14: break — one hit, a beat of silence, then each spotlit clip
-    # plays whole on its own. With nobody left out, the longest phrase stars.
+    # bars 13-14: break — the longest phrase raw and up front
+    star = max(usable, key=lambda i: longest[i][1] - longest[i][0])
     arr.add(kit["kick"][0], 12 * BAR, int(0.16 * SR), kit["kick"][1], "rhythm", "kick", 0.9, rate=0.55)
-    stage_end = 14 * BAR - BEAT // 2
-    t = 12 * BAR + BEAT
-    spot_end = t
-    if spot:
-        for k, i in enumerate(spot):
-            # two share the stage evenly; one alone may play up to 2.6 s
-            room = stage_end - t if k == len(spot) - 1 else (stage_end - t - BEAT // 2) // 2
-            a, b = whole[i]
-            dur = min(b - a, room, int(2.6 * SR))
-            if dur < BEAT // 2:
-                break
-            arr.add(i, t, dur, a, "phrase", "spotlight", 1.0)
-            spot_end = t + dur
-            t = int(np.ceil((t + dur) / (BEAT // 2))) * (BEAT // 2) + BEAT // 2  # half a beat to breathe
-    else:
-        star = max(usable, key=lambda i: longest[i][1] - longest[i][0])
-        dur = arr.phrase(star, 12 * BAR + BEAT // 2, longest[star], gain=1.0, limit=2.4)
-        arr.tail_echo(star, 12 * BAR + BEAT // 2 + dur, longest[star], times=3, step=BEAT // 2, gain=0.8)
-        quiet_bass = [(b, l, m) for b, l, m in bass_notes if 24 <= b < 32]
-        bass_part(bass_cursor, [(b - 24, l, m) for b, l, m in quiet_bass], 12, 0.3)
+    dur = arr.phrase(star, 12 * BAR + BEAT // 2, longest[star], gain=1.0, limit=2.4)
+    arr.tail_echo(star, 12 * BAR + BEAT // 2 + dur, longest[star], times=3, step=BEAT // 2, gain=0.8)
+    quiet_bass = [(b, l, m) for b, l, m in bass_notes if 24 <= b < 32]
+    bass_part(bass_cursor, [(b - 24, l, m) for b, l, m in quiet_bass], 12, 0.3)
 
     # bars 15-16: climax — the hook again, full kit, everyone stutters at the end
     arr.drums(kit, 14, 16)
@@ -446,9 +422,7 @@ def main():
     # pairs that belong together: after a tape stop the break usually opens with a sweep
     in_break = ("sweep" if rng.random() < 0.8 else "gate") if into_break == "tapestop" else choose(["sweep", "gate"])
     into_climax = choose(["roll", "reverse", "riser"])
-    # a spotlight that runs up to the climax is its own lead-in
-    slots = [(into_melody, 4 * BAR)] + ([] if spot_end > 14 * BAR - 2 * BEAT else [(into_climax, 14 * BAR)])
-    for slot, end in slots:
+    for slot, end in ((into_melody, 4 * BAR), (into_climax, 14 * BAR)):
         if slot == "roll":
             arr.fx_roll(lead, end, syl[lead][0])
         elif slot == "riser":
@@ -461,11 +435,7 @@ def main():
     else:
         arr.fx_scratch(lead, 12 * BAR - 2 * BEAT, syl[lead][0])
     used.append(into_break)
-    if spot:
-        master.append({"type": "spotlight", "start": 12 * BAR + BEAT, "dur": spot_end - 12 * BAR - BEAT})
-        if in_break == "sweep" and 14 * BAR - spot_end >= BEAT:
-            master.append({"type": "sweep", "start": spot_end, "dur": 14 * BAR - spot_end})
-    elif in_break == "sweep":
+    if in_break == "sweep":
         master.append({"type": "sweep", "start": 12 * BAR, "dur": 2 * BAR})
     else:
         for e in arr.events:
@@ -517,9 +487,7 @@ def main():
         master.append({"type": "sidechain", "start": a, "dur": d, "kicks": kicks})
         used.append("sidechain")
     if rng.random() < 0.5:
-        thrown = [e for e in arr.events if e["role"] in ("phrase", "spotlight")
-                  and 12 * BAR <= e["destinationStartSample"] < 13 * BAR][-1:]
-        for e in thrown:
+        for e in [e for e in arr.events if e["role"] == "phrase" and 12 * BAR <= e["destinationStartSample"] < 13 * BAR]:
             for k in (1, 2, 3):  # a dotted-eighth echo trail after the break line
                 copy = dict(e, destinationStartSample=e["destinationStartSample"] + e["durationSamples"] + k * (3 * BEAT // 4),
                             gain=round(e["gain"] * 0.5 ** k, 3), role="echo")
