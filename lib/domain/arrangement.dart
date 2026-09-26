@@ -112,6 +112,7 @@ final class SoundEvent {
     'fx',
     'echo',
     'stab',
+    'backing',
   };
 
   final String assetId;

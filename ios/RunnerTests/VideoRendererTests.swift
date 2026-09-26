@@ -60,6 +60,18 @@ final class VideoRendererTests: XCTestCase {
     try preserveMovie(output, name: "everyday-mad")
   }
 
+  func testMadBackingBarsAlwaysShowOneFullFramePicture() {
+    for seed in 0..<24 {
+      for (total, bars) in [(1_440_000, [5, 7, 9, 11]), (720_000, [3, 5])] {
+        let plan = MadDirector.planShots(total: total, seed: seed, sections: [], soloBars: Set(bars))
+        for bar in bars {
+          let shot = plan.first { $0.start <= bar * 90_000 && bar * 90_000 < $0.end }?.shot
+          XCTAssertTrue(shot.map { MadDirector.solo.contains($0) } ?? false, "seed \(seed) bar \(bar) \(String(describing: shot))")
+        }
+      }
+    }
+  }
+
   func testPerformancePanelsStayOnCanvas() {
     for mode in ["mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"] {
       for count in 1...18 {

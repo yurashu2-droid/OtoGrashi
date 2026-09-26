@@ -130,4 +130,35 @@ void main() {
     expect(bodies, isNotEmpty);
     expect(bodies.every((e) => e.targetMidiNote == null), isTrue);
   });
+
+  test('every clip is heard beyond the drum kit, cameos quietly behind the melody', () {
+    final clips = [for (var i = 0; i < 6; i++) _clip(i, voiced: i != 2)];
+    for (final seconds in [15, 30]) {
+      for (final seed in [1, 2, 3]) {
+        final a = arrange(
+          clips: clips,
+          style: ArrangementStyle.lively,
+          seed: seed,
+          melodyTemplate: MelodyTemplate.midiScore,
+          performanceMode: PerformanceMode.mad,
+          durationSeconds: seconds,
+        );
+        for (final clip in clips) {
+          expect(
+            a.events.any((e) =>
+                e.assetId == clip.assetId &&
+                const {'phrase', 'melody', 'bass', 'backing'}.contains(e.role)),
+            isTrue,
+            reason: '${clip.assetId} ${seconds}s seed $seed',
+          );
+        }
+        final backing = a.events.where((e) => e.role == 'backing').toList();
+        expect(backing, hasLength(seconds == 30 ? 4 : 2));
+        for (final e in backing) {
+          expect(e.gain, lessThan(.5));
+          expect(e.treatment, SoundTreatment.phrase);
+        }
+      }
+    }
+  });
 }

@@ -11,7 +11,8 @@ import 'midi_score_data.dart';
 /// Structure (30 s, 16 bars at 128 BPM; 15 s is a compressed 8-bar version):
 ///   bars 1-2   introductions, the first one stuttered in
 ///   bars 3-4   beat + bass, tail echoes as fills
-///   bars 5-12  the melody, two tuneful clips trading every two bars
+///   bars 5-12  the melody, two tuneful clips trading every two bars; clips
+///              with no part of their own play whole, quietly, behind it
 ///   bars 13-14 break: drums drop, the longest phrase plays raw up front
 ///   bars 15-16 climax: the hook again, full kit, everyone stutters at the end
 ///
@@ -80,6 +81,7 @@ const _parts = {
   'fx': 7,
   'echo': 8,
   'stab': 9,
+  'backing': 10,
 };
 
 class _Span {
@@ -151,6 +153,13 @@ class _Voice {
   _Span get body => voicedRuns.isEmpty
       ? longest
       : voicedRuns.reduce((a, b) => b.length > a.length ? b : a);
+
+  /// Everything the clip says, first sound to last.
+  _Span get whole {
+    final first = byLength.map((r) => r.start).reduce(math.min);
+    final last = byLength.map((r) => r.end).reduce(math.max);
+    return _Span(first, last - first);
+  }
 
   /// Sharp attacks for the drum kit, earliest first.
   List<int> get attacks => clip.onsetSamples.isNotEmpty
@@ -378,7 +387,7 @@ class _MadBuilder {
         targetMidiNote: note?.clamp(24.0, 100.0).toDouble(),
         reverse: reverse,
         treatment: switch (role) {
-          'phrase' || 'echo' => SoundTreatment.phrase,
+          'phrase' || 'echo' || 'backing' => SoundTreatment.phrase,
           _ when note != null => SoundTreatment.tuned,
           _ => SoundTreatment.rhythm,
         },
@@ -571,6 +580,26 @@ class _MadBuilder {
 
   T _choose<T>(List<T> options) => options[random.nextInt(options.length)];
 
+  /// Clips that neither sing nor play bass, so they would otherwise only be
+  /// heard as an introduction and a few chops.
+  List<_Voice> get _cameos =>
+      usable.where((v) => !singers.contains(v) && v != bass).toList();
+
+  /// Each cameo clip plays whole and quietly behind the melody, one every
+  /// other bar; the picture shows it as a corner sticker.
+  void _backing(List<int> bars, {required int shortFrom}) {
+    final cameos = _cameos;
+    if (cameos.isEmpty) return;
+    for (final (k, bar) in bars.indexed) {
+      final v = cameos[k % cameos.length];
+      final whole = v.whole;
+      // bars with answering chops keep their last beat clear
+      final limit = ((bar >= shortFrom ? 1.1 : 1.6) * _sampleRate).round();
+      add(v, bar * _bar + _beat ~/ 2, math.min(whole.length, limit), whole.start,
+          role: 'backing', gain: .38, fadeIn: 480, fadeOut: 2400);
+    }
+  }
+
   // -- song structures ----------------------------------------------------------
 
   void _introductions(int bars) {
@@ -619,7 +648,13 @@ class _MadBuilder {
     if (melodic) {
       bassCursor = bassPart(bassCursor, bassLine, 4, .55);
     }
-    final answer = others.where((v) => !singers.contains(v)).toList();
+    if (melodic) _backing(const [5, 7, 9, 11], shortFrom: 8);
+    // the clips with the least to do answer first
+    final cameos = _cameos;
+    final answer = [
+      ...cameos,
+      ...others.where((v) => !singers.contains(v) && !cameos.contains(v)),
+    ];
     final answers = answer.isNotEmpty ? answer : (others.isNotEmpty ? others : [lead]);
     for (final (k, bar) in [8, 9, 10, 11].indexed) {
       final v = answers[k % answers.length];
@@ -668,6 +703,7 @@ class _MadBuilder {
     if (melodic) {
       bassCursor = bassPart(bassCursor, [for (final n in bassLine) if (n.$1 < 16) n], 2, .55);
     }
+    if (melodic) _backing(const [3, 5], shortFrom: 0);
     drums(6, 8);
     if (melodic) {
       final singer = singers.last;

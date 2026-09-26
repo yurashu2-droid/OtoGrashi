@@ -41,7 +41,7 @@ struct SoundEventPayload: Codable, Equatable {
   var gate: Int? = nil
 
   static let roles: Set<String> = [
-    "melody", "bass", "kick", "snare", "hat", "chop", "phrase", "fx", "echo", "stab",
+    "melody", "bass", "kick", "snare", "hat", "chop", "phrase", "fx", "echo", "stab", "backing",
   ]
   var hasMotion: Bool { rate != nil || glide != nil || scratch != nil }
 

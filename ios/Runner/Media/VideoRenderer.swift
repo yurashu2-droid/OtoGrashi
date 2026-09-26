@@ -1802,6 +1802,9 @@ final class MadDirector {
   static let bar = 90_000
 
   let events: [MadVideoEvent]
+  /// Quiet plays behind the melody: shown as a corner sticker, never as the
+  /// main picture.
+  let backing: [MadVideoEvent]
   let assetIds: [String]
   let names: [String]
   let total: Int
@@ -1833,11 +1836,12 @@ final class MadDirector {
         reverse: event.isReversed, rate: event.rate, glide: event.glide, scratch: event.scratch,
         scratchPeriod: event.scratchPeriod, peaks: eventPeaks, peakMax: eventPeaks.max() ?? 0))
     }
-    events = built
+    events = built.filter { $0.role != "backing" }
+    backing = built.filter { $0.role == "backing" }
     heard = Array(Set(built.map(\.clip))).sorted()
-    runs = Self.repeatRuns(built)
+    runs = Self.repeatRuns(events)
     plan = Self.planShots(total: arrangement.totalSamples, seed: arrangement.seed,
-      sections: arrangement.sections)
+      sections: arrangement.sections, soloBars: Set(backing.map { $0.start / Self.bar }))
   }
 
   // MARK: plan
@@ -1859,7 +1863,11 @@ final class MadDirector {
     return runs.filter { $0.count >= 2 }
   }
 
-  static func planShots(total: Int, seed: Int, sections: [SongSectionPayload])
+  /// Shots that show one picture over the whole frame; a backing sticker
+  /// only ever sits on one of these.
+  static let solo: [MadShot] = [.full, .flip, .stutter]
+
+  static func planShots(total: Int, seed: Int, sections: [SongSectionPayload], soloBars: Set<Int> = [])
     -> [(shot: MadShot, start: Int, end: Int, energy: String)]
   {
     var rng = SeededRandom(seed: UInt64(bitPattern: Int64(seed)) &+ 0x9E37)
@@ -1881,7 +1889,10 @@ final class MadDirector {
       for section in sections where section.fromBar <= b && b < section.toBar {
         energy = section.energy
       }
-      var choices = (pools[energy] ?? [.full]).filter { $0 != last && !($0 == .pile && b + 2 > bars - 1) }
+      var choices = (pools[energy] ?? [.full]).filter {
+        $0 != last && !($0 == .pile && (b + 2 > bars - 1 || soloBars.contains(b + 1)))
+      }
+      if soloBars.contains(b) { choices = solo.filter { $0 != last } }
       if b == 0 { choices = choices.filter { bleed.contains($0) } }
       if choices.isEmpty { choices = [.full] }
       let fresh = choices.filter { !used.contains($0) }
@@ -1893,7 +1904,7 @@ final class MadDirector {
       b += span
       last = shot
     }
-    if !plan.contains(where: { $0.shot == .burst }), let tail = plan.last {
+    if !plan.contains(where: { $0.shot == .burst }), let tail = plan.last, !soloBars.contains(tail.start / bar) {
       plan[plan.count - 1] = (.burst, tail.start, tail.end, tail.energy)
     }
     return plan
@@ -1965,6 +1976,9 @@ final class MadDirector {
       }
       if current.shot != .cutout && current.shot != .sticker {
         canvas = try await strip(s, over: canvas, dim: true, W: W, H: H, image: image)
+      }
+      if Self.solo.contains(current.shot) && !longRun {
+        canvas = try await backingStickers(s, over: canvas, W: W, H: H, image: image, overlays: &overlays)
       }
     }
     canvas = pictureEffects(canvas, sample: frame * 1_600, W: W, H: H)
@@ -2232,16 +2246,33 @@ final class MadDirector {
 
   // MARK: cut-outs
 
-  private func mask(_ e: MadVideoEvent, _ s: Int, picture: CIImage) -> MadMask? {
-    let key = "\(e.assetId)#\(e.sourceSample(s) / 1_600)"
+  private func mask(_ e: MadVideoEvent, _ s: Int, picture: CIImage, largest: Bool = false) -> MadMask? {
+    let key = "\(e.assetId)#\(e.sourceSample(s) / 1_600)\(largest ? "L" : "")"
     if let cached = masks[key] { return cached }
-    let made = Self.foregroundMask(picture)
+    let made = Self.foregroundMask(picture, largest: largest)
     if masks.count > 160 { masks.removeAll() }
     masks[key] = made
     return made
   }
 
-  static func foregroundMask(_ picture: CIImage) -> MadMask? {
+  /// Pixels above half in a Vision mask, sampled every 8th pixel.
+  static func maskPixels(_ buffer: CVPixelBuffer) -> Int {
+    CVPixelBufferLockBaseAddress(buffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+    let w = CVPixelBufferGetWidth(buffer), h = CVPixelBufferGetHeight(buffer)
+    guard let base = CVPixelBufferGetBaseAddress(buffer) else { return 0 }
+    let row = CVPixelBufferGetBytesPerRow(buffer)
+    var on = 0
+    for y in stride(from: 0, to: h, by: 8) {
+      let line = base.advanced(by: y * row).assumingMemoryBound(to: Float32.self)
+      for x in stride(from: 0, to: w, by: 8) where line[x] > 0.5 { on += 1 }
+    }
+    return on
+  }
+
+  /// largest: keep only the biggest subject, so a small sticker never carries
+  /// a stray piece of someone at the edge of the frame.
+  static func foregroundMask(_ picture: CIImage, largest: Bool = false) -> MadMask? {
     let context = CIContext(options: [.cacheIntermediates: false])
     guard let cg = context.createCGImage(picture, from: picture.extent) else { return nil }
     let handler = VNImageRequestHandler(cgImage: cg, options: [:])
@@ -2249,7 +2280,17 @@ final class MadDirector {
     do {
       try handler.perform([request])
       guard let observation = request.results?.first else { return nil }
-      let buffer = try observation.generateScaledMaskForImage(forInstances: observation.allInstances, from: handler)
+      var instances = observation.allInstances
+      if largest, instances.count > 1 {
+        var best: (instance: Int, pixels: Int)?
+        for instance in instances {
+          let single = try observation.generateScaledMaskForImage(forInstances: IndexSet(integer: instance), from: handler)
+          let pixels = maskPixels(single)
+          if best == nil || pixels > best!.pixels { best = (instance, pixels) }
+        }
+        if let best { instances = IndexSet(integer: best.instance) }
+      }
+      let buffer = try observation.generateScaledMaskForImage(forInstances: instances, from: handler)
       CVPixelBufferLockBaseAddress(buffer, .readOnly)
       defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
       let w = CVPixelBufferGetWidth(buffer), h = CVPixelBufferGetHeight(buffer)
@@ -2286,7 +2327,7 @@ final class MadDirector {
   private func hasSubject(_ clip: Int, image: (MadVideoEvent, Int) async throws -> CIImage) async -> Bool {
     if let known = subjects[clip] { return known }
     var votes = 0, count = 0
-    for e in events.filter({ $0.clip == clip }).prefix(3) {
+    for e in (events + backing).filter({ $0.clip == clip }).prefix(3) {
       guard let picture = try? await image(e, e.start) else { continue }
       count += 1
       if let m = mask(e, e.start, picture: picture), m.coverage > 0.05, m.coverage < 0.9, m.rowsFilled > 0.6 {
@@ -2300,9 +2341,10 @@ final class MadDirector {
 
   /// The subject on transparency with a white edge, scaled to `height`.
   private func cutout(_ e: MadVideoEvent, _ s: Int, height: CGFloat, maxWidth: CGFloat, outline: CGFloat,
+                      largest: Bool = false,
                       image: (MadVideoEvent, Int) async throws -> CIImage) async throws -> CIImage? {
     let picture = try await image(e, s)
-    guard let m = mask(e, s, picture: picture), m.rowsFilled >= 0.6 else { return nil }
+    guard let m = mask(e, s, picture: picture, largest: largest), m.rowsFilled >= 0.6 else { return nil }
     let alpha = m.image.cropped(to: m.box)
     var subject = picture.cropped(to: m.box).applyingFilter("CIBlendWithMask", parameters: [
       kCIInputBackgroundImageKey: CIImage.empty(), kCIInputMaskImageKey: alpha,
@@ -2319,6 +2361,69 @@ final class MadDirector {
     let moved = subject.transformed(by: CGAffineTransform(translationX: -m.box.minX, y: -m.box.minY)
       .concatenating(CGAffineTransform(scaleX: scale, y: scale)))
     return moved
+  }
+
+  /// A clip playing quietly behind the melody pops up as a small sticker in
+  /// the bottom-right corner, sways with its own level and pops away after.
+  private func backingStickers(_ s: Int, over canvas: CIImage, W: CGFloat, H: CGFloat,
+                               image: (MadVideoEvent, Int) async throws -> CIImage,
+                               overlays: inout [(CGContext) -> Void]) async throws -> CIImage {
+    var out = canvas
+    let k = W / 720
+    let linger = 7_200  // 0.15 s to pop away
+    for e in backing where s >= e.start && s < e.end + linger {
+      let age = Double(s - e.start) / 48_000
+      let scale = s < e.end ? Self.overshoot(age / 0.3) : 1 - Self.easeOut(Double(s - e.end) / Double(linger))
+      guard scale > 0.02 else { continue }
+      let at = min(s, e.end - 1)
+      var piece: CIImage?
+      if await hasSubject(e.clip, image: image) {
+        piece = try await cutout(e, at, height: H * 0.24, maxWidth: W * 0.34, outline: 8 * k, largest: true,
+          image: image)
+      }
+      if piece == nil { piece = try await photoCard(e, at, height: H * 0.2, H: H, image: image) }
+      guard var sticker = piece, !sticker.extent.isEmpty else { continue }
+      let level = s < e.end ? Double(e.level(s)) : 0
+      let tilt = CGFloat(-6 + 5 * level * sin(age * 9)) * .pi / 180
+      let e0 = sticker.extent
+      sticker = sticker.transformed(by: CGAffineTransform(translationX: -e0.midX, y: -e0.midY)
+        .concatenating(CGAffineTransform(scaleX: CGFloat(scale), y: CGFloat(scale)))
+        .concatenating(CGAffineTransform(rotationAngle: tilt)))
+      let r = sticker.extent
+      let bottom = 170 * k  // Core Image y of the sticker's lower edge
+      sticker = sticker.transformed(by: CGAffineTransform(translationX: W - 36 * k - r.maxX, y: bottom - r.minY))
+      let shadow = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.35)).cropped(to: sticker.extent)
+        .applyingFilter("CIBlendWithAlphaMask", parameters: [
+          kCIInputBackgroundImageKey: CIImage.empty(), kCIInputMaskImageKey: sticker,
+        ])
+        .applyingGaussianBlur(sigma: 10 * k)
+        .transformed(by: CGAffineTransform(translationX: 6 * k, y: -10 * k))
+      out = sticker.composited(over: shadow.composited(over: out))
+      if scale > 0.6 {
+        let name = names[e.clip]
+        let color = Self.colors[e.clip % Self.colors.count]
+        let centre = CGPoint(x: sticker.extent.midX, y: H - sticker.extent.minY)  // top-left coordinates
+        overlays.append { g in self.namePill(g, name, centre: centre, color: color, k: k, H: H) }
+      }
+    }
+    return out
+  }
+
+  /// A coloured pill with the clip's name, hanging from the bottom of a sticker.
+  private func namePill(_ g: CGContext, _ name: String, centre: CGPoint, color: CGColor, k: CGFloat, H: CGFloat) {
+    let size = 24 * k
+    let attributes: [NSAttributedString.Key: Any] = [
+      NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("HiraginoSans-W6" as CFString, size, nil),
+      NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 1, alpha: 1),
+    ]
+    let line = CTLineCreateWithAttributedString(NSAttributedString(string: name, attributes: attributes))
+    let tw = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+    let pill = ci(CGRect(x: centre.x - tw / 2 - 14 * k, y: centre.y - 6 * k, width: tw + 28 * k, height: 36 * k), H)
+    g.setFillColor(color.copy(alpha: 0.92) ?? color)
+    g.addPath(CGPath(roundedRect: pill, cornerWidth: 18 * k, cornerHeight: 18 * k, transform: nil))
+    g.fillPath()
+    g.textPosition = CGPoint(x: pill.midX - tw / 2, y: pill.midY - size * 0.35)
+    CTLineDraw(line, g)
   }
 
   private func photoCard(_ e: MadVideoEvent, _ s: Int, height: CGFloat, H: CGFloat,
