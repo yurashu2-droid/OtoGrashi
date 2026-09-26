@@ -138,29 +138,46 @@ def main():
     song, src_dir, out = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
     score = bundled_score() if song == "lilac" else SCORES[song]
     names = (src_dir / "names.txt").read_text(encoding="utf-8").split()
-    voices = []
+    voices, peaks = [], []
     for i in range(len(names)):
         pcm = load(src_dir / f"s{i}.wav")
-        voices.append(Voice(pcm * (0.9 / max(1e-4, float(np.abs(pcm).max())))))
+        peaks.append(float(np.abs(pcm).max()))
+        voices.append(Voice(pcm * (0.9 / max(1e-4, peaks[-1]))))
     arr = Arrangement(voices)
     n = len(voices)
+    # a clip that is almost silent would only contribute amplified hiss
+    usable = [i for i in range(n) if peaks[i] >= 0.03] or list(range(n))
 
-    # the lead voice sings the melody: the clip with the most voiced sound
-    lead = max(range(n), key=lambda i: voices[i].voiced_seconds())
-    others = [i for i in range(n) if i != lead]
-    # bass: the lowest steady voice, else the non-lead clip with the most sound
-    steady = [i for i in others if voices[i].voiced_seconds() > 0.3]
+    # singers: clips that hold a pitch for a while; the top two trade phrases
+    singers = sorted((i for i in usable if voices[i].voiced_seconds() > 0.8),
+                     key=lambda i: -voices[i].voiced_seconds())[:2]
+    if not singers:
+        singers = [max(usable, key=lambda i: voices[i].voiced_seconds())]
+    lead = singers[0]
+    others = [i for i in usable if i != lead]
+    # bass: the lowest steady voice outside the singers, else the fullest remaining clip
+    pool = [i for i in usable if i not in singers] or others or [lead]
+    steady = [i for i in pool if voices[i].voiced_seconds() > 0.3]
     if steady:
         bass = min(steady, key=lambda i: voices[i].median_midi())
-    elif others:
-        bass = max(others, key=lambda i: sum(b - a for a, b in voices[i].regions))
     else:
-        bass = lead
+        bass = max(pool, key=lambda i: sum(b - a for a, b in voices[i].regions))
     sampled_bass = voices[bass].voiced_seconds() <= 0.3
-    # transpose the whole song to the lead voice's own register (a key change)
+    # transpose the whole song to the lead voice's own register (a key change);
+    # a second singer moves by whole octaves only, so the key stays the same
     melody = score["melody"]
-    shift = int(round(voices[lead].median_midi() - np.median([m for _, _, m in melody])))
-    sung = [(b, l, m + shift) for b, l, m in melody]
+    centre = float(np.median([m for _, _, m in melody]))
+    shift = int(round(voices[lead].median_midi() - centre))
+
+    def octave_fit(m, target):
+        while m > target + 6:
+            m -= 12
+        while m < target - 6:
+            m += 12
+        return m
+
+    sung = {s: [(b, l, octave_fit(m + shift, voices[s].median_midi() + (m - centre))) for b, l, m in melody]
+            for s in singers}
     bass_line = score.get("bass_notes") or [(h * 2, 2, r) for h, r in enumerate(score["roots"])]
     bass_mid = voices[bass].median_midi() if not sampled_bass else 45.0
     bass_notes = []
@@ -172,26 +189,31 @@ def main():
             m += 12
         bass_notes.append((b, l, m))
 
-    # drum kit from the sharpest attacks, spread across clips
-    attacks = sorted(((voices[i].rms[o // 480] if voices[i].onsets else 0, i, o)
-                      for i in range(n) for o in voices[i].onsets[:2]), reverse=True)
+    # drum kit from the loudest real attacks (measured before levelling), one clip per drum
+    attacks = sorted(((voices[i].rms[min(o // 480, len(voices[i].rms) - 1)] * peaks[i], i, o)
+                      for i in usable for o in voices[i].onsets[:2]), reverse=True)
     if not attacks:
-        attacks = [(0, i, voices[i].regions[0][0]) for i in range(n)]
-    pick = lambda k: (attacks[k % len(attacks)][1], attacks[k % len(attacks)][2])
-    kit = {"kick": pick(0), "snare": pick(1 if len(attacks) > 1 else 0), "hat": pick(2)}
+        attacks = [(0, i, voices[i].regions[0][0]) for i in usable]
+    kit, taken = {}, set()
+    for drum in ("kick", "snare", "hat"):
+        choice = next((a for a in attacks if a[1] not in taken), attacks[0])
+        kit[drum] = (choice[1], choice[2])
+        taken.add(choice[1])
 
     longest = {i: voices[i].regions[0] for i in range(n)}  # longest region per clip
 
-    # bars 1-2: introductions, first one stuttered in
+    # bars 1-2: every clip introduces itself, quick-fire, the first one stuttered in
     t = 0
     order = [lead] + others
+    slot = max(BEAT, (2 * BAR - 3 * SIXTEENTH) // max(1, len(order)))
     for k, i in enumerate(order):
-        if t >= 2 * BAR - BEAT:
+        if t >= 2 * BAR - BEAT // 2:
             break
         if k == 0:
             t += arr.stutter_head(i, t, longest[i])
-        dur = arr.phrase(i, t, longest[i], gain=1.0, limit=1.4)
-        t = int(np.ceil((t + dur) / BEAT)) * BEAT
+        dur = arr.phrase(i, t, longest[i], gain=1.0, limit=min(1.4, (slot - 600) / SR))
+        t += max(slot, int(np.ceil(dur / (BEAT // 2))) * (BEAT // 2)) if len(order) > 3 else \
+            int(np.ceil((t + dur) / BEAT)) * BEAT - t
     arr.drums(kit, 1, 2, snare=False, hats=False, gain=0.7)
 
     # bars 3-4: beat + bass, tail echoes as fills
@@ -203,21 +225,26 @@ def main():
             return arr.sampled_line(bass, cursor, notes, bar_offset, gain, "bass", bass_mid)
         return arr.sung_line(bass, cursor, notes, bar_offset, gain, "bass")
 
-    first_two = [(b - 0, l, m) for b, l, m in bass_notes if b < 8]
+    first_two = [(b, l, m) for b, l, m in bass_notes if b < 8]
     bass_cursor = bass_part(bass_cursor, first_two, 2, 0.6)
     arr.tail_echo(order[-1], 3 * BAR + 2 * BEAT, longest[order[-1]], times=4, step=BEAT // 2, gain=0.6)
 
-    # bars 5-12: the melody, sung continuously by the lead voice
+    # bars 5-12: the melody, sung continuously; two singers trade every two bars
     arr.drums(kit, 4, 12)
-    lead_cursor = (0, sorted(voices[lead].regions)[0][0])
-    lead_cursor = arr.sung_line(lead, lead_cursor, sung, 4, 0.95, "melody")
+    cursors = {s: (0, sorted(voices[s].regions)[0][0]) for s in singers}
+    for chunk in range(4):
+        s = singers[chunk % len(singers)]
+        part = [(b, l, m) for b, l, m in sung[s] if chunk * 8 <= b < chunk * 8 + 8]
+        cursors[s] = arr.sung_line(s, cursors[s], part, 4, 0.95, "melody")
     bass_cursor = bass_part(bass_cursor, bass_notes, 4, 0.55)
-    # chops answer in the gaps of bars 9-12
-    for bar, clip in ((8, others[0] if others else lead), (10, others[-1] if others else lead)):
+    # chops answer in the gaps of bars 9-12, from clips that have not sung
+    answer = [i for i in others if i not in singers] or others or [lead]
+    for k, bar in enumerate((8, 9, 10, 11)):
+        clip = answer[k % len(answer)]
         arr.stutter_head(clip, bar * BAR + 3 * BEAT, longest[clip], times=4, step=SIXTEENTH, gain=0.55)
 
     # bars 13-14: break — the longest phrase raw and up front
-    star = max(range(n), key=lambda i: longest[i][1] - longest[i][0])
+    star = max(usable, key=lambda i: longest[i][1] - longest[i][0])
     arr.add(kit["kick"][0], 12 * BAR, int(0.16 * SR), kit["kick"][1], "rhythm", "kick", 0.9, rate=0.55)
     dur = arr.phrase(star, 12 * BAR + BEAT // 2, longest[star], gain=1.0, limit=2.4)
     arr.tail_echo(star, 12 * BAR + BEAT // 2 + dur, longest[star], times=3, step=BEAT // 2, gain=0.8)
@@ -226,11 +253,11 @@ def main():
 
     # bars 15-16: climax — the hook again, full kit, everyone stutters at the end
     arr.drums(kit, 14, 16)
-    hook = [(b, l, m) for b, l, m in sung if b < 8]
-    arr.sung_line(lead, lead_cursor, hook, 14, 1.0, "melody")
+    s = singers[-1]
+    arr.sung_line(s, cursors[s], [(b, l, m) for b, l, m in sung[s] if b < 8], 14, 1.0, "melody")
     bass_part(bass_cursor, [(b, l, m) for b, l, m in bass_notes if b < 8], 14, 0.55)
     for k, i in enumerate(order):
-        arr.stutter_head(i, 15 * BAR + 2 * BEAT + k * SIXTEENTH * 2, longest[i], times=2,
+        arr.stutter_head(i, 15 * BAR + 2 * BEAT + k * SIXTEENTH * 2 % (2 * BEAT), longest[i], times=2,
                          step=SIXTEENTH, gain=0.7)
 
     arr.events.sort(key=lambda e: e["destinationStartSample"])

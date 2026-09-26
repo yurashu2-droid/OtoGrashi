@@ -41,7 +41,7 @@ LAVENDER = (156, 132, 240)
 MUSTARD = (242, 169, 59)
 INK = (35, 28, 26)
 PAPER = (251, 243, 230)
-CLIP_COLORS = [CORAL, LAVENDER, MUSTARD, (90, 180, 150)]
+CLIP_COLORS = [CORAL, LAVENDER, MUSTARD, (90, 180, 150), (86, 160, 230), (230, 120, 190)]
 
 
 def font(path, size):
@@ -211,6 +211,8 @@ class Ctx:
         self.sources = sources
         self.total_t = total / SR
         self.names = [s.name for s in sources]
+        # clips that actually sound; silent ones stay out of the credits
+        self.heard = sorted({e.c for e in events})
         self.title = title
 
     def active(self, t, kinds=None):
@@ -261,7 +263,7 @@ def draw_op(canvas, ctx, t, style):
     a = ease_out(t / 0.2) * (1 - ease_in_out((t - 1.3) / 0.3))
     alpha = int(255 * a)
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    cast = " ・ ".join(ctx.names)
+    cast = " ・ ".join(ctx.names[i] for i in ctx.heard)
     if style == "paper":
         ld = ImageDraw.Draw(layer)
         ld.rounded_rectangle((36, 64, 580, 236), 18, fill=(*PAPER, int(240 * a)))
@@ -280,13 +282,13 @@ def draw_ed(canvas, ctx, t, style):
     if t < start:
         return canvas
     k = t - start
-    n = len(ctx.sources)
+    n = len(ctx.heard)
     bg = PAPER if style == "paper" else INK
     out = Image.new("RGB", (W, H), bg)
     cols = 2
     cw, ch = (W - 72) / cols, (H * 0.56 - 24) / 2
     for i in range(4):
-        src = ctx.sources[i % n]
+        src = ctx.sources[ctx.heard[i % n]]
         appear = ease_out((k - i * 0.08) / 0.2)
         if appear <= 0:
             continue
@@ -308,9 +310,9 @@ def draw_ed(canvas, ctx, t, style):
         text_center(d, (W / 2, H * 0.76), "オトグラシ", font(FONT_BOLD, size), fg)
         if ctx.title:
             text_center(d, (W / 2, H * 0.835), ctx.title, font(FONT_HAND, 34), CORAL)
-            text_center(d, (W / 2, H * 0.875), "演奏：" + "・".join(ctx.names), font(FONT_HAND, 26), fg)
+            text_center(d, (W / 2, H * 0.875), "演奏：" + "・".join(ctx.names[i] for i in ctx.heard), font(FONT_HAND, 26), fg)
         else:
-            text_center(d, (W / 2, H * 0.84), "・".join(ctx.names) + " でできた15秒",
+            text_center(d, (W / 2, H * 0.84), "・".join(ctx.names[i] for i in ctx.heard) + " でできた15秒",
                         font(FONT_HAND, 30), CORAL)
     # the curtain wipes up over the running footage for the first 0.2s
     wipe = ease_out(k / 0.2)
@@ -338,7 +340,7 @@ def sequencer_ribbon(canvas, ctx, t):
             continue
         y = top + e.c * (lane_h + 6)
         on = e.active(t)
-        col = CLIP_COLORS[e.c]
+        col = CLIP_COLORS[e.c % len(CLIP_COLORS)]
         alpha = 255 if on else 110
         lvl = ctx.level(e, t) if on else 0
         grow = int(lvl * 10)
@@ -394,7 +396,7 @@ def voice_label(canvas, ctx, e, t, rect, count=1):
     pw = tw + 96 * k
     x0, y0 = x + 16 * k, y + h - ph - 16 * k
     d.rounded_rectangle((x0, y0, x0 + pw, y0 + ph), ph / 2, fill=(20, 16, 16, 150))
-    col = CLIP_COLORS[e.c]
+    col = CLIP_COLORS[e.c % len(CLIP_COLORS)]
     cy = y0 + ph / 2
     d.ellipse((x0 + 14 * k, cy - 7 * k, x0 + 28 * k, cy + 7 * k), fill=col)
     d.text((x0 + 38 * k, cy), name, font=f, fill=(255, 255, 255), anchor="lm")
@@ -413,7 +415,7 @@ def pulse_border(canvas, ctx, e, t, rect):
     width = int(2 + 7 * ctx.norm_level(e, t))
     ImageDraw.Draw(canvas).rectangle(
         (x + width // 2, y + width // 2, x + w - width // 2 - 1, y + h - width // 2 - 1),
-        outline=CLIP_COLORS[e.c], width=width)
+        outline=CLIP_COLORS[e.c % len(CLIP_COLORS)], width=width)
 
 
 def single(ctx, t, e, **kw):
@@ -660,7 +662,7 @@ def shot_pile(ctx, t, seg):
             label_y = min(label_y, H - 150)
             text_center(d, (cx, label_y), ctx.names[e.c], font(FONT_HAND, 50), INK)
             if live:
-                scribble_wave(canvas, e, t, cx, label_y + 70, min(W * 0.8, framed.width * 1.1), CLIP_COLORS[e.c])
+                scribble_wave(canvas, e, t, cx, label_y + 70, min(W * 0.8, framed.width * 1.1), CLIP_COLORS[e.c % len(CLIP_COLORS)])
     return canvas
 
 
