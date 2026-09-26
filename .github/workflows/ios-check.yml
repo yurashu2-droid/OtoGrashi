@@ -180,6 +180,12 @@ jobs:
           }
           summarize analyze 'error|warning|info|•|issues? found'
           summarize test '\[E\]|Expected:|Actual:|Error:|Exception|FAILED|Some tests failed|All tests passed'
+          # a failing expectation with the test name and stack around it
+          if [ -f ci-logs/test.txt ]; then
+            fail="$( (grep -n -B6 -A24 -E 'Expected:|\[E\]' ci-logs/test.txt || true) | head -90 | cut -c1-200)"
+            fail="${fail//'%'/'%25'}"
+            [ -z "$fail" ] || echo "::warning title=failing dart test::${fail//$'\n'/'%0A'}"
+          fi
           summarize ios-simulator-build 'error:|Error'
           summarize xctest 'error:|failed|Executed|TEST SUCCEEDED|TEST FAILED|XCTAssert|MAD_CHECK'
           # the slowest native tests, so the check can be kept short
