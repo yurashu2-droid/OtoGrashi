@@ -343,7 +343,7 @@ def repeat_moment(canvas, ctx, t):
             continue  # scrolled out of view
         src = ctx.sources[e.c]
         still_t = e.t  # the picture at the moment of this hit, frozen
-        piece = cutout(ctx, e, still_t, size, max_width=step * 1.3) if getattr(src, "has_subject", False) else None
+        piece = cutout(ctx, e, still_t, size, max_width=step * 1.3, outline=8) if getattr(src, "has_subject", False) else None
         if piece is not None:
             alpha = np.asarray(piece.getchannel("A"), np.float32) / 255
             if (alpha.mean(axis=1) > 0.2).mean() < 0.6:
@@ -629,11 +629,10 @@ def cutout(ctx, e, t, height, close=False, outline=0, max_width=W * 0.8):
     scale = min(height / max(1, piece.height), max_width / max(1, piece.width))
     piece = piece.resize((max(1, int(piece.width * scale)), max(1, int(piece.height * scale))), Image.BILINEAR)
     if outline:
-        a = piece.getchannel("A").filter(ImageFilter.MaxFilter(outline * 2 + 1))
-        board = Image.new("RGBA", (piece.width + 2 * outline, piece.height + 2 * outline), (0, 0, 0, 0))
-        white = Image.new("RGBA", piece.size, (255, 255, 255, 255))
-        white.putalpha(a)
-        board.alpha_composite(white, (outline, outline))
+        # pad first so the white edge is not clipped at the cut-out's bounding box
+        a = ImageOps.expand(piece.getchannel("A"), outline, 0).filter(ImageFilter.MaxFilter(outline * 2 + 1))
+        board = Image.new("RGBA", a.size, (255, 255, 255, 255))
+        board.putalpha(a.filter(ImageFilter.GaussianBlur(1)))
         board.alpha_composite(piece, (outline, outline))
         piece = board
     return piece
@@ -664,7 +663,8 @@ def shot_cutout(ctx, t, seg):
     base_x = W * (0.5 if mode == "close" else 0.42)
     base_y = H * (0.98 if mode != "jump" else 0.98 - 0.16 * (int(t / (BEAT / 2)) % 2))
     for i, e in enumerate(hits):
-        piece = cutout(ctx, e, t, height, close=mode == "close", max_width=W * (0.9 if mode == "close" else 0.8))
+        piece = cutout(ctx, e, t, height, close=mode == "close", max_width=W * (0.9 if mode == "close" else 0.8),
+                       outline=8)
         if piece is None:
             continue
         back = len(hits) - 1 - i
@@ -685,39 +685,36 @@ def shot_cutout(ctx, t, seg):
 
 
 def shot_sticker(ctx, t, seg):
-    """The sounding subject as a white-edged sticker over blurred scenery from the
-    other sounds, the scenery swapping on every beat."""
+    """On each hit the sounding subject is lifted out as a white-edged sticker on a
+    flat ground; then its own original surroundings rise back from the bottom,
+    until the next hit lifts it out again. The sticker sits exactly where the
+    subject is in the shot, so the returning scene closes around it."""
     lead = lead_of(ctx, t)
-    others = sorted({e.c for e in ctx.events if e.t <= t and e.c != lead.c and e.role != "guide"}) or [lead.c]
-    beat = int(t / BEAT)
-
-    def scene(n, age):
-        src = ctx.sources[others[n % len(others)]]
-        still = src.frames[len(src.frames) // 2]
-        drift = 1.06 + 0.04 * min(1, age / BEAT)
-        img = cover(still, W, H, zoom=drift).filter(ImageFilter.GaussianBlur(14))
-        return ImageEnhance.Brightness(img).enhance(0.85).convert("RGBA")
-
-    # a new scene on every beat, rising from the bottom over the previous one
-    since = t - beat * BEAT
-    bg = scene(beat, since)
-    rise = ease_out(since / 0.28)
-    if beat > 0 and rise < 1:
-        old = scene(beat - 1, since + BEAT)
+    src = ctx.sources[lead.c]
+    full = cover(ctx.frame(lead, t), W, H)
+    if not getattr(src, "has_subject", False):
+        return single(ctx, t, lead)
+    rng = np.random.default_rng(getattr(ctx, "seed", 0))
+    ground = BACKDROPS[int(rng.integers(len(BACKDROPS)))]
+    hits = [e.t for e in ctx.events if e.c == lead.c and e.role != "guide" and e.t <= t and e.kind != "sung"]
+    since = t - (max(hits) if hits else lead.t)
+    rise = ease_out((since - 0.06) / 0.35)
+    canvas = Image.new("RGBA", (W, H), (*ground, 255))
+    if rise > 0:
         top = int(H * (1 - rise))
-        old.paste(bg.crop((0, top, W, H)), (0, top))
-        ImageDraw.Draw(old).rectangle((0, top - 3, W, top + 3), fill=(255, 255, 255, 180))
-        bg = old
-    if not ctx.voices(t) and t - lead.end_t > 0.12:
-        return bg.convert("RGB")
-    bounce = 1 - min(1, (t - lead.t) / 0.12)
-    piece = cutout(ctx, lead, t, H * 0.62, outline=10)
-    if piece is not None:
-        x = int(W / 2 - piece.width / 2)
-        y = int(H * 0.99 - piece.height - bounce * H * 0.03)
-        bg.alpha_composite(piece, (x, y))
-    voice_label(bg, ctx, lead, t, (0, 0, W, H), sum(v.c == lead.c for v in ctx.voices(t)))
-    return bg.convert("RGB")
+        canvas.paste(full.crop((0, top, W, H)).convert("RGBA"), (0, top))
+        if rise < 1:
+            ImageDraw.Draw(canvas).rectangle((0, top - 3, W, top + 3), fill=(255, 255, 255, 200))
+    mask = cover(ctx.mask(lead, t), W, H).point(lambda v: 255 if v > 96 else 0)
+    edge = mask.filter(ImageFilter.MaxFilter(21)).filter(ImageFilter.GaussianBlur(1))
+    white = Image.new("RGBA", (W, H), (255, 255, 255, 255))
+    white.putalpha(edge)
+    subject = full.convert("RGBA")
+    subject.putalpha(mask.filter(ImageFilter.GaussianBlur(1)))
+    canvas.alpha_composite(white)
+    canvas.alpha_composite(subject)
+    voice_label(canvas, ctx, lead, t, (0, 0, W, H), sum(v.c == lead.c for v in ctx.voices(t)))
+    return canvas.convert("RGB")
 
 
 def shot_burst(ctx, t, seg):
