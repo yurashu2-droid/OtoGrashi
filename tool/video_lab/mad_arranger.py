@@ -354,16 +354,21 @@ def main():
     # bars 1-2: every clip introduces itself, quick-fire, the first one stuttered in
     t = 0
     order = [lead] + others
-    slot = max(BEAT, (2 * BAR - 3 * SIXTEENTH) // max(1, len(order)))
+    slot = max(BEAT // 2, (2 * BAR - 3 * SIXTEENTH) // max(1, len(order)))
+    last_intro = lead
     for k, i in enumerate(order):
         if t >= 2 * BAR - BEAT // 2:
             break
+        last_intro = i
         if k == 0:
             t += arr.stutter_head(i, t, longest[i])
         dur = arr.phrase(i, t, longest[i], gain=1.0, limit=min(1.4, (slot - 600) / SR))
         # with many clips each one keeps to its slot, so nobody is squeezed out
         t += slot if len(order) > 3 else int(np.ceil((t + dur) / BEAT)) * BEAT - t
     arr.drums(kit, 1, 2, snare=False, hats=False, gain=0.7)
+    # the song proper opens on the last clip introduced: its sound lands on the
+    # downbeat while the picture turns it into a sticker
+    arr.phrase(last_intro, 2 * BAR, longest[last_intro], gain=1.0, limit=0.45)
 
     # bars 3-4: beat + bass, tail echoes as fills
     arr.drums(kit, 2, 4)

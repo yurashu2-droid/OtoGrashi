@@ -387,8 +387,9 @@ def repeat_moment(canvas, ctx, t, dim=True):
 
 
 def draw_op(canvas, ctx, t, style):
-    """0–1.6s: the title rests on the first sounding picture."""
-    if t >= 1.6:
+    """0–1.6s: the title rests on the first sounding picture (videos that open
+    on the feed carry their cover on the first post instead)."""
+    if t >= 1.6 or getattr(ctx, "feed", False):
         return canvas
     a = ease_out(t / 0.2) * (1 - ease_in_out((t - 1.3) / 0.3))
     alpha = int(255 * a)
@@ -1117,7 +1118,20 @@ def feed_posts(ctx, intro_end):
     return posts
 
 
-def feed_icons(layer, col):
+def feed_count(n):
+    return f"{n / 10000:.1f}万" if n >= 10000 else f"{n:,}"
+
+
+def feed_numbers(ctx, e, progress):
+    """Plausible like and comment counts, fixed per clip and seed; the likes
+    climb a little while the post is on screen."""
+    rng = np.random.default_rng(getattr(ctx, "seed", 0) * 31 + e.c)
+    likes = int(10 ** rng.uniform(2.6, 4.9))
+    comments = max(3, int(likes * rng.uniform(0.01, 0.05)))
+    return likes + int(progress * likes * 0.04), comments
+
+
+def feed_icons(layer, col, likes, comments):
     """Right-hand column of a short-video app: like, comment, share, with counts."""
     d = ImageDraw.Draw(layer)
     x, y = W - 62, H * 0.52
@@ -1126,12 +1140,12 @@ def feed_icons(layer, col):
     d.ellipse((x - 22, y - 16, x + 1, y + 6), fill=(*col, 255))
     d.ellipse((x - 1, y - 16, x + 22, y + 6), fill=(*col, 255))
     d.polygon([(x - 21, y - 1), (x + 21, y - 1), (x, y + 22)], fill=(*col, 255))
-    d.text((x, y + 42), "1.2万", font=small, fill=(255, 255, 255, 255), anchor="mm")
+    d.text((x, y + 42), feed_count(likes), font=small, fill=(255, 255, 255, 255), anchor="mm")
     # comment
     y += 104
     d.rounded_rectangle((x - 22, y - 18, x + 22, y + 12), 12, fill=(255, 255, 255, 255))
     d.polygon([(x - 8, y + 10), (x + 4, y + 10), (x - 10, y + 22)], fill=(255, 255, 255, 255))
-    d.text((x, y + 42), "348", font=small, fill=(255, 255, 255, 255), anchor="mm")
+    d.text((x, y + 42), feed_count(comments), font=small, fill=(255, 255, 255, 255), anchor="mm")
     # share
     y += 104
     d.polygon([(x - 20, y + 14), (x - 20, y - 2), (x + 4, y - 2), (x + 4, y - 14), (x + 24, y + 4),
@@ -1139,9 +1153,55 @@ def feed_icons(layer, col):
     d.text((x, y + 44), "シェア", font=small, fill=(255, 255, 255, 255), anchor="mm")
 
 
-def feed_post(ctx, e, t, progress):
+def face_disc(ctx, c, size):
+    """A round face sticker of clip c: its first picture, white rim."""
+    first = next(e for e in ctx.events if e.c == c)
+    face = cover(ctx.frame(first, first.t), size, size, focus_y=0.34).convert("RGBA")
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+    face.putalpha(mask)
+    rim = 6
+    disc = Image.new("RGBA", (size + 2 * rim, size + 2 * rim), (0, 0, 0, 0))
+    ImageDraw.Draw(disc).ellipse((0, 0, disc.width - 1, disc.height - 1), fill=(255, 255, 255, 255))
+    disc.alpha_composite(face, (rim, rim))
+    return disc
+
+
+def cover_title(ctx, canvas):
+    """The first frame is the cover a friend (and a feed thumbnail) sees before
+    pressing play: what song, made of whose sounds, with their faces. Complete
+    from frame 0, kept clear of the app's own buttons at the bottom and right."""
+    song = (ctx.title or "なんでもない日の音").split("（")[0]
+    cast = ctx.heard
+    card = Image.new("RGBA", (W - 90, 250), (0, 0, 0, 0))
+    d = ImageDraw.Draw(card)
+    d.rounded_rectangle((0, 0, card.width - 1, card.height - 1), 26, fill=(*PAPER, 250))
+    d.text((34, 30), f"日常の音 {len(cast)}つで", font=font(FONT_HAND, 38), fill=(*CORAL, 255))
+    size = 104
+    while size > 48 and d.textlength(song, font=font(FONT_BOLD, size)) > card.width - 68:
+        size -= 2
+    d.text((32, 88), song, font=font(FONT_BOLD, size), fill=(*INK, 255))
+    d.text((card.width - 34, card.height - 30), "弾いてみた", font=font(FONT_HAND, 30),
+           fill=(*INK, 200), anchor="rm")
+    card = card.rotate(3, expand=True, resample=Image.BICUBIC)
+    shadow = Image.new("RGBA", card.size, (0, 0, 0, 0))
+    shadow.putalpha(card.getchannel("A").point(lambda v: v * 0.4))
+    canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(14)), (36, 150))
+    canvas.alpha_composite(card, (30, 138))
+    # the cast as round face stickers, overlapping a little like a group photo
+    n = len(cast)
+    disc = 118 if n <= 4 else 96
+    step = min(disc + 14, (W - 120) // max(1, n))
+    x0 = (W - 70 - (step * (n - 1) + disc)) // 2
+    for k, c in enumerate(cast):
+        face = face_disc(ctx, c, disc).rotate((-6, 4, -3, 6, -5, 3)[k % 6], expand=True, resample=Image.BICUBIC)
+        canvas.alpha_composite(face, (x0 + k * step, 440 + (12 if k % 2 else 0)))
+    return canvas
+
+
+def feed_post(ctx, e, t, progress, first=False):
     """One full-screen post: the clip, its handle and tags, the side icons and
-    a thin progress bar along the bottom."""
+    a thin progress bar along the bottom. The first one carries the cover."""
     canvas = cover(ctx.frame(e, t), W, H).convert("RGBA")
     col = CLIP_COLORS[e.c % len(CLIP_COLORS)]
     shade = Image.new("L", (1, 256))
@@ -1151,7 +1211,7 @@ def feed_post(ctx, e, t, progress):
     dark.putalpha(shade)
     canvas.alpha_composite(dark, (0, H - shade.height))
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    feed_icons(layer, col)
+    feed_icons(layer, col, *feed_numbers(ctx, e, progress))
     d = ImageDraw.Draw(layer)
     d.ellipse((28, H - 196, 76, H - 148), fill=(*col, 255), outline=(255, 255, 255, 255), width=3)
     d.text((90, H - 172), "@" + ctx.names[e.c], font=font(FONT_BOLD, 30), fill=(255, 255, 255, 255), anchor="lm")
@@ -1159,7 +1219,82 @@ def feed_post(ctx, e, t, progress):
     d.rectangle((0, H - 6, W, H), fill=(255, 255, 255, 70))
     d.rectangle((0, H - 6, int(W * progress), H), fill=(255, 255, 255, 235))
     canvas.alpha_composite(layer)
+    if first:
+        canvas = cover_title(ctx, canvas)
     return canvas.convert("RGB")
+
+
+STICKER_IN = 0.4  # seconds before the downbeat that the last post starts to lift
+
+
+def accent_after_feed(ctx, e, intro_end):
+    """The sound the song opens on: the last introduced clip on the downbeat."""
+    return next((a for a in ctx.events if a.c == e.c and a.role == "phrase"
+                 and abs(a.t - intro_end) < 1 / FPS), None)
+
+
+def sticker_moment(ctx, e, t, intro_end):
+    """ぐんっ: the last post punches in, its scene blurs away into a flat ground
+    and the subject is left as a white-edged sticker, which then bounces on the
+    downbeat as its own sound opens the song."""
+    accent = accent_after_feed(ctx, e, intro_end)
+    after = t >= intro_end
+    shown = accent if after and accent else e
+    at = min(max(t, shown.t), shown.end_t - 1 / FPS)
+    frame = ctx.frame(shown, at)
+    u = min(1.0, max(0.0, (t - (intro_end - STICKER_IN)) / STICKER_IN))
+    zoom = 1 + 0.14 * overshoot(min(1.0, u / 0.35))
+    lift = 1.0 if after else ease_out((u - 0.3) / 0.7)
+    rng = np.random.default_rng(getattr(ctx, "seed", 0))
+    ground = Image.new("RGB", (W, H), BACKDROPS[int(rng.integers(len(BACKDROPS)))])
+    scene = cover(frame, W, H, zoom=zoom)
+    bg = Image.blend(scene.filter(ImageFilter.GaussianBlur(2 + 16 * lift)), ground, 0.75 * lift)
+    out = bg.convert("RGBA")
+    piece = None
+    if getattr(ctx.sources[e.c], "has_subject", True):
+        mask = largest_blob(ctx.mask(shown, at).resize(frame.size, Image.BILINEAR))
+        mask = cover(mask, W, H, zoom=zoom)
+        if mask.getbbox():
+            # padded so the white edge also runs along a side the subject is cut by
+            pad = 16
+            subject = scene.convert("RGBA")
+            subject.putalpha(mask)
+            piece = Image.new("RGBA", (W + 2 * pad, H + 2 * pad), (0, 0, 0, 0))
+            piece.alpha_composite(subject, (pad, pad))
+            edge = int(14 * lift)
+            if edge > 1:
+                grown = ImageOps.expand(mask, pad, 0).filter(ImageFilter.MaxFilter(2 * edge + 1))
+                board = Image.new("RGBA", piece.size, (255, 255, 255, 255))
+                board.putalpha(grown.filter(ImageFilter.GaussianBlur(1)))
+                board.alpha_composite(piece)
+                piece = board
+    if piece is None:
+        # nothing to cut out: the frame shrinks into a white-edged photo
+        pw, ph = int(W * (1 - 0.32 * lift)), int(H * (1 - 0.32 * lift))
+        photo = cover(frame, pw, ph, zoom=zoom).convert("RGBA")
+        edge = int(4 + 12 * lift)
+        piece = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        piece.paste((255, 255, 255, 255), ((W - pw) // 2 - edge, (H - ph) // 2 - edge,
+                                           (W + pw) // 2 + edge, (H + ph) // 2 + edge))
+        piece.alpha_composite(photo, ((W - pw) // 2, (H - ph) // 2))
+    # it shrinks as it lifts off, so even a close-up leaves ground around it,
+    # then pops on the downbeat with its own sound
+    scale = 1 - 0.3 * lift
+    tilt = 0.0
+    if after:
+        b = t - intro_end
+        scale *= 0.9 + 0.1 * overshoot(b / 0.3)
+        tilt = -3 * min(1.0, b / 0.2)
+    if scale < 0.999:
+        piece = piece.resize((int(piece.width * scale), int(piece.height * scale)), Image.BILINEAR)
+    if tilt:
+        piece = piece.rotate(tilt, resample=Image.BICUBIC)
+    offset = ((W - piece.width) // 2, int((H - piece.height) * 0.45))
+    shadow = Image.new("RGBA", piece.size, (0, 0, 0, 0))
+    shadow.putalpha(piece.getchannel("A").point(lambda v: v * 0.35 * lift))
+    out.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(12)), (offset[0] + 8, offset[1] + 14))
+    out.alpha_composite(piece, offset)
+    return out.convert("RGB")
 
 
 def feed_frame(ctx, t, posts, intro_end):
@@ -1168,14 +1303,16 @@ def feed_frame(ctx, t, posts, intro_end):
     k = max(i for i, (_, start) in enumerate(posts) if start <= t) if posts[0][1] <= t else 0
     e, start = posts[k]
     end = posts[k + 1][1] if k + 1 < len(posts) else intro_end
-    current = feed_post(ctx, e, t, min(1.0, (t - start) / max(1e-3, end - start)))
+    if k == len(posts) - 1 and t >= intro_end - STICKER_IN:
+        return sticker_moment(ctx, e, t, intro_end)
+    current = feed_post(ctx, e, t, min(1.0, (t - start) / max(1e-3, end - start)), first=k == 0)
     swipe = 0.16
     if k == 0 or t - start >= swipe:
         return current
     prev, prev_start = posts[k - 1]
     u = ease_out((t - start) / swipe)
     shift = int(H * u)
-    before = feed_post(ctx, prev, t, 1.0)
+    before = feed_post(ctx, prev, t, 1.0, first=k == 1)
     canvas = Image.new("RGB", (W, H), INK)
     canvas.paste(before, (0, -shift))
     canvas.paste(current, (0, H - shift))
@@ -1184,10 +1321,13 @@ def feed_frame(ctx, t, posts, intro_end):
 
 def director_frame(ctx, t, plan, hud):
     intro_end = (2 if ctx.total_t > 20 else 1) * BAR
-    if t < intro_end:
-        posts = feed_posts(ctx, intro_end)
-        if posts:
-            return feed_frame(ctx, t, posts, intro_end)
+    posts = feed_posts(ctx, intro_end)
+    if posts and t < intro_end:
+        return feed_frame(ctx, t, posts, intro_end)
+    if posts:
+        accent = accent_after_feed(ctx, posts[-1][0], intro_end)
+        if accent and t < accent.end_t:
+            return sticker_moment(ctx, posts[-1][0], t, intro_end)
     shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
     long_run = any(len(r) >= 4 and r[0].t <= t < r[-1].end_t + 0.3 for r in ctx.runs)
     if long_run and shot in ("cutout", "sticker"):
@@ -1233,6 +1373,7 @@ def main():
     frames = total // SPF
     for seed in seeds:
         ctx.seed = seed
+        ctx.feed = bool(feed_posts(ctx, (2 if ctx.total_t > 20 else 1) * BAR))
         solo = {int(e.t / BAR + 1e-6) for e in ctx.backing}
         plan = plan_shots(total / SR, seed, arrangement.get("sections"), solo)
         forced = __import__("os").environ.get("OTO_SHOTS")  # e.g. "cutout,sticker" to audition shots
