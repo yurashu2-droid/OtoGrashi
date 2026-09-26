@@ -398,10 +398,16 @@ def draw_op(canvas, ctx, t, style):
         ld = ImageDraw.Draw(layer)
         ld.rounded_rectangle((36, 64, 580, 236), 18, fill=(*PAPER, int(240 * a)))
         ld.text((64, 88), ctx.title or "なんでもない日の音", font=font(FONT_HAND, 50), fill=(*INK, alpha))
-        ld.text((66, 164), cast, font=font(FONT_HAND, 28), fill=(*CORAL, alpha))
+        size = 28
+        while size > 16 and ld.textlength(cast, font=font(FONT_HAND, size)) > 500:
+            size -= 1  # six names still fit on the card
+        ld.text((66, 164), cast, font=font(FONT_HAND, size), fill=(*CORAL, alpha))
     else:
         soft_text(layer, (46, 84), ctx.title or "なんでもない日の音", font(FONT_BOLD, 60), (255, 255, 255), alpha)
-        soft_text(layer, (48, 170), cast, font(FONT_BOLD, 26), (255, 255, 255), alpha)
+        size = 26
+        while size > 16 and ImageDraw.Draw(layer).textlength(cast, font=font(FONT_BOLD, size)) > W - 96:
+            size -= 1
+        soft_text(layer, (48, 170), cast, font(FONT_BOLD, size), (255, 255, 255), alpha)
         ImageDraw.Draw(layer).rounded_rectangle((48, 214, 120, 220), 3, fill=(*CORAL, alpha))
     return Image.alpha_composite(canvas.convert("RGBA"), layer).convert("RGB")
 
@@ -1095,7 +1101,93 @@ def backing_stickers(canvas, ctx, t, plan):
     return canvas if out is None else out.convert("RGB")
 
 
+# ---------------------------------------------------------------- opening feed
+
+def feed_posts(ctx, intro_end):
+    """The introductions as a feed: one post per clip, in the order they speak.
+    Returns [(event, start_t)], a post lasting until the next one starts."""
+    posts = []
+    for e in sorted(ctx.events, key=lambda e: (e.t, e.idx)):
+        if e.t >= intro_end or e.role not in ("phrase", "chop"):
+            continue
+        if not posts or posts[-1][0].c != e.c:
+            posts.append((e, e.t))
+        elif e.role == "phrase":
+            posts[-1] = (e, posts[-1][1])  # the stuttered head leads into its phrase
+    return posts
+
+
+def feed_icons(layer, col):
+    """Right-hand column of a short-video app: like, comment, share, with counts."""
+    d = ImageDraw.Draw(layer)
+    x, y = W - 62, H * 0.52
+    small = font(FONT_BOLD, 20)
+    # like
+    d.ellipse((x - 22, y - 16, x + 1, y + 6), fill=(*col, 255))
+    d.ellipse((x - 1, y - 16, x + 22, y + 6), fill=(*col, 255))
+    d.polygon([(x - 21, y - 1), (x + 21, y - 1), (x, y + 22)], fill=(*col, 255))
+    d.text((x, y + 42), "1.2万", font=small, fill=(255, 255, 255, 255), anchor="mm")
+    # comment
+    y += 104
+    d.rounded_rectangle((x - 22, y - 18, x + 22, y + 12), 12, fill=(255, 255, 255, 255))
+    d.polygon([(x - 8, y + 10), (x + 4, y + 10), (x - 10, y + 22)], fill=(255, 255, 255, 255))
+    d.text((x, y + 42), "348", font=small, fill=(255, 255, 255, 255), anchor="mm")
+    # share
+    y += 104
+    d.polygon([(x - 20, y + 14), (x - 20, y - 2), (x + 4, y - 2), (x + 4, y - 14), (x + 24, y + 4),
+               (x + 4, y + 22), (x + 4, y + 10), (x - 8, y + 10)], fill=(255, 255, 255, 255))
+    d.text((x, y + 44), "シェア", font=small, fill=(255, 255, 255, 255), anchor="mm")
+
+
+def feed_post(ctx, e, t, progress):
+    """One full-screen post: the clip, its handle and tags, the side icons and
+    a thin progress bar along the bottom."""
+    canvas = cover(ctx.frame(e, t), W, H).convert("RGBA")
+    col = CLIP_COLORS[e.c % len(CLIP_COLORS)]
+    shade = Image.new("L", (1, 256))
+    shade.putdata([int(max(0, (i - 150) / 106) ** 1.5 * 170) for i in range(256)])
+    shade = shade.resize((W, int(H * 0.36)))
+    dark = Image.new("RGBA", (W, shade.height), (0, 0, 0, 255))
+    dark.putalpha(shade)
+    canvas.alpha_composite(dark, (0, H - shade.height))
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    feed_icons(layer, col)
+    d = ImageDraw.Draw(layer)
+    d.ellipse((28, H - 196, 76, H - 148), fill=(*col, 255), outline=(255, 255, 255, 255), width=3)
+    d.text((90, H - 172), "@" + ctx.names[e.c], font=font(FONT_BOLD, 30), fill=(255, 255, 255, 255), anchor="lm")
+    d.text((30, H - 118), "#日常の音  #オトグラシ", font=font(FONT_BOLD, 24), fill=(255, 255, 255, 230), anchor="lm")
+    d.rectangle((0, H - 6, W, H), fill=(255, 255, 255, 70))
+    d.rectangle((0, H - 6, int(W * progress), H), fill=(255, 255, 255, 235))
+    canvas.alpha_composite(layer)
+    return canvas.convert("RGB")
+
+
+def feed_frame(ctx, t, posts, intro_end):
+    """Swiping through a feed: each new clip pushes the last one up and away,
+    so a phrase cut short reads as a flick to the next post."""
+    k = max(i for i, (_, start) in enumerate(posts) if start <= t) if posts[0][1] <= t else 0
+    e, start = posts[k]
+    end = posts[k + 1][1] if k + 1 < len(posts) else intro_end
+    current = feed_post(ctx, e, t, min(1.0, (t - start) / max(1e-3, end - start)))
+    swipe = 0.16
+    if k == 0 or t - start >= swipe:
+        return current
+    prev, prev_start = posts[k - 1]
+    u = ease_out((t - start) / swipe)
+    shift = int(H * u)
+    before = feed_post(ctx, prev, t, 1.0)
+    canvas = Image.new("RGB", (W, H), INK)
+    canvas.paste(before, (0, -shift))
+    canvas.paste(current, (0, H - shift))
+    return canvas
+
+
 def director_frame(ctx, t, plan, hud):
+    intro_end = (2 if ctx.total_t > 20 else 1) * BAR
+    if t < intro_end:
+        posts = feed_posts(ctx, intro_end)
+        if posts:
+            return feed_frame(ctx, t, posts, intro_end)
     shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
     long_run = any(len(r) >= 4 and r[0].t <= t < r[-1].end_t + 0.3 for r in ctx.runs)
     if long_run and shot in ("cutout", "sticker"):
