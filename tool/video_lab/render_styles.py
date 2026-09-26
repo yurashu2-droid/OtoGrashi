@@ -1018,9 +1018,13 @@ POOLS = {
 }
 
 
-def plan_shots(total_t, seed, sections=None):
+SOLO = ("full", "flip", "stutter")  # one picture over the whole frame
+
+
+def plan_shots(total_t, seed, sections=None, solo_bars=()):
     """Pick one shot per bar along an energy curve; the seed makes every video different.
-    sections: optional [[bar_from, bar_to, energy], ...] from the arrangement."""
+    sections: optional [[bar_from, bar_to, energy], ...] from the arrangement.
+    solo_bars: bars that must show one full-frame picture (a backing sticker sits on them)."""
     rng = np.random.default_rng(seed)
     bars = int(round(total_t / BAR))
     plan, bar, last, used = [], 0, None, set()
@@ -1032,7 +1036,10 @@ def plan_shots(total_t, seed, sections=None):
         for a, b, level in sections or []:
             if a <= bar < b:
                 energy = level
-        choices = [c for c in POOLS[energy] if c != last and not (c in LONG and bar + 2 > bars - 1)]
+        choices = [c for c in POOLS[energy] if c != last and not (c in LONG and bar + 2 > bars - 1)
+                   and not (c in LONG and bar + 1 in solo_bars)]
+        if bar in solo_bars:
+            choices = [c for c in SOLO if c != last] or list(SOLO)
         if bar == 0:  # the opening introduces a face, not a board
             choices = [c for c in choices if c in BLEED]
         fresh = [c for c in choices if c not in used]
@@ -1042,15 +1049,18 @@ def plan_shots(total_t, seed, sections=None):
         span = 2 if shot in LONG else 1
         plan.append((shot, bar * BAR, (bar + span) * BAR, energy))
         bar, last = bar + span, shot
-    if not any(s == "burst" for s, *_ in plan):
+    if not any(s == "burst" for s, *_ in plan) and int(plan[-1][1] / BAR) not in solo_bars:
         s0, a0, b0, e0 = plan[-1]
         plan[-1] = ("burst", a0, b0, e0)
     return plan
 
 
-def backing_stickers(canvas, ctx, t):
+def backing_stickers(canvas, ctx, t, plan):
     """A clip playing quietly behind the melody pops up as a small sticker in
     the bottom-right corner, sways with its own level and pops away after."""
+    shot = next((p for p in plan if p[1] <= t < p[2]), plan[-1])[0]
+    if shot not in SOLO or any(len(r) >= 4 and r[0].t <= t < r[-1].end_t + 0.3 for r in ctx.runs):
+        return canvas
     out = None
     for e in ctx.backing:
         if not (e.t <= t < e.end_t + 0.15):
@@ -1131,7 +1141,8 @@ def main():
     frames = total // SPF
     for seed in seeds:
         ctx.seed = seed
-        plan = plan_shots(total / SR, seed, arrangement.get("sections"))
+        solo = {int(e.t / BAR + 1e-6) for e in ctx.backing}
+        plan = plan_shots(total / SR, seed, arrangement.get("sections"), solo)
         forced = __import__("os").environ.get("OTO_SHOTS")  # e.g. "cutout,sticker" to audition shots
         if forced:
             names_forced = forced.split(",")
@@ -1151,7 +1162,7 @@ def main():
         for f in range(frames):
             t = f / FPS
             img = director_frame(ctx, video_time(t, master_fx), plan, hud)
-            img = backing_stickers(img, ctx, video_time(t, master_fx))
+            img = backing_stickers(img, ctx, video_time(t, master_fx), plan)
             img = video_post(img, t, master_fx)
             if finish and t < ctx.total_t - 1.3:
                 img = finish.apply(img, t)
