@@ -29,7 +29,10 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(ChoiceChip), findsNWidgets(7));
+      expect(find.byType(ChoiceChip), findsNWidgets(8));
+      await tester.tap(find.text('MAD（おすすめ）'));
+      await tester.pumpAndSettle();
+      expect(mode, PerformanceMode.mad);
       await tester.tap(find.text('声レコード'));
       await tester.pumpAndSettle();
       expect(mode, PerformanceMode.vinyl);

@@ -98,6 +98,14 @@ struct AnalyzedClip: Codable, Equatable {
   let fundamentalMidiNote: Double?
   /// Median voiced register, used only to choose a comfortable song octave.
   let registerMidiNote: Double?
+  /// Loudness-valley splits of the audible regions (コ/ケ/コッ), in time order.
+  let syllables: [AudibleRegion]
+  /// Stretches that hold a pitch, in time order.
+  let voicedRuns: [AudibleRegion]
+  /// 10-90% range of the detected pitch in semitones.
+  let pitchSpread: Double?
+  /// Share of a steady stretch's energy on its fundamental (whistle-like near 1).
+  let purity: Double?
 
   init(
     assetId: String,
@@ -109,7 +117,11 @@ struct AnalyzedClip: Codable, Equatable {
     rms: Double,
     suggestedRole: SuggestedRole,
     fundamentalMidiNote: Double? = nil,
-    registerMidiNote: Double? = nil
+    registerMidiNote: Double? = nil,
+    syllables: [AudibleRegion] = [],
+    voicedRuns: [AudibleRegion] = [],
+    pitchSpread: Double? = nil,
+    purity: Double? = nil
   ) throws {
     guard !assetId.isEmpty else { throw AudioAnalysisError.emptyAssetId }
     let (sourceEndSample, sourceEndOverflow) = sourceStartSample
@@ -131,7 +143,16 @@ struct AnalyzedClip: Codable, Equatable {
       registerMidiNote == nil ||
         (registerMidiNote!.isFinite && (24...100).contains(registerMidiNote!)),
       fundamentalMidiNote == nil ||
-        (fundamentalMidiNote!.isFinite && (24...100).contains(fundamentalMidiNote!))
+        (fundamentalMidiNote!.isFinite && (24...100).contains(fundamentalMidiNote!)),
+      syllables.count <= 32, voicedRuns.count <= 32,
+      (syllables + voicedRuns).allSatisfy({
+        $0.startSample >= sourceStartSample && $0.durationSamples > 0 &&
+          $0.startSample <= sourceEndSample - $0.durationSamples &&
+          ($0.fundamentalMidiNote == nil ||
+            ($0.fundamentalMidiNote!.isFinite && (24...110).contains($0.fundamentalMidiNote!)))
+      }),
+      pitchSpread == nil || (pitchSpread!.isFinite && pitchSpread! >= 0),
+      purity == nil || (purity!.isFinite && (0...1).contains(purity!))
     else { throw AudioAnalysisError.unsupportedContract }
     self.schemaVersion = Self.supportedSchemaVersion
     self.analysisVersion = Self.supportedAnalysisVersion
@@ -146,6 +167,10 @@ struct AnalyzedClip: Codable, Equatable {
     self.suggestedRole = suggestedRole
     self.fundamentalMidiNote = fundamentalMidiNote
     self.registerMidiNote = registerMidiNote
+    self.syllables = syllables
+    self.voicedRuns = voicedRuns
+    self.pitchSpread = pitchSpread
+    self.purity = purity
   }
 
   init(from decoder: Decoder) throws {
@@ -167,7 +192,11 @@ struct AnalyzedClip: Codable, Equatable {
       rms: container.decode(Double.self, forKey: .rms),
       suggestedRole: container.decode(SuggestedRole.self, forKey: .suggestedRole),
       fundamentalMidiNote: container.decodeIfPresent(Double.self, forKey: .fundamentalMidiNote),
-      registerMidiNote: container.decodeIfPresent(Double.self, forKey: .registerMidiNote)
+      registerMidiNote: container.decodeIfPresent(Double.self, forKey: .registerMidiNote),
+      syllables: container.decodeIfPresent([AudibleRegion].self, forKey: .syllables) ?? [],
+      voicedRuns: container.decodeIfPresent([AudibleRegion].self, forKey: .voicedRuns) ?? [],
+      pitchSpread: container.decodeIfPresent(Double.self, forKey: .pitchSpread),
+      purity: container.decodeIfPresent(Double.self, forKey: .purity)
     )
   }
 }
@@ -182,6 +211,10 @@ struct SignalMetrics: Equatable {
   let suggestedRole: SuggestedRole
   let fundamentalMidiNote: Double?
   let registerMidiNote: Double?
+  var syllables: [AudibleRegion] = []
+  var voicedRuns: [AudibleRegion] = []
+  var pitchSpread: Double? = nil
+  var purity: Double? = nil
 }
 
 struct AudioAnalyzer {
@@ -214,7 +247,18 @@ struct AudioAnalyzer {
       rms: metrics.rms,
       suggestedRole: metrics.suggestedRole,
       fundamentalMidiNote: metrics.fundamentalMidiNote,
-      registerMidiNote: metrics.registerMidiNote
+      registerMidiNote: metrics.registerMidiNote,
+      syllables: metrics.syllables.map {
+        AudibleRegion(startSample: $0.startSample + sourceStartSample,
+                      durationSamples: $0.durationSamples,
+                      fundamentalMidiNote: $0.fundamentalMidiNote)
+      },
+      voicedRuns: metrics.voicedRuns.map {
+        AudibleRegion(startSample: $0.startSample + sourceStartSample,
+                      durationSamples: $0.durationSamples)
+      },
+      pitchSpread: metrics.pitchSpread,
+      purity: metrics.purity
     )
   }
 
@@ -361,7 +405,7 @@ struct AudioAnalyzer {
     } else {
       stableClipNote = nil
     }
-    return SignalMetrics(
+    var metrics = SignalMetrics(
       frameRMS: frameRMS,
       differenceEnergy: differenceEnergy,
       peak: peak,
@@ -372,6 +416,128 @@ struct AudioAnalyzer {
       fundamentalMidiNote: stableClipNote,
       registerMidiNote: EverydayAudioDSP.registerNote(samples)
     )
+    let voice = Self.voice(samples: samples, frameRMS: frameRMS, regions: audibleRegions)
+    metrics.syllables = voice.syllables
+    metrics.voicedRuns = voice.runs
+    metrics.pitchSpread = voice.spread
+    metrics.purity = voice.purity
+    return metrics
+  }
+
+  /// Pitch every 20 ms, voiced runs, syllables split at loudness valleys, how
+  /// steady the pitch is and how pure the steadiest stretch is. The MAD
+  /// arranger picks singers, bass and drums from these.
+  static func voice(samples: [Float], frameRMS: [Double], regions: [AudibleRegion])
+    -> (syllables: [AudibleRegion], runs: [AudibleRegion], spread: Double?, purity: Double?)
+  {
+    let hop = max(960, samples.count / 1_500)
+    let window = 2_048
+    let loudest = frameRMS.max() ?? 0
+    var midi: [Double?] = []
+    var start = 0
+    while start < samples.count {
+      let from = max(0, min(samples.count - window, start + hop / 2 - window / 2))
+      var level = 0.0
+      for frame in (from / frameSamples)..<min(frameRMS.count, (from + window) / frameSamples + 1) {
+        level = max(level, frameRMS[frame])
+      }
+      if samples.count >= window, level >= loudest * 0.12,
+        let pitch = EverydayAudioDSP.estimate(samples, start: from, count: window, maximumHertz: 4_000),
+        pitch.confidence >= 0.6 {
+        midi.append(pitch.midiNote)
+      } else {
+        midi.append(nil)
+      }
+      start += hop
+    }
+
+    // voiced runs: gaps of one hop are bridged, at least 60 ms long
+    var runs: [AudibleRegion] = []
+    var runStart: Int?
+    var gap = 0
+    for (index, value) in (midi + [nil, nil]).enumerated() {
+      if value != nil {
+        if runStart == nil { runStart = index }
+        gap = 0
+      } else if let first = runStart {
+        gap += 1
+        if gap > 1 {
+          let end = index - gap + 1
+          let length = (end - first) * hop
+          if length >= 2_880, runs.count < 32 {
+            let from = first * hop
+            runs.append(AudibleRegion(startSample: from,
+              durationSamples: min(length, samples.count - from)))
+          }
+          runStart = nil
+          gap = 0
+        }
+      }
+    }
+
+    // syllables: split each audible region at loudness valleys
+    var syllables: [AudibleRegion] = []
+    let smooth = frameRMS.indices.map { i in
+      (frameRMS[max(0, i - 1)] + frameRMS[i] + frameRMS[min(frameRMS.count - 1, i + 1)]) / 3
+    }
+    for region in regions.sorted(by: { $0.startSample < $1.startSample }) {
+      let first = region.startSample / frameSamples
+      let last = min(smooth.count, (region.startSample + region.durationSamples) / frameSamples)
+      guard last > first else { continue }
+      var cuts = [first]
+      if last - first > 8 {
+        for i in (first + 3)..<(last - 3) {
+          let left = smooth[max(first, i - 15)..<i].max() ?? 0
+          let right = smooth[(i + 1)..<min(last, i + 16)].max() ?? 0
+          if smooth[i] <= smooth[i - 1], smooth[i] <= smooth[i + 1],
+            smooth[i] < 0.7 * min(left, right), i - cuts.last! >= 6 {
+            cuts.append(i)
+          }
+        }
+      }
+      cuts.append(last)
+      for (a, b) in zip(cuts, cuts.dropFirst()) where b - a >= 6 && syllables.count < 32 {
+        let from = a * frameSamples
+        let length = min((b - a) * frameSamples, samples.count - from)
+        guard length > 0 else { continue }
+        let notes = (from / hop..<min(midi.count, (from + length) / hop + 1)).compactMap { midi[$0] }
+        let median: Double? = notes.count >= 3
+          ? min(110, max(24, notes.sorted()[notes.count / 2])) : nil
+        syllables.append(AudibleRegion(startSample: from, durationSamples: length,
+          fundamentalMidiNote: median))
+      }
+    }
+
+    let voiced = midi.compactMap { $0 }.sorted()
+    let spread: Double? = voiced.count >= 5
+      ? voiced[voiced.count * 9 / 10] - voiced[voiced.count / 10] : nil
+
+    // purity: project the steadiest stretch onto a sinusoid at its own pitch
+    var purity: Double?
+    if let run = runs.max(by: { $0.durationSamples < $1.durationSamples }) {
+      let size = min(4_800, run.durationSamples / 2 * 2)
+      let from = run.startSample + run.durationSamples / 2 - size / 2
+      if size >= 1_200, from >= 0, from + size <= samples.count,
+        let centre = midi[min(midi.count - 1, (from + size / 2) / hop)] {
+        let hertz = 440 * pow(2, (centre - 69) / 12)
+        var ss = 0.0, cc = 0.0, sc = 0.0, xs = 0.0, xc = 0.0, xx = 0.0
+        for i in 0..<size {
+          let x = Double(samples[from + i])
+          let phase = 2 * Double.pi * hertz * Double(i) / Double(sampleRate)
+          let sn = sin(phase), cs = cos(phase)
+          ss += sn * sn; cc += cs * cs; sc += sn * cs
+          xs += x * sn; xc += x * cs; xx += x * x
+        }
+        let det = ss * cc - sc * sc
+        if det > 1e-9, xx > 1e-12 {
+          let a = (xs * cc - xc * sc) / det
+          let b = (xc * ss - xs * sc) / det
+          let fitted = a * a * ss + b * b * cc + 2 * a * b * sc
+          purity = min(1, max(0, fitted / xx))
+        }
+      }
+    }
+    return (syllables, runs, spread, purity)
   }
 
   private static func audibleRegions(

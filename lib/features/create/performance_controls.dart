@@ -16,6 +16,11 @@ class PerformanceControls extends StatelessWidget {
   final ValueChanged<PerformanceMode> onMode;
   final ValueChanged<int> onDuration;
   static const labels = {
+    PerformanceMode.mad: (
+      'MAD（おすすめ）',
+      Icons.graphic_eq_rounded,
+      '声を1音ずつ歌わせて、連打・スクラッチ・分身で曲にする。',
+    ),
     PerformanceMode.natural: (
       '原声を楽しむ',
       Icons.record_voice_over_rounded,

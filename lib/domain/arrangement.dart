@@ -5,6 +5,7 @@ export '../media/media_messages.dart';
 
 enum PerformanceMode {
   natural,
+  mad,
   mosaic,
   vinyl,
   sampler,
@@ -90,7 +91,28 @@ final class SoundEvent {
     this.pitchSteps = const <PitchStep>[],
     this.reverse = false,
     this.treatment = SoundTreatment.original,
+    this.role,
+    this.rate,
+    this.glide,
+    this.scratch,
+    this.scratchPeriod,
+    this.gate,
   });
+
+  /// What the event plays in a MAD arrangement; the renderer uses it to pick
+  /// the lead picture and to keep kicks out of sidechain ducking.
+  static const roles = {
+    'melody',
+    'bass',
+    'kick',
+    'snare',
+    'hat',
+    'chop',
+    'phrase',
+    'fx',
+    'echo',
+    'stab',
+  };
 
   final String assetId;
   final int sourceStartSample;
@@ -124,6 +146,24 @@ final class SoundEvent {
 
   final bool reverse;
   final SoundTreatment treatment;
+  final String? role;
+
+  /// Sampler-style playback speed (pitch and time together), 0.25 to 4.
+  final double? rate;
+
+  /// Speed ramp over the event in semitones (a riser), -24 to 24.
+  final double? glide;
+
+  /// Scratch depth in seconds: the read position rocks back and forth.
+  final double? scratch;
+  final int? scratchPeriod;
+
+  /// Chops a held sound into this many pieces per beat (a trance gate).
+  final int? gate;
+
+  /// Motion effects read the source at a changing position; the picture
+  /// follows the same positions, and the source span must be declared.
+  bool get hasMotion => rate != null || glide != null || scratch != null;
   int get effectiveSourceDurationSamples =>
       sourceDurationSamples ?? durationSamples;
 
@@ -143,6 +183,12 @@ final class SoundEvent {
       'pitchSteps': pitchSteps.map((s) => s.toJson()).toList(),
     if (reverse) 'reverse': true,
     if (treatment != SoundTreatment.original) 'treatment': treatment.name,
+    if (role != null) 'role': role,
+    if (rate != null) 'rate': rate,
+    if (glide != null) 'glide': glide,
+    if (scratch != null) 'scratch': scratch,
+    if (scratchPeriod != null) 'scratchPeriod': scratchPeriod,
+    if (gate != null) 'gate': gate,
   };
 
   factory SoundEvent.fromJson(Map<String, Object?> json) => SoundEvent(
@@ -165,6 +211,80 @@ final class SoundEvent {
     treatment: SoundTreatment.values.byName(
       json['treatment'] as String? ?? 'original',
     ),
+    role: json['role'] as String?,
+    rate: (json['rate'] as num?)?.toDouble(),
+    glide: (json['glide'] as num?)?.toDouble(),
+    scratch: (json['scratch'] as num?)?.toDouble(),
+    scratchPeriod: json['scratchPeriod'] as int?,
+    gate: json['gate'] as int?,
+  );
+}
+
+/// An effect on the whole mix at one moment of a MAD song, with its picture
+/// twin: a tape stop slows the picture, a sweep unblurs it, a bitcrush
+/// pixelates it, sidechain pumps it on each kick, half-time pushes in.
+final class MasterEffect {
+  const MasterEffect({
+    required this.type,
+    required this.startSample,
+    required this.durationSamples,
+    this.kickSamples = const <int>[],
+  });
+
+  static const types = {
+    'tapestop',
+    'sweep',
+    'bitcrush',
+    'sidechain',
+    'halftime',
+  };
+
+  final String type;
+  final int startSample;
+  final int durationSamples;
+  final List<int> kickSamples;
+
+  Map<String, Object?> toJson() => {
+    'type': type,
+    'startSample': startSample,
+    'durationSamples': durationSamples,
+    if (kickSamples.isNotEmpty) 'kickSamples': kickSamples,
+  };
+
+  factory MasterEffect.fromJson(Map<String, Object?> json) => MasterEffect(
+    type: json['type'] as String,
+    startSample: json['startSample'] as int,
+    durationSamples: json['durationSamples'] as int,
+    kickSamples: List<int>.unmodifiable(
+      (json['kickSamples'] as List<Object?>? ?? const <Object?>[]).cast<int>(),
+    ),
+  );
+}
+
+/// A stretch of bars and how busy it should look; the video director follows it.
+final class SongSection {
+  const SongSection({
+    required this.fromBar,
+    required this.toBar,
+    required this.energy,
+  });
+
+  static const energies = {'calm', 'mid', 'high'};
+
+  final int fromBar;
+  final int toBar;
+  final String energy;
+
+  Map<String, Object?> toJson() => {
+    'fromBar': fromBar,
+    'toBar': toBar,
+    'energy': energy,
+  };
+
+  factory SongSection.fromJson(Map<String, Object?> json) => SongSection(
+    fromBar: json['fromBar'] as int,
+    toBar: json['toBar'] as int,
+    energy: json['energy'] as String,
   );
 }
 
@@ -297,7 +417,12 @@ final class Arrangement {
     this.sampleRate = 48000,
     this.totalSamples = 720000,
     this.performanceMode = PerformanceMode.natural,
-  }) : sourceAssetIds = List.unmodifiable(sourceAssetIds),
+    List<MasterEffect> masterEffects = const <MasterEffect>[],
+    List<SongSection> sections = const <SongSection>[],
+    this.songTitle,
+  }) : masterEffects = List.unmodifiable(masterEffects),
+       sections = List.unmodifiable(sections),
+       sourceAssetIds = List.unmodifiable(sourceAssetIds),
        unusableAssetIds = List.unmodifiable(unusableAssetIds),
        events = List.unmodifiable(events),
        videoEvents = List.unmodifiable(videoEvents) {
@@ -323,6 +448,29 @@ final class Arrangement {
     if (templateVersion != 1 || analysisVersion != 1 || rendererVersion != 1) {
       throw const MediaContractException('Unsupported arrangement version.');
     }
+    final bars = totalSamples ~/ barSamples;
+    if (masterEffects.length > 16 ||
+        masterEffects.any(
+          (fx) =>
+              !MasterEffect.types.contains(fx.type) ||
+              fx.startSample < 0 ||
+              fx.durationSamples <= 0 ||
+              fx.startSample > totalSamples - fx.durationSamples ||
+              fx.kickSamples.length > 128 ||
+              fx.kickSamples.any((k) => k < 0 || k >= totalSamples),
+        ) ||
+        sections.length > 32 ||
+        sections.any(
+          (section) =>
+              section.fromBar < 0 ||
+              section.toBar <= section.fromBar ||
+              section.toBar > bars ||
+              !SongSection.energies.contains(section.energy),
+        ) ||
+        (songTitle != null &&
+            (songTitle!.trim().isEmpty || songTitle!.runes.length > 40))) {
+      throw const MediaContractException('Arrangement effects are invalid.');
+    }
     if (events.any(
           (event) =>
               event.partIndex < 0 ||
@@ -335,8 +483,25 @@ final class Arrangement {
                   (!event.targetMidiNote!.isFinite ||
                       event.targetMidiNote! < 24 ||
                       event.targetMidiNote! > 100)) ||
-              ((event.targetMidiNote != null || event.reverse) &&
+              ((event.targetMidiNote != null ||
+                      event.reverse ||
+                      event.hasMotion) &&
                   event.sourceDurationSamples == null) ||
+              (event.role != null && !SoundEvent.roles.contains(event.role)) ||
+              (event.rate != null &&
+                  (!event.rate!.isFinite ||
+                      event.rate! < .25 ||
+                      event.rate! > 4)) ||
+              (event.glide != null &&
+                  (!event.glide!.isFinite || event.glide!.abs() > 24)) ||
+              (event.scratch != null &&
+                  (!event.scratch!.isFinite ||
+                      event.scratch! < 0 ||
+                      event.scratch! > .5)) ||
+              (event.scratchPeriod != null &&
+                  (event.scratchPeriod! < 1200 ||
+                      event.scratchPeriod! > 90000)) ||
+              (event.gate != null && (event.gate! < 1 || event.gate! > 8)) ||
               event.sourceStartSample >
                   9223372036854775807 - event.effectiveSourceDurationSamples ||
               event.destinationStartSample < 0 ||
@@ -450,6 +615,21 @@ final class Arrangement {
         performanceMode: PerformanceMode.values.byName(
           json['performanceMode'] as String? ?? 'natural',
         ),
+        masterEffects: (json['masterEffects'] as List<Object?>? ?? const [])
+            .map(
+              (value) => MasterEffect.fromJson(
+                (value as Map<Object?, Object?>).cast(),
+              ),
+            )
+            .toList(),
+        sections: (json['sections'] as List<Object?>? ?? const [])
+            .map(
+              (value) => SongSection.fromJson(
+                (value as Map<Object?, Object?>).cast(),
+              ),
+            )
+            .toList(),
+        songTitle: json['songTitle'] as String?,
       );
     } on TypeError {
       throw const MediaContractException('Malformed arrangement JSON.');
@@ -475,6 +655,9 @@ final class Arrangement {
   final List<String> unusableAssetIds;
   final List<SoundEvent> events;
   final List<VideoEvent> videoEvents;
+  final List<MasterEffect> masterEffects;
+  final List<SongSection> sections;
+  final String? songTitle;
 
   Map<String, Object?> toJson() => {
     'schemaVersion': schemaVersion,
@@ -495,6 +678,11 @@ final class Arrangement {
     'unusableAssetIds': unusableAssetIds,
     'events': events.map((event) => event.toJson()).toList(),
     'videoEvents': videoEvents.map((event) => event.toJson()).toList(),
+    if (masterEffects.isNotEmpty)
+      'masterEffects': masterEffects.map((fx) => fx.toJson()).toList(),
+    if (sections.isNotEmpty)
+      'sections': sections.map((section) => section.toJson()).toList(),
+    if (songTitle != null) 'songTitle': songTitle,
   };
 }
 

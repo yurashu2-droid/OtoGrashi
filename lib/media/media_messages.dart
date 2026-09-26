@@ -285,8 +285,14 @@ final class AnalyzedClip {
     this.fundamentalMidiNote,
     this.registerMidiNote,
     this.analysisVersion = 1,
+    List<AudibleRegion> syllables = const <AudibleRegion>[],
+    List<AudibleRegion> voicedRuns = const <AudibleRegion>[],
+    this.pitchSpread,
+    this.purity,
   }) : onsetSamples = List<int>.unmodifiable(onsetSamples),
-       audibleRegions = List<AudibleRegion>.unmodifiable(audibleRegions) {
+       audibleRegions = List<AudibleRegion>.unmodifiable(audibleRegions),
+       syllables = List<AudibleRegion>.unmodifiable(syllables),
+       voicedRuns = List<AudibleRegion>.unmodifiable(voicedRuns) {
     if (assetId.isEmpty) {
       throw const MediaContractException('Asset id cannot be empty.');
     }
@@ -339,6 +345,24 @@ final class AnalyzedClip {
             fundamentalMidiNote! > 100)) {
       throw const MediaContractException('Fundamental note is out of range.');
     }
+    bool inside(AudibleRegion region) =>
+        region.startSample >= sourceStartSample &&
+        region.durationSamples > 0 &&
+        region.startSample <=
+            sourceStartSample + durationSamples - region.durationSamples &&
+        (region.fundamentalMidiNote == null ||
+            (region.fundamentalMidiNote!.isFinite &&
+                region.fundamentalMidiNote! >= 24 &&
+                region.fundamentalMidiNote! <= 110));
+    if (syllables.length > 32 ||
+        voicedRuns.length > 32 ||
+        !syllables.every(inside) ||
+        !voicedRuns.every(inside) ||
+        (pitchSpread != null && (!pitchSpread!.isFinite || pitchSpread! < 0)) ||
+        (purity != null &&
+            (!purity!.isFinite || purity! < 0 || purity! > 1))) {
+      throw const MediaContractException('Voice analysis is invalid.');
+    }
   }
 
   factory AnalyzedClip.fromJson(Map<String, Object?> json) {
@@ -371,6 +395,22 @@ final class AnalyzedClip {
         fundamentalMidiNote: (json['fundamentalMidiNote'] as num?)?.toDouble(),
         registerMidiNote: (json['registerMidiNote'] as num?)?.toDouble(),
         analysisVersion: json['analysisVersion'] as int,
+        syllables: (json['syllables'] as List<Object?>? ?? const [])
+            .map(
+              (value) => AudibleRegion.fromJson(
+                (value as Map<Object?, Object?>).cast(),
+              ),
+            )
+            .toList(),
+        voicedRuns: (json['voicedRuns'] as List<Object?>? ?? const [])
+            .map(
+              (value) => AudibleRegion.fromJson(
+                (value as Map<Object?, Object?>).cast(),
+              ),
+            )
+            .toList(),
+        pitchSpread: (json['pitchSpread'] as num?)?.toDouble(),
+        purity: (json['purity'] as num?)?.toDouble(),
       );
     } on TypeError {
       throw const MediaContractException('Malformed analysis JSON.');
@@ -391,6 +431,20 @@ final class AnalyzedClip {
   final double? fundamentalMidiNote;
   final double? registerMidiNote;
 
+  /// Loudness-valley splits of the audible regions in time order (コ/ケ/コッ),
+  /// each with its median pitch when it has one.
+  final List<AudibleRegion> syllables;
+
+  /// Stretches that hold a pitch, in time order.
+  final List<AudibleRegion> voicedRuns;
+
+  /// 10-90% range of the detected pitch in semitones; small means tuneful.
+  final double? pitchSpread;
+
+  /// Share of a steady stretch's energy on its fundamental; near 1 for a
+  /// whistle or a pure sung tone, which are retuned by speed, not by grains.
+  final double? purity;
+
   bool get isUsable => peak >= 0.001 || rms >= 0.0001;
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -410,6 +464,12 @@ final class AnalyzedClip {
     'suggestedRole': suggestedRole.name,
     if (fundamentalMidiNote != null) 'fundamentalMidiNote': fundamentalMidiNote,
     if (registerMidiNote != null) 'registerMidiNote': registerMidiNote,
+    if (syllables.isNotEmpty)
+      'syllables': syllables.map((region) => region.toJson()).toList(),
+    if (voicedRuns.isNotEmpty)
+      'voicedRuns': voicedRuns.map((region) => region.toJson()).toList(),
+    if (pitchSpread != null) 'pitchSpread': pitchSpread,
+    if (purity != null) 'purity': purity,
   };
 }
 

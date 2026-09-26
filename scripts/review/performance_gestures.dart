@@ -43,8 +43,10 @@ void main() {
         'rhythm-only must remain unpitched',
       );
       checks++;
+      // MAD places its own stutters by song structure, not on these cues.
       if (mode == PerformanceMode.natural ||
-          mode == PerformanceMode.loopStation)
+          mode == PerformanceMode.loopStation ||
+          mode == PerformanceMode.mad)
         continue;
       final a = arrange(
         clips: [clip],

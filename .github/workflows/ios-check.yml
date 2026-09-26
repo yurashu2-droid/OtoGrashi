@@ -152,6 +152,27 @@ jobs:
           test -f ci-artifacts/video-render-full.mp4
           test -f ci-artifacts/video-render-full.json
 
+      - name: Publish log summaries as annotations
+        if: always()
+        shell: bash
+        run: |
+          # Annotations are readable without signing in, so failures can be
+          # diagnosed from the public check run as well as from the logs.
+          summarize() {
+            local file="ci-logs/$1.txt" title="$1" pattern="$2"
+            [ -f "$file" ] || return 0
+            local lines
+            lines="$(grep -nE "$pattern" "$file" | head -60 | cut -c1-240)"
+            [ -n "$lines" ] || return 0
+            lines="${lines//'%'/'%25'}"
+            lines="${lines//$'\n'/'%0A'}"
+            echo "::warning title=${title}::${lines:0:3800}"
+          }
+          summarize analyze 'error|warning|info - '
+          summarize test '\[E\]|Expected:|Actual:|Error:|Exception|FAILED|Some tests failed|All tests passed'
+          summarize ios-simulator-build 'error:|Error'
+          summarize xctest 'error:|failed|Executed|TEST SUCCEEDED|TEST FAILED|XCTAssert'
+
       - name: Upload validation evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

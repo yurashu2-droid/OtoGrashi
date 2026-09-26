@@ -66,7 +66,7 @@ final class VideoRendererTests: XCTestCase {
 
   func testPerformanceModesRenderWithProductionValidation() async throws {
     let directory = try evidenceDirectory()
-    for mode in ["mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"] {
+    for mode in ["mad", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"] {
       let requestURL = directory.appendingPathComponent("native-\(mode).json")
       // Missing fixtures are a failure, not a silently skipped feature test.
       let request = try JSONDecoder().decode(VideoRenderRequestPayload.self, from: Data(contentsOf: requestURL))

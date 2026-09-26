@@ -2,6 +2,7 @@ import AVFoundation
 import CoreImage
 import CoreText
 import Foundation
+import Vision
 
 private func videoRenderDiagnostic(_ message: @autoclosure () -> String) {
   #if DEBUG
@@ -249,6 +250,8 @@ struct VideoRenderer {
       cancellation: cancellation
     )
     videoRenderDiagnostic("VIDEO_STAGE providers_ready count=\(providers.count)")
+    let mad = request.arrangement.performanceMode == "mad"
+      ? MadDirector(request: request, peaks: audioReport.eventPeaks) : nil
     if FileManager.default.fileExists(atPath: outputURL.path) {
       try FileManager.default.removeItem(at: outputURL)
     }
@@ -362,16 +365,23 @@ struct VideoRenderer {
           let buffer = optionalBuffer
         else { throw VideoRenderError.writerFailed }
         try await withTaskCancellationHandler(operation: {
-          try await drawFrame(
-            frame,
-            request: request,
-            providers: providers,
-            waveformPeaks: waveformPeaks,
-            eventPeaks: audioReport.eventPeaks,
-            into: buffer,
-            width: dimensions.width,
-            height: dimensions.height
-          )
+          if let mad {
+            try await mad.draw(frame: frame, width: dimensions.width, height: dimensions.height,
+              into: buffer, context: context) { event, sample in
+              try await madImage(event, sample, request: request, providers: providers)
+            }
+          } else {
+            try await drawFrame(
+              frame,
+              request: request,
+              providers: providers,
+              waveformPeaks: waveformPeaks,
+              eventPeaks: audioReport.eventPeaks,
+              into: buffer,
+              width: dimensions.width,
+              height: dimensions.height
+            )
+          }
         }, onCancel: {
           providers.values.forEach { $0.cancelImageGeneration() }
         })
@@ -433,6 +443,23 @@ struct VideoRenderer {
       }
       throw primaryError
     }
+  }
+
+  /// The picture a MAD event shows at an output sample, cropped like any clip.
+  private func madImage(_ event: MadVideoEvent, _ sample: Int, request: VideoRenderRequestPayload,
+                        providers: [String: SourceProvider]) async throws -> CIImage {
+    guard let provider = providers[event.assetId] else { throw VideoRenderError.missingAsset }
+    let requested = CMTime(value: CMTimeValue(event.sourceSample(sample)), timescale: 48_000)
+    let last = CMTimeMaximum(.zero, provider.duration - CMTime(value: 1, timescale: 600))
+    let time = CMTimeMinimum(last, CMTimeMaximum(.zero, requested))
+    var image = CIImage(cgImage: try await provider.image(at: time))
+    if let crop = request.video.clipCrops.first(where: { $0.assetId == event.assetId })?.crop {
+      image = image.cropped(to: CGRect(x: image.extent.minX + CGFloat(crop.x) * image.extent.width,
+        y: image.extent.minY + CGFloat(1 - crop.y - crop.height) * image.extent.height,
+        width: CGFloat(crop.width) * image.extent.width, height: CGFloat(crop.height) * image.extent.height))
+      image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+    }
+    return image
   }
 
   static func preferredProducerError(primary: Error, audio: Error) -> Error {
@@ -1696,4 +1723,943 @@ private final class SourceProvider {
     }
     return max(0, lower - 1)
   }
+}
+
+// MARK: - MAD video director
+
+/// One sound of a MAD arrangement as the picture sees it.
+struct MadVideoEvent {
+  let index: Int
+  let assetId: String
+  let clip: Int
+  let start: Int
+  let end: Int
+  let role: String
+  let pitched: Bool
+  let sourceStart: Int
+  let sourceSpan: Int
+  let reverse: Bool
+  let rate: Double?
+  let glide: Double?
+  let scratch: Double?
+  let scratchPeriod: Int?
+  let peaks: [Float]
+  let peakMax: Float
+
+  func active(_ sample: Int) -> Bool { sample >= start && sample < end }
+
+  /// Loudness of this event alone at `sample`, 0...1 of its own peak.
+  func level(_ sample: Int) -> Float {
+    let i = (sample - start) / 1_600
+    guard i >= 0, i < peaks.count, peakMax > 0 else { return 0 }
+    return peaks[i] / peakMax
+  }
+
+  /// The source time shown at output `sample`: the same positions the sound
+  /// reads, so a scratch rocks the face and a finished sound holds its frame.
+  func sourceSample(_ sample: Int) -> Int {
+    let offset = min(max(0, sample - start), max(0, end - start - 1))
+    var position: Double
+    if rate != nil || glide != nil || scratch != nil {
+      position = SoundEventPayload.motionPosition(at: offset, count: max(1, end - start), rate: rate,
+        glide: glide, scratch: scratch, scratchPeriod: scratchPeriod)
+      if reverse { position = Double(sourceSpan - 1) - position }
+    } else {
+      position = Double(EverydayAudioDSP.sourceOffset(outputOffset: offset,
+        sourceCount: max(1, sourceSpan), reverse: reverse))
+    }
+    return sourceStart + min(max(0, Int(position)), max(0, sourceSpan - 1))
+  }
+}
+
+struct MadMask {
+  let image: CIImage
+  let box: CGRect
+  let rowsFilled: Double
+  let coverage: Double
+}
+
+enum MadShot: String {
+  case full, flip, stutter, mirror, burst, pile, cutout, sticker
+}
+
+/// Chooses a shot per bar along the song's energy, draws it with the sounding
+/// clips only, and adds the moments (a strip of stills for repeats, opening
+/// and ending cards, the picture side of master effects).
+final class MadDirector {
+  static let backdrops: [(CGFloat, CGFloat, CGFloat)] = [
+    (0.97, 0.75, 0.80), (0.77, 0.89, 0.95), (0.94, 0.91, 0.80), (0.80, 0.93, 0.84),
+  ]
+  static let colors: [CGColor] = [
+    CGColor(red: 0.94, green: 0.44, blue: 0.42, alpha: 1),
+    CGColor(red: 0.61, green: 0.52, blue: 0.94, alpha: 1),
+    CGColor(red: 0.95, green: 0.66, blue: 0.23, alpha: 1),
+    CGColor(red: 0.35, green: 0.71, blue: 0.59, alpha: 1),
+    CGColor(red: 0.34, green: 0.63, blue: 0.90, alpha: 1),
+    CGColor(red: 0.90, green: 0.47, blue: 0.75, alpha: 1),
+  ]
+  static let beat = 22_500
+  static let bar = 90_000
+
+  let events: [MadVideoEvent]
+  let assetIds: [String]
+  let names: [String]
+  let total: Int
+  let seed: Int
+  let title: String
+  let effects: [MasterEffectPayload]
+  let plan: [(shot: MadShot, start: Int, end: Int, energy: String)]
+  let runs: [[MadVideoEvent]]
+  let heard: [Int]
+  private var masks: [String: MadMask?] = [:]
+  private var subjects: [Int: Bool] = [:]
+
+  init(request: VideoRenderRequestPayload, peaks: [[Float]]) {
+    let arrangement = request.arrangement
+    assetIds = arrangement.sourceAssetIds
+    names = assetIds.enumerated().map { request.video.clipNames[$1] ?? "音\($0 + 1)" }
+    total = arrangement.totalSamples
+    seed = arrangement.seed
+    title = arrangement.songTitle ?? "なんでもない日の音"
+    effects = arrangement.masterEffects
+    var built: [MadVideoEvent] = []
+    for (index, event) in arrangement.events.enumerated() {
+      let eventPeaks = index < peaks.count ? peaks[index] : []
+      built.append(MadVideoEvent(index: index, assetId: event.assetId,
+        clip: arrangement.sourceAssetIds.firstIndex(of: event.assetId) ?? 0,
+        start: event.destinationStartSample, end: event.destinationStartSample + event.durationSamples,
+        role: event.role ?? "phrase", pitched: event.targetMidiNote != nil,
+        sourceStart: event.sourceStartSample, sourceSpan: event.effectiveSourceDurationSamples,
+        reverse: event.isReversed, rate: event.rate, glide: event.glide, scratch: event.scratch,
+        scratchPeriod: event.scratchPeriod, peaks: eventPeaks, peakMax: eventPeaks.max() ?? 0))
+    }
+    events = built
+    heard = Array(Set(built.map(\.clip))).sorted()
+    runs = Self.repeatRuns(built)
+    plan = Self.planShots(total: arrangement.totalSamples, seed: arrangement.seed,
+      sections: arrangement.sections)
+  }
+
+  // MARK: plan
+
+  static func repeatRuns(_ events: [MadVideoEvent]) -> [[MadVideoEvent]] {
+    let repeatable: Set<String> = ["chop", "fx", "echo", "phrase"]
+    var runs: [[MadVideoEvent]] = []
+    var open: [String: Int] = [:]
+    for e in events.sorted(by: { $0.start < $1.start })
+    where repeatable.contains(e.role) && !e.pitched {
+      let key = "\(e.clip)#\(e.sourceStart)"
+      if let r = open[key], let last = runs[r].last, e.start - last.start <= beat * 3 / 4 {
+        runs[r].append(e)
+      } else {
+        open[key] = runs.count
+        runs.append([e])
+      }
+    }
+    return runs.filter { $0.count >= 2 }
+  }
+
+  static func planShots(total: Int, seed: Int, sections: [SongSectionPayload])
+    -> [(shot: MadShot, start: Int, end: Int, energy: String)]
+  {
+    var rng = SeededRandom(seed: UInt64(bitPattern: Int64(seed)) &+ 0x9E37)
+    let pools: [String: [MadShot]] = [
+      "calm": [.full, .flip, .sticker, .cutout],
+      "mid": [.mirror, .stutter, .pile, .flip, .cutout, .sticker],
+      "high": [.burst, .mirror, .stutter, .burst],
+    ]
+    let bleed: Set<MadShot> = [.full, .flip, .stutter, .mirror, .burst]
+    let bars = total / bar
+    var plan: [(shot: MadShot, start: Int, end: Int, energy: String)] = []
+    var used: Set<MadShot> = []
+    var last: MadShot?
+    var b = 0
+    while b < bars {
+      let p = Double(b) / Double(bars)
+      var energy = p < 0.25 ? "calm" : p < 0.6 ? "mid" : "high"
+      if b == bars - 1 { energy = "high" }
+      for section in sections where section.fromBar <= b && b < section.toBar {
+        energy = section.energy
+      }
+      var choices = (pools[energy] ?? [.full]).filter { $0 != last && !($0 == .pile && b + 2 > bars - 1) }
+      if b == 0 { choices = choices.filter { bleed.contains($0) } }
+      if choices.isEmpty { choices = [.full] }
+      let fresh = choices.filter { !used.contains($0) }
+      let pool = fresh.isEmpty ? choices : fresh
+      let shot = pool[rng.next(pool.count)]
+      used.insert(shot)
+      let span = shot == .pile ? 2 : 1
+      plan.append((shot, b * bar, min(bars, b + span) * bar, energy))
+      b += span
+      last = shot
+    }
+    if !plan.contains(where: { $0.shot == .burst }), let tail = plan.last {
+      plan[plan.count - 1] = (.burst, tail.start, tail.end, tail.energy)
+    }
+    return plan
+  }
+
+  // MARK: picking what to show
+
+  func voices(_ s: Int) -> [MadVideoEvent] {
+    events.filter { $0.active(s) }.sorted { ($0.start, $0.index) < ($1.start, $1.index) }
+  }
+
+  func lastOnset(_ s: Int, _ where_: (MadVideoEvent) -> Bool = { _ in true }) -> MadVideoEvent? {
+    var best: MadVideoEvent?
+    for e in events where e.start <= s && where_(e) {
+      if best == nil || e.start >= best!.start { best = e }
+    }
+    return best
+  }
+
+  /// Effects lead, then a spoken phrase, then the melody (held through its
+  /// small gaps for up to a beat), then bass, then whatever sounds.
+  func lead(_ s: Int) -> MadVideoEvent {
+    let live = voices(s)
+    if let fx = live.last(where: { $0.role == "fx" }) { return fx }
+    if let p = live.last(where: { $0.role == "phrase" }) { return p }
+    if let m = live.last(where: { $0.role == "melody" }) { return m }
+    if let held = lastOnset(s, { $0.role == "melody" || $0.role == "phrase" }), s - held.end < Self.beat {
+      return held
+    }
+    if let b = live.last(where: { $0.role == "bass" }) { return b }
+    if let any = live.last { return any }
+    return lastOnset(s) ?? events.first!
+  }
+
+  // MARK: drawing
+
+  func draw(frame: Int, width: Int, height: Int, into buffer: CVPixelBuffer, context: CIContext,
+            image: (MadVideoEvent, Int) async throws -> CIImage) async throws {
+    let W = CGFloat(width), H = CGFloat(height)
+    var s = frame * 1_600
+    // a tape stop slows the picture with the sound
+    for fx in effects where fx.type == "tapestop" && s >= fx.startSample && s < fx.startSample + fx.durationSamples {
+      let u = Double(s - fx.startSample) / Double(fx.durationSamples)
+      s = fx.startSample + Int(Double(fx.durationSamples) * (u - u * u / 2))
+    }
+    let current = plan.first(where: { $0.start <= s && s < $0.end }) ?? plan[plan.count - 1]
+    let canvasRect = CGRect(x: 0, y: 0, width: W, height: H)
+    var canvas: CIImage
+    var overlays: [(CGContext) -> Void] = []
+    let longRun = runs.contains { $0.count >= 4 && $0[0].start <= s && s < $0[$0.count - 1].end + 14_400 }
+    if longRun && (current.shot == .cutout || current.shot == .sticker) {
+      canvas = CIImage(color: backdrop()).cropped(to: canvasRect)
+      canvas = try await strip(s, over: canvas, dim: false, W: W, H: H, image: image)
+    } else {
+      switch current.shot {
+      case .full, .flip, .stutter:
+        canvas = try await single(s, shot: current.shot, segmentStart: current.start, W: W, H: H,
+          image: image, overlays: &overlays)
+      case .mirror:
+        canvas = try await mirror(s, W: W, H: H, image: image, overlays: &overlays)
+      case .burst:
+        canvas = try await burst(s, segmentStart: current.start, W: W, H: H, image: image, overlays: &overlays)
+      case .pile:
+        canvas = try await pile(s, segment: (current.start, current.end), W: W, H: H, image: image, overlays: &overlays)
+      case .cutout:
+        canvas = try await cutoutShot(s, W: W, H: H, image: image, overlays: &overlays)
+      case .sticker:
+        canvas = try await sticker(s, W: W, H: H, image: image, overlays: &overlays)
+      }
+      if current.shot != .cutout && current.shot != .sticker {
+        canvas = try await strip(s, over: canvas, dim: true, W: W, H: H, image: image)
+      }
+    }
+    canvas = pictureEffects(canvas, sample: frame * 1_600, W: W, H: H)
+    // a louder section opens on a white flash
+    if let index = plan.firstIndex(where: { $0.start <= s && s < $0.end }), index > 0,
+      rank(plan[index].energy) > rank(plan[index - 1].energy), s - plan[index].start < 2_880 {
+      let a = 0.6 * (1 - Double(s - plan[index].start) / 2_880)
+      canvas = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: CGFloat(a))).cropped(to: canvasRect)
+        .composited(over: canvas)
+    }
+    let t = Double(frame) / 30
+    let ending = Double(total) / 48_000 - 1.3
+    if t >= ending {
+      canvas = try await endCard(canvas, t: t - ending, W: W, H: H, image: image)
+      overlays = [{ g in self.endText(g, t: t - ending, W: W, H: H) }]
+    }
+    context.render(canvas.cropped(to: canvasRect), to: buffer, bounds: canvasRect,
+      colorSpace: CGColorSpace(name: CGColorSpace.itur_709))
+    CVPixelBufferLockBaseAddress(buffer, [])
+    defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+    guard let base = CVPixelBufferGetBaseAddress(buffer),
+      let g = CGContext(data: base, width: width, height: height, bitsPerComponent: 8,
+        bytesPerRow: CVPixelBufferGetBytesPerRow(buffer), space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue)
+    else { throw VideoRenderError.writerFailed }
+    for overlay in overlays { overlay(g) }
+    if t < 1.6 { openingText(g, t: t, W: W, H: H) }
+  }
+
+  private func rank(_ energy: String) -> Int { energy == "high" ? 2 : energy == "mid" ? 1 : 0 }
+
+  private func backdrop() -> CIColor {
+    let c = Self.backdrops[abs(seed) % Self.backdrops.count]
+    return CIColor(red: c.0, green: c.1, blue: c.2)
+  }
+
+  /// Top-left rect to Core Image coordinates.
+  private func ci(_ r: CGRect, _ H: CGFloat) -> CGRect {
+    CGRect(x: r.minX, y: H - r.maxY, width: r.width, height: r.height)
+  }
+
+  /// Fill `rect` (top-left coordinates) with the picture, faces kept high.
+  private func cover(_ picture: CIImage, _ rect: CGRect, H: CGFloat, zoom: CGFloat = 1,
+                     mirror: Bool = false, flip: Bool = false, dx: CGFloat = 0) -> CIImage {
+    let target = ci(rect, H)
+    let e = picture.extent
+    guard e.width > 0, e.height > 0 else { return CIImage.empty() }
+    let scale = max(target.width / e.width, target.height / e.height) * max(1, zoom)
+    let shown = CGSize(width: target.width / scale, height: target.height / scale)
+    let cx = min(max(e.midX + dx * e.width, e.minX + shown.width / 2), e.maxX - shown.width / 2)
+    let focusFromTop: CGFloat = 0.42
+    let cy = min(max(e.maxY - e.height * focusFromTop, e.minY + shown.height / 2), e.maxY - shown.height / 2)
+    var t = CGAffineTransform(translationX: -cx, y: -cy)
+      .concatenating(CGAffineTransform(scaleX: scale * (mirror ? -1 : 1), y: scale * (flip ? -1 : 1)))
+      .concatenating(CGAffineTransform(translationX: target.midX, y: target.midY))
+    if picture.extent.isInfinite { t = .identity }
+    return picture.transformed(by: t).cropped(to: target)
+  }
+
+  private func dimmed(_ image: CIImage, soft: Bool) -> CIImage {
+    image.applyingFilter("CIColorControls", parameters: [
+      "inputSaturation": soft ? 0.65 : 0.3, "inputBrightness": soft ? -0.1 : -0.28,
+    ])
+  }
+
+  private func lit(_ image: CIImage, _ level: Float) -> CIImage {
+    level > 0 ? image.applyingFilter("CIColorControls", parameters: ["inputBrightness": 0.12 * Double(level)]) : image
+  }
+
+  private func punch(_ age: Int, _ amount: CGFloat = 0.14, _ length: Int = 5_760) -> CGFloat {
+    1 + amount * max(0, 1 - CGFloat(age) / CGFloat(length))
+  }
+
+  private func panel(_ e: MadVideoEvent, _ s: Int, _ rect: CGRect, H: CGFloat, zoom: CGFloat = 1,
+                     mirror: Bool = false, flip: Bool = false, dx: CGFloat = 0, soft: Bool = false,
+                     hold: Int = 0, image: (MadVideoEvent, Int) async throws -> CIImage) async throws -> CIImage {
+    let live = e.active(s) || (hold > 0 && s >= e.end && s - e.end < hold)
+    let picture = try await image(e, s)
+    let shot = cover(picture, rect, H: H, zoom: zoom * (1 + 0.04 * CGFloat(live ? e.level(s) : 0)),
+      mirror: mirror, flip: flip, dx: dx)
+    return live ? lit(shot, e.level(s)) : dimmed(shot, soft: soft)
+  }
+
+  // MARK: shots
+
+  private func single(_ s: Int, shot: MadShot, segmentStart: Int, W: CGFloat, H: CGFloat,
+                      image: (MadVideoEvent, Int) async throws -> CIImage,
+                      overlays: inout [(CGContext) -> Void]) async throws -> CIImage {
+    let lead = lead(s)
+    let full = CGRect(x: 0, y: 0, width: W, height: H)
+    var zoom = punch(s - lead.start)
+    var mirror = false
+    var dx: CGFloat = 0
+    switch shot {
+    case .flip:
+      let notes = events.filter { $0.start >= segmentStart && $0.start <= s && ($0.role == "melody" || $0.role == "phrase") && $0.pitched }.count
+      mirror = notes % 2 == 1
+      dx = 0.04 * CGFloat(notes % 3 - 1)
+      zoom = 1.08 * punch(s - lead.start, 0.1)
+    case .stutter:
+      let steps = Set(events.filter { $0.start >= segmentStart && $0.start <= s }.map { $0.start / (Self.beat / 2) }).count
+      zoom = (1 + 0.12 * CGFloat(steps % 4)) * punch(s - lead.start, 0.08)
+    default:
+      break
+    }
+    let picture = try await panel(lead, s, full, H: H, zoom: zoom, mirror: mirror, dx: dx, soft: true,
+      hold: Self.beat / 2, image: image)
+    let count = voices(s).filter { $0.clip == lead.clip }.count
+    overlays.append { g in self.label(g, lead, s, CGRect(x: 0, y: 0, width: W, height: H), H: H, count: count) }
+    return picture.composited(over: CIImage(color: .black).cropped(to: ci(full, H)))
+  }
+
+  private func mirror(_ s: Int, W: CGFloat, H: CGFloat, image: (MadVideoEvent, Int) async throws -> CIImage,
+                      overlays: inout [(CGContext) -> Void]) async throws -> CIImage {
+    let lead = lead(s)
+    let same = voices(s).filter { $0.clip == lead.clip }
+    let repeats = repeatIndex(lead)
+    let zoom = 1.06 * punch(s - lead.start, 0.1)
+    let flips = [(false, false), (true, false), (false, true), (true, true)]
+    var canvas = CIImage(color: .black).cropped(to: CGRect(x: 0, y: 0, width: W, height: H))
+    if same.count >= 3 {
+      for (i, origin) in [(0, 0), (1, 0), (0, 1), (1, 1)].enumerated() {
+        let rect = CGRect(x: CGFloat(origin.0) * W / 2, y: CGFloat(origin.1) * H / 2, width: W / 2, height: H / 2)
+        let f = flips[i]
+        canvas = try await panel(lead, s, rect, H: H, zoom: zoom, mirror: f.0, flip: f.1, image: image).composited(over: canvas)
+      }
+    } else if same.count == 2 {
+      for i in 0..<2 {
+        let rect = CGRect(x: CGFloat(i) * W / 2, y: 0, width: W / 2, height: H)
+        let f = flips[(repeats + i) % 4]
+        canvas = try await panel(lead, s, rect, H: H, zoom: zoom, mirror: f.0, flip: f.1, image: image).composited(over: canvas)
+      }
+    } else {
+      let f = flips[repeats % 4]
+      canvas = try await panel(lead, s, CGRect(x: 0, y: 0, width: W, height: H), H: H, zoom: zoom,
+        mirror: f.0, flip: f.1, soft: true, hold: Self.beat / 2, image: image).composited(over: canvas)
+    }
+    overlays.append { g in self.label(g, lead, s, CGRect(x: 0, y: 0, width: W, height: H), H: H, count: same.count) }
+    return canvas
+  }
+
+  private func repeatIndex(_ e: MadVideoEvent) -> Int {
+    var n = 0
+    var previous = e
+    while let before = lastOnset(previous.start - 1, { $0.clip == e.clip }),
+      before.sourceStart == e.sourceStart, previous.start - before.start <= Self.beat * 2, n < 16 {
+      n += 1
+      previous = before
+    }
+    return n
+  }
+
+  private func layout(_ n: Int, W: CGFloat, H: CGFloat) -> [CGRect] {
+    guard n > 1 else { return [CGRect(x: 0, y: 0, width: W, height: H)] }
+    let rows = n <= 3 ? n : n <= 6 ? (n + 1) / 2 : 3
+    var rects: [CGRect] = []
+    for r in 0..<rows {
+      let k = n / rows + (r < n % rows ? 1 : 0)
+      for c in 0..<k {
+        rects.append(CGRect(x: CGFloat(c) * W / CGFloat(k), y: CGFloat(r) * H / CGFloat(rows),
+          width: W / CGFloat(k), height: H / CGFloat(rows)))
+      }
+    }
+    return rects
+  }
+
+  /// One picture per clip heard so far in the bar; the grid grows and resets
+  /// on the downbeat, and each clip keeps its place.
+  private func burst(_ s: Int, segmentStart: Int, W: CGFloat, H: CGFloat,
+                     image: (MadVideoEvent, Int) async throws -> CIImage,
+                     overlays: inout [(CGContext) -> Void]) async throws -> CIImage {
+    let barStart = segmentStart + (s - segmentStart) / Self.bar * Self.bar
+    let window = events.filter { $0.start >= barStart && $0.start <= s }
+    guard !window.isEmpty else {
+      var ignored: [(CGContext) -> Void] = []
+      return try await single(s, shot: .full, segmentStart: segmentStart, W: W, H: H, image: image, overlays: &ignored)
+    }
+    var clips: [Int] = []
+    for e in window.sorted(by: { $0.start < $1.start }) where !clips.contains(e.clip) { clips.append(e.clip) }
+    if clips.count > 4 { clips = Array(clips.suffix(4)) }
+    let rects = layout(clips.count, W: W, H: H)
+    var canvas = CIImage(color: .black).cropped(to: CGRect(x: 0, y: 0, width: W, height: H))
+    var shown: [(MadVideoEvent, CGRect, Int)] = []
+    for (clip, rect) in zip(clips, rects) {
+      let live = voices(s).filter { $0.clip == clip }
+      let e = live.last ?? window.filter { $0.clip == clip }.max(by: { $0.start < $1.start })!
+      canvas = try await panel(e, s, rect, H: H, zoom: live.isEmpty ? 1 : punch(s - e.start, 0.08, 4_800),
+        image: image).composited(over: canvas)
+      shown.append((e, rect, live.count))
+    }
+    overlays.append { g in
+      g.setStrokeColor(CGColor(gray: 0, alpha: 1))
+      g.setLineWidth(3)
+      for (_, rect, _) in shown { g.stroke(self.ci(rect, H)) }
+      for (e, rect, count) in shown {
+        if e.active(s) {
+          let width = 2 + 7 * CGFloat(e.level(s))
+          g.setStrokeColor(Self.colors[e.clip % Self.colors.count])
+          g.setLineWidth(width)
+          g.stroke(self.ci(rect, H).insetBy(dx: width / 2, dy: width / 2))
+        }
+        self.label(g, e, s, rect, H: H, count: max(1, count))
+      }
+    }
+    return canvas
+  }
+
+  /// A new photo card for every sound in the stretch, piling up on paper;
+  /// finished ones freeze and fade, and the pile clears at the end.
+  private func pile(_ s: Int, segment: (Int, Int), W: CGFloat, H: CGFloat,
+                    image: (MadVideoEvent, Int) async throws -> CIImage,
+                    overlays: inout [(CGContext) -> Void]) async throws -> CIImage {
+    var canvas = CIImage(color: CIColor(red: 0.98, green: 0.95, blue: 0.90)).cropped(to: CGRect(x: 0, y: 0, width: W, height: H))
+    var spawned = events.filter { $0.start >= segment.0 && $0.start <= s && $0.role != "hat" && $0.role != "kick" }
+      .sorted { $0.start < $1.start }
+    if spawned.isEmpty || spawned[0].start > segment.0 + 2_400,
+      let carry = lastOnset(segment.0 - 1, { $0.role == "melody" || $0.role == "phrase" }) {
+      spawned.insert(carry, at: 0)
+    }
+    var rng = SeededRandom(seed: UInt64(segment.0 / Self.bar) &* 101 &+ 3)
+    let layouts = (0..<(spawned.count + 1)).map { _ in
+      (CGFloat(rng.unit()) * 0.64 + 0.18, CGFloat(rng.unit()) * 0.6 + 0.2, (CGFloat(rng.unit()) - 0.5) * 18)
+    }
+    let cards = Array(spawned.enumerated().suffix(10))
+    let clearing = s > segment.1 - 5_760
+    var newestMelodic: (MadVideoEvent, CGPoint, CGFloat)?
+    for (rank, (idx, e)) in cards.enumerated() {
+      let big: CGFloat = ["phrase": 0.86, "melody": 0.66, "bass": 0.5, "chop": 0.46][e.role] ?? 0.38
+      let depth = CGFloat(cards.count - 1 - rank)
+      let age = CGFloat(max(0, s - e.start)) / 48_000
+      let pop = CGFloat(Self.overshoot(Double(age) / 0.25))
+      let w = W * big * (1 - 0.04 * depth) * pop
+      let h = w * 1.25
+      guard w > 4 else { continue }
+      let (fx, fy, rot) = layouts[idx]
+      var cx = fx * W
+      let cy = fy * H
+      if clearing { cx += CGFloat(s - (segment.1 - 5_760)) / 5_760 * W * (idx % 2 == 0 ? -1 : 1) }
+      let live = e.active(s)
+      let photoRect = CGRect(x: cx - w / 2, y: cy - h / 2, width: w, height: h)
+      var photo = try await panel(e, live ? s : e.end - 1_600, photoRect, H: H, mirror: idx % 3 == 2, image: image)
+      if !live { photo = dimmed(photo, soft: false) }
+      let edge = max(6, w * 0.035)
+      let frameRect = ci(photoRect, H).insetBy(dx: -edge, dy: -edge)
+      var card = photo.composited(over: CIImage(color: .white).cropped(to: frameRect))
+      let tilt = (rot + (1 - CGFloat(Self.easeOut(Double(age) / 0.2))) * 10) * .pi / 180
+      let centre = CGPoint(x: frameRect.midX, y: frameRect.midY)
+      card = card.transformed(by: CGAffineTransform(translationX: -centre.x, y: -centre.y)
+        .concatenating(CGAffineTransform(rotationAngle: tilt))
+        .concatenating(CGAffineTransform(translationX: centre.x, y: centre.y)))
+      canvas = card.composited(over: canvas)
+      if rank == cards.count - 1 && e.role != "hat" && e.role != "kick" && e.role != "snare" {
+        newestMelodic = (e, CGPoint(x: cx, y: cy + h / 2 + 40), w)
+      }
+    }
+    if let newest = newestMelodic {
+      let (e, point, _) = newest
+      overlays.append { g in
+        self.text(g, self.names[e.clip], at: point, size: 46, color: CGColor(red: 0.14, green: 0.11, blue: 0.10, alpha: 1),
+          H: H, font: "HiraMaruProN-W4", centred: true)
+      }
+    }
+    return canvas
+  }
+
+  // MARK: cut-outs
+
+  private func mask(_ e: MadVideoEvent, _ s: Int, picture: CIImage) -> MadMask? {
+    let key = "\(e.assetId)#\(e.sourceSample(s) / 1_600)"
+    if let cached = masks[key] { return cached }
+    let made = Self.foregroundMask(picture)
+    if masks.count > 160 { masks.removeAll() }
+    masks[key] = made
+    return made
+  }
+
+  static func foregroundMask(_ picture: CIImage) -> MadMask? {
+    let context = CIContext(options: [.cacheIntermediates: false])
+    guard let cg = context.createCGImage(picture, from: picture.extent) else { return nil }
+    let handler = VNImageRequestHandler(cgImage: cg, options: [:])
+    let request = VNGenerateForegroundInstanceMaskRequest()
+    do {
+      try handler.perform([request])
+      guard let observation = request.results?.first else { return nil }
+      let buffer = try observation.generateScaledMaskForImage(forInstances: observation.allInstances, from: handler)
+      CVPixelBufferLockBaseAddress(buffer, .readOnly)
+      defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+      let w = CVPixelBufferGetWidth(buffer), h = CVPixelBufferGetHeight(buffer)
+      guard w > 0, h > 0, let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+      let row = CVPixelBufferGetBytesPerRow(buffer)
+      var minX = w, maxX = -1, minY = h, maxY = -1, on = 0, rowsOn = 0, samples = 0
+      for y in stride(from: 0, to: h, by: 4) {
+        let line = base.advanced(by: y * row).assumingMemoryBound(to: Float32.self)
+        var any = false
+        for x in stride(from: 0, to: w, by: 4) {
+          samples += 1
+          if line[x] > 0.5 {
+            on += 1
+            any = true
+            minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+          }
+        }
+        if any { rowsOn += 1 }
+      }
+      guard maxX >= minX, maxY >= minY else { return nil }
+      let image = CIImage(cvPixelBuffer: buffer).transformed(by: CGAffineTransform(
+        translationX: picture.extent.minX, y: picture.extent.minY))
+      // pixel rows run top-down; Core Image runs bottom-up
+      let box = CGRect(x: picture.extent.minX + CGFloat(minX), y: picture.extent.minY + CGFloat(h - 1 - maxY),
+        width: CGFloat(maxX - minX + 4), height: CGFloat(maxY - minY + 4))
+      let boxRows = Double(max(1, (maxY - minY) / 4 + 1))
+      return MadMask(image: image, box: box, rowsFilled: Double(rowsOn) / boxRows,
+        coverage: Double(on) / Double(max(1, samples)))
+    } catch {
+      return nil
+    }
+  }
+
+  private func hasSubject(_ clip: Int, image: (MadVideoEvent, Int) async throws -> CIImage) async -> Bool {
+    if let known = subjects[clip] { return known }
+    var votes = 0, count = 0
+    for e in events.filter({ $0.clip == clip }).prefix(3) {
+      guard let picture = try? await image(e, e.start) else { continue }
+      count += 1
+      if let m = mask(e, e.start, picture: picture), m.coverage > 0.05, m.coverage < 0.9, m.rowsFilled > 0.6 {
+        votes += 1
+      }
+    }
+    let result = count > 0 && votes * 2 >= count
+    subjects[clip] = result
+    return result
+  }
+
+  /// The subject on transparency with a white edge, scaled to `height`.
+  private func cutout(_ e: MadVideoEvent, _ s: Int, height: CGFloat, maxWidth: CGFloat, outline: CGFloat,
+                      image: (MadVideoEvent, Int) async throws -> CIImage) async throws -> CIImage? {
+    let picture = try await image(e, s)
+    guard let m = mask(e, s, picture: picture), m.rowsFilled >= 0.6 else { return nil }
+    let alpha = m.image.cropped(to: m.box)
+    var subject = picture.cropped(to: m.box).applyingFilter("CIBlendWithMask", parameters: [
+      kCIInputBackgroundImageKey: CIImage.empty(), kCIInputMaskImageKey: alpha,
+    ])
+    let scale = min(height / m.box.height, maxWidth / m.box.width)
+    if outline > 0 {
+      let grown = alpha.applyingFilter("CIMorphologyMaximum", parameters: ["inputRadius": outline / scale])
+      let white = CIImage(color: .white).cropped(to: m.box.insetBy(dx: -outline / scale - 2, dy: -outline / scale - 2))
+        .applyingFilter("CIBlendWithMask", parameters: [
+          kCIInputBackgroundImageKey: CIImage.empty(), kCIInputMaskImageKey: grown,
+        ])
+      subject = subject.composited(over: white)
+    }
+    let moved = subject.transformed(by: CGAffineTransform(translationX: -m.box.minX, y: -m.box.minY)
+      .concatenating(CGAffineTransform(scaleX: scale, y: scale)))
+    return moved
+  }
+
+  private func photoCard(_ e: MadVideoEvent, _ s: Int, height: CGFloat, H: CGFloat,
+                         image: (MadVideoEvent, Int) async throws -> CIImage) async throws -> CIImage {
+    let w = height * 0.75
+    let rect = CGRect(x: 0, y: 0, width: w, height: height)
+    let picture = try await image(e, s)
+    let photo = cover(picture, rect, H: height)
+    let edge = max(5, height * 0.03)
+    return photo.composited(over: CIImage(color: .white).cropped(to: CGRect(x: -edge, y: -edge,
+      width: w + 2 * edge, height: height + 2 * edge)))
+  }
+
+  private func place(_ piece: CIImage, centre: CGPoint, bottom: CGFloat? = nil, H: CGFloat, tilt: CGFloat = 0) -> CIImage {
+    let e = piece.extent
+    var t = CGAffineTransform(translationX: -e.midX, y: -e.midY)
+    if tilt != 0 { t = t.concatenating(CGAffineTransform(rotationAngle: tilt * .pi / 180)) }
+    let y = bottom.map { H - $0 + e.height / 2 } ?? (H - centre.y)
+    return piece.transformed(by: t.concatenating(CGAffineTransform(translationX: centre.x, y: y)))
+  }
+
+  /// Flat ground, the figure drops in when it comes back, and each repeat of
+  /// its sound within a beat adds a clone to its right, behind it.
+  private func cutoutShot(_ s: Int, W: CGFloat, H: CGFloat, image: (MadVideoEvent, Int) async throws -> CIImage,
+                          overlays: inout [(CGContext) -> Void]) async throws -> CIImage {
+    var canvas = CIImage(color: backdrop()).cropped(to: CGRect(x: 0, y: 0, width: W, height: H))
+    let lead = lead(s)
+    if voices(s).isEmpty && s - lead.end > 5_760 { return canvas }
+    let beatStart = s / Self.beat * Self.beat
+    var hits = events.filter { $0.clip == lead.clip && $0.start >= beatStart && $0.start <= s && !$0.pitched }
+      .sorted { $0.start < $1.start }
+    if hits.isEmpty { hits = [lead] }
+    hits = Array(hits.prefix(5))
+    var appeared = s
+    while appeared > s - 96_000, !voices(appeared - 1_600).isEmpty { appeared -= 1_600 }
+    let fall = Self.dropIn(Double(s - appeared) / 48_000, height: H * 0.8)
+    let subject = await hasSubject(lead.clip, image: image)
+    var pieces: [(Int, CIImage)] = []
+    for (i, e) in hits.enumerated() {
+      let at = e.active(s) ? s : e.start
+      var piece: CIImage?
+      if subject {
+        piece = try await cutout(e, at, height: H * 0.8, maxWidth: W * 0.75, outline: 8, image: image)
+      } else {
+        piece = try await photoCard(e, at, height: H * 0.55, H: H, image: image)
+      }
+      if let piece { pieces.append((i, piece)) }
+    }
+    for (i, piece) in pieces.reversed() {
+      let x = W * 0.36 + CGFloat(i) * piece.extent.width * 0.25
+      canvas = place(piece, centre: CGPoint(x: x, y: 0), bottom: H * 0.99 + fall, H: H).composited(over: canvas)
+    }
+    let name = names[lead.clip]
+    overlays.append { g in
+      for (j, ch) in name.prefix(10).enumerated() {
+        self.text(g, String(ch), at: CGPoint(x: W * 0.9, y: H * 0.36 + CGFloat(j) * H * 0.028), size: W * 0.036,
+          color: CGColor(gray: 1, alpha: 0.92), H: H, font: "HiraMaruProN-W4", centred: true)
+      }
+    }
+    return canvas
+  }
+
+  /// On each beat with a hit the subject is lifted out as a white-edged
+  /// sticker over blurred scenery from another sound; then its real
+  /// surroundings rise from the bottom and close around it.
+  private func sticker(_ s: Int, W: CGFloat, H: CGFloat, image: (MadVideoEvent, Int) async throws -> CIImage,
+                       overlays: inout [(CGContext) -> Void]) async throws -> CIImage {
+    let lead = lead(s)
+    guard await hasSubject(lead.clip, image: image) else {
+      return try await single(s, shot: .full, segmentStart: s, W: W, H: H, image: image, overlays: &overlays)
+    }
+    let full = CGRect(x: 0, y: 0, width: W, height: H)
+    let picture = try await image(lead, s)
+    let real = cover(picture, full, H: H)
+    let hits = events.filter { $0.clip == lead.clip && $0.start <= s && !$0.pitched }
+    let beats = Array(Set(hits.map { $0.start / Self.beat })).sorted()
+    let lastBeat = beats.last ?? lead.start / Self.beat
+    let hitTime = hits.filter { $0.start / Self.beat == lastBeat }.map(\.start).min() ?? lead.start
+    let since = Double(s - hitTime) / 48_000
+    let others = Array(Set(events.filter { $0.clip != lead.clip }.map(\.clip))).sorted()
+    var canvas: CIImage
+    if let otherClip = (others.isEmpty ? nil : others[beats.count % others.count]),
+      let otherEvent = events.first(where: { $0.clip == otherClip }) {
+      let scene = try await image(otherEvent, otherEvent.start)
+      canvas = cover(scene, full, H: H, zoom: 1.08).clampedToExtent()
+        .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": W * 0.02])
+        .cropped(to: ci(full, H))
+        .applyingFilter("CIColorControls", parameters: ["inputBrightness": -0.08])
+    } else {
+      canvas = CIImage(color: backdrop()).cropped(to: ci(full, H))
+    }
+    let rise = CGFloat(Self.easeOut((since - 0.06) / 0.35))
+    if rise > 0 {
+      let risen = CGRect(x: 0, y: 0, width: W, height: H * rise)
+      canvas = real.cropped(to: risen).composited(over: canvas)
+    }
+    if let m = mask(lead, s, picture: picture) {
+      // the subject in its own place, pulled in from the frame edge so the
+      // white edge closes all the way round
+      let placed = cover(m.image, full, H: H).cropped(to: ci(full, H).insetBy(dx: 10, dy: 10))
+      let grown = placed.applyingFilter("CIMorphologyMaximum", parameters: ["inputRadius": 10])
+      let white = CIImage(color: .white).cropped(to: ci(full, H))
+        .applyingFilter("CIBlendWithMask", parameters: [
+          kCIInputBackgroundImageKey: CIImage.empty(), kCIInputMaskImageKey: grown,
+        ])
+      let subject = real.applyingFilter("CIBlendWithMask", parameters: [
+        kCIInputBackgroundImageKey: CIImage.empty(), kCIInputMaskImageKey: placed,
+      ])
+      canvas = subject.composited(over: white.composited(over: canvas))
+      if rise > 0 && rise < 1 {
+        let line = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 0.8))
+          .cropped(to: CGRect(x: 0, y: H * rise - 3, width: W, height: 6))
+        canvas = line.composited(over: canvas)
+      }
+    }
+    let count = voices(s).filter { $0.clip == lead.clip }.count
+    overlays.append { g in self.label(g, lead, s, full, H: H, count: count) }
+    return canvas
+  }
+
+  // MARK: moments
+
+  /// While the same sound repeats, a still captured at each hit joins a strip.
+  /// Stills keep their size and place; only the strip slides so the newest
+  /// sits in the centre, each one dropping in with a little hop.
+  private func strip(_ s: Int, over canvas: CIImage, dim: Bool, W: CGFloat, H: CGFloat,
+                     image: (MadVideoEvent, Int) async throws -> CIImage) async throws -> CIImage {
+    let active = runs.filter { $0[0].start <= s && s < $0[$0.count - 1].end + 14_400 }
+    guard let run = active.max(by: { a, b in
+      let la = a.filter { $0.start <= s }.map(\.start).max() ?? 0
+      let lb = b.filter { $0.start <= s }.map(\.start).max() ?? 0
+      return (a.count >= 4 ? 1 : 0, la, a.count) < (b.count >= 4 ? 1 : 0, lb, b.count)
+    }) else { return canvas }
+    var shown: [MadVideoEvent] = []
+    var slots: Set<Int> = []
+    for e in run where e.start <= s {
+      let slot = e.start / (Self.beat / 4)
+      if !slots.contains(slot) {
+        slots.insert(slot)
+        shown.append(e)
+      }
+    }
+    guard shown.count >= (run.count >= 4 ? 1 : 2) else { return canvas }
+    var base = dim ? canvas.applyingFilter("CIColorControls", parameters: ["inputBrightness": -0.22]) : canvas
+    let size = H * 0.42
+    let step = W * 0.2
+    let k = shown.count - 1
+    let gap = k > 0 ? max(Self.beat / 4, shown[k].start - shown[k - 1].start) : Self.beat / 4
+    let glide = CGFloat(Self.easeOut(Double(s - shown[k].start) / max(1_600, min(4_800, Double(gap) * 0.8))))
+    let centre = step * (CGFloat(k) - 1 + glide)
+    let offset = W / 2 - centre
+    let subject = await hasSubject(run[0].clip, image: image)
+    for (i, e) in shown.enumerated() {
+      let x = offset + CGFloat(i) * step
+      guard x > -step, x < W + step else { continue }
+      var piece: CIImage?
+      if subject {
+        piece = try await cutout(e, e.start, height: size, maxWidth: W * 0.55, outline: 8, image: image)
+      }
+      if piece == nil { piece = try await photoCard(e, e.start, height: size, H: H, image: image) }
+      guard let still = piece else { continue }
+      let later = shown.first(where: { $0.start > e.start })?.start ?? e.start + 48_000
+      let duration = max(1_600, min(6_720, Int(Double(later - e.start) * 0.7)))
+      let age = s - e.start
+      var tilt: CGFloat = [-5, 3, -2, 5, -4][i % 5]
+      var drop: CGFloat = 0
+      if age < duration {
+        let u = CGFloat(age) / CGFloat(duration)
+        drop = -H * 0.3 * (1 - u * u)
+        tilt += 10 * (1 - u) * (i % 2 == 0 ? -1 : 1)
+      } else if age < duration + 4_800 {
+        drop = -H * 0.025 * CGFloat(sin(Double.pi * Double(age - duration) / 4_800))
+      }
+      let y = H * 0.42 + (i % 2 == 0 ? -18 : 18) + drop
+      base = place(still, centre: CGPoint(x: x, y: y), H: H, tilt: tilt).composited(over: base)
+    }
+    return base
+  }
+
+  /// The picture side of master effects.
+  private func pictureEffects(_ canvas: CIImage, sample s: Int, W: CGFloat, H: CGFloat) -> CIImage {
+    var out = canvas
+    let rect = CGRect(x: 0, y: 0, width: W, height: H)
+    for fx in effects where s >= fx.startSample && s < fx.startSample + fx.durationSamples {
+      let u = CGFloat(s - fx.startSample) / CGFloat(fx.durationSamples)
+      switch fx.type {
+      case "tapestop":
+        out = out.applyingFilter("CIColorControls", parameters: ["inputBrightness": -0.6 * Double(u * u)])
+      case "sweep":
+        out = out.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: ["inputRadius": W * 0.022 * pow(1 - u, 1.5)])
+          .cropped(to: rect)
+      case "bitcrush":
+        out = out.applyingFilter("CIPixellate", parameters: ["inputScale": max(4, W / 52), kCIInputCenterKey: CIVector(x: 0, y: 0)])
+          .cropped(to: rect)
+      case "sidechain":
+        if let kick = (fx.kickSamples ?? []).last(where: { $0 <= s }), s - kick < 9_600 {
+          let z = 1 + 0.05 * (1 - CGFloat(s - kick) / 9_600)
+          out = out.transformed(by: CGAffineTransform(translationX: -W / 2, y: -H / 2)
+            .concatenating(CGAffineTransform(scaleX: z, y: z))
+            .concatenating(CGAffineTransform(translationX: W / 2, y: H / 2))).cropped(to: rect)
+        }
+      case "halftime":
+        let z = 1 + 0.14 * u
+        out = out.transformed(by: CGAffineTransform(translationX: -W / 2, y: -H / 2)
+          .concatenating(CGAffineTransform(scaleX: z, y: z))
+          .concatenating(CGAffineTransform(translationX: W / 2, y: H / 2))).cropped(to: rect)
+      default:
+        break
+      }
+    }
+    return out
+  }
+
+  private func endCard(_ canvas: CIImage, t: Double, W: CGFloat, H: CGFloat,
+                       image: (MadVideoEvent, Int) async throws -> CIImage) async throws -> CIImage {
+    let rect = CGRect(x: 0, y: 0, width: W, height: H)
+    var card = CIImage(color: CIColor(red: 0.14, green: 0.11, blue: 0.10)).cropped(to: rect)
+    let cw = (W - 72) / 2, ch = (H * 0.56 - 24) / 2
+    for i in 0..<min(4, max(1, heard.count)) {
+      let clip = heard[i % heard.count]
+      guard let e = events.first(where: { $0.clip == clip }) else { continue }
+      let appear = CGFloat(Self.easeOut((t - Double(i) * 0.08) / 0.2))
+      guard appear > 0 else { continue }
+      let x = 24 + CGFloat(i % 2) * (cw + 24)
+      let y = 110 + CGFloat(i / 2) * (ch + 24) + (1 - appear) * 80
+      let picture = try await image(e, e.start)
+      card = cover(picture, CGRect(x: x, y: y, width: cw, height: ch), H: H).composited(over: card)
+    }
+    let wipe = CGFloat(Self.easeOut(t / 0.2))
+    return wipe >= 1 ? card : card.cropped(to: CGRect(x: 0, y: 0, width: W, height: H * wipe)).composited(over: canvas)
+  }
+
+  // MARK: text
+
+  private func text(_ g: CGContext, _ string: String, at point: CGPoint, size: CGFloat, color: CGColor, H: CGFloat,
+                    font: String = "HiraginoSans-W6", centred: Bool = false, shadow: Bool = false) {
+    let attributes: [NSAttributedString.Key: Any] = [
+      NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(font as CFString, size, nil),
+      NSAttributedString.Key(kCTForegroundColorAttributeName as String): color,
+    ]
+    let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: attributes))
+    let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+    g.saveGState()
+    if shadow { g.setShadow(offset: CGSize(width: 0, height: -3), blur: 12, color: CGColor(gray: 0, alpha: 0.55)) }
+    g.textPosition = CGPoint(x: centred ? point.x - width / 2 : point.x, y: H - point.y - size * 0.35)
+    CTLineDraw(line, g)
+    g.restoreGState()
+  }
+
+  /// Small caption for a sounding picture: colour dot, name, live level bars.
+  private func label(_ g: CGContext, _ e: MadVideoEvent, _ s: Int, _ rect: CGRect, H: CGFloat, count: Int) {
+    guard e.active(s), rect.width >= 150, rect.height >= 120 else { return }
+    let k = min(1, max(0.6, rect.width / 520)) * H / 1_280
+    let name = names[e.clip] + (count > 1 ? "  ×\(count)" : "")
+    let size = 26 * k
+    let attributes: [NSAttributedString.Key: Any] = [
+      NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("HiraginoSans-W6" as CFString, size, nil),
+      NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 1, alpha: 1),
+    ]
+    let line = CTLineCreateWithAttributedString(NSAttributedString(string: name, attributes: attributes))
+    let tw = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+    let ph = 46 * k, pw = tw + 96 * k
+    let pill = ci(CGRect(x: rect.minX + 16 * k, y: rect.maxY - ph - 16 * k, width: pw, height: ph), H)
+    g.setFillColor(CGColor(red: 0.08, green: 0.06, blue: 0.06, alpha: 0.6))
+    g.addPath(CGPath(roundedRect: pill, cornerWidth: ph / 2, cornerHeight: ph / 2, transform: nil))
+    g.fillPath()
+    let color = Self.colors[e.clip % Self.colors.count]
+    g.setFillColor(color)
+    g.fillEllipse(in: CGRect(x: pill.minX + 14 * k, y: pill.midY - 7 * k, width: 14 * k, height: 14 * k))
+    g.textPosition = CGPoint(x: pill.minX + 38 * k, y: pill.midY - size * 0.35)
+    CTLineDraw(line, g)
+    let level = CGFloat(e.level(s))
+    for b in 0..<4 {
+      let bh = (6 + 18 * min(1, level * (1.3 - CGFloat(b) * 0.2))) * k
+      let bx = pill.minX + 44 * k + tw + CGFloat(b) * 9 * k
+      g.fill(CGRect(x: bx, y: pill.midY - bh / 2, width: 5 * k, height: bh))
+    }
+  }
+
+  private func openingText(_ g: CGContext, t: Double, W: CGFloat, H: CGFloat) {
+    let a = CGFloat(Self.easeOut(t / 0.2) * (1 - Self.easeInOut((t - 1.3) / 0.3)))
+    guard a > 0 else { return }
+    let scale = W / 720
+    text(g, title, at: CGPoint(x: 46 * scale, y: 118 * scale), size: 60 * scale, color: CGColor(gray: 1, alpha: a),
+      H: H, shadow: true)
+    text(g, heard.map { names[$0] }.joined(separator: " ・ "), at: CGPoint(x: 48 * scale, y: 186 * scale),
+      size: 26 * scale, color: CGColor(gray: 1, alpha: a), H: H, shadow: true)
+    g.setFillColor(Self.colors[0].copy(alpha: a) ?? Self.colors[0])
+    g.fill(ci(CGRect(x: 48 * scale, y: 214 * scale, width: 72 * scale, height: 6 * scale), H))
+  }
+
+  private func endText(_ g: CGContext, t: Double, W: CGFloat, H: CGFloat) {
+    let a = CGFloat(Self.easeOut((t - 0.35) / 0.25))
+    guard a > 0 else { return }
+    let scale = W / 720
+    text(g, "オトグラシ", at: CGPoint(x: W / 2, y: H * 0.76), size: (96 + 30 * (1 - a)) * scale,
+      color: CGColor(gray: 1, alpha: 1), H: H, centred: true)
+    text(g, heard.map { names[$0] }.joined(separator: "・") + " でできた\(total / 48_000)秒",
+      at: CGPoint(x: W / 2, y: H * 0.84), size: 28 * scale, color: Self.colors[0], H: H,
+      font: "HiraMaruProN-W4", centred: true)
+  }
+
+  // MARK: easing
+
+  static func easeOut(_ x: Double) -> Double {
+    let v = min(1, max(0, x))
+    return 1 - pow(1 - v, 3)
+  }
+
+  static func easeInOut(_ x: Double) -> Double {
+    let v = min(1, max(0, x))
+    return v * v * (3 - 2 * v)
+  }
+
+  static func overshoot(_ x: Double) -> Double {
+    if x >= 1 { return 1 }
+    let v = max(0, x)
+    return 1 + sin(v * Double.pi * 1.6) * exp(-v * 4) * 0.35 - (1 - easeOut(v)) * 0.35
+  }
+
+  /// Falls in from above in ~0.1 s, then a small landing hop.
+  static func dropIn(_ age: Double, height: CGFloat) -> CGFloat {
+    if age < 0.1 {
+      let u = age / 0.1
+      return -height * 0.6 * CGFloat(1 - u * u)
+    }
+    if age < 0.22 { return -height * 0.03 * CGFloat(sin(Double.pi * (age - 0.1) / 0.12)) }
+    return 0
+  }
+}
+
+/// Deterministic generator so the same seed always edits the same video.
+struct SeededRandom {
+  private var state: UInt64
+  init(seed: UInt64) { state = seed == 0 ? 0x2545F4914F6CDD1D : seed }
+  mutating func nextRaw() -> UInt64 {
+    state ^= state << 13
+    state ^= state >> 7
+    state ^= state << 17
+    return state
+  }
+  mutating func next(_ bound: Int) -> Int { Int(nextRaw() % UInt64(max(1, bound))) }
+  mutating func unit() -> Double { Double(nextRaw() % 1_000_000) / 1_000_000 }
 }

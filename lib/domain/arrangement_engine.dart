@@ -1,4 +1,5 @@
 import 'everyday_arranger.dart';
+import 'mad_arranger.dart';
 import 'performance_arranger.dart';
 import 'arrangement.dart';
 import 'melody_template.dart';
@@ -11,6 +12,15 @@ Arrangement arrange({
   PerformanceMode performanceMode = PerformanceMode.natural,
   int durationSeconds = 15,
 }) {
+  if (performanceMode == PerformanceMode.mad) {
+    return arrangeMad(
+      clips: clips,
+      style: style,
+      seed: seed,
+      melodyTemplate: melodyTemplate,
+      seconds: durationSeconds,
+    );
+  }
   if (performanceMode != PerformanceMode.natural ||
       durationSeconds != 15 ||
       (melodyTemplate == MelodyTemplate.none &&

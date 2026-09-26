@@ -14,7 +14,8 @@ enum EverydayAudioDSP {
 
   /// Interpolated YIN. Search the FIRST trough, including out-of-band lags,
   /// before accepting the range; otherwise high notes alias to lower octaves.
-  static func estimate(_ samples: [Float], start: Int = 0, count: Int? = nil) -> Pitch? {
+  static func estimate(_ samples: [Float], start: Int = 0, count: Int? = nil,
+                       maximumHertz: Double = 2000) -> Pitch? {
     let start = max(0, start)
     guard start < samples.count else { return nil }
     let n = min(count ?? 4096, samples.count - start)
@@ -56,7 +57,7 @@ enum EverydayAudioDSP {
         let correction = abs(denominator) > 1e-12
           ? max(-0.5, min(0.5, 0.5 * (left - right) / denominator)) : 0
         let hz = rate / (Double(lag) + correction)
-        guard (55...2000).contains(hz) else { return nil }
+        guard hz >= 55, hz <= maximumHertz else { return nil }
         return Pitch(hertz: hz, confidence: max(0, min(1, 1 - mid)))
       }
       lag += 1
