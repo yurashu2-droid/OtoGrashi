@@ -365,15 +365,15 @@ def repeat_moment(canvas, ctx, t, dim=True):
             continue  # scrolled out of view
         src = ctx.sources[e.c]
         still_t = e.t  # the picture at the moment of this hit, frozen
-        step = i * FRAME_STEP
-        piece = (cutout(ctx, e, still_t, size, max_width=W * 0.55, outline=8, advance=step)
+        later_frame = i * FRAME_STEP  # frame by frame; `step` is the spacing
+        piece = (cutout(ctx, e, still_t, size, max_width=W * 0.55, outline=8, advance=later_frame)
                  if getattr(src, "has_subject", False) else None)
         if piece is not None:
             alpha = np.asarray(piece.getchannel("A"), np.float32) / 255
             if (alpha.mean(axis=1) > 0.2).mean() < 0.6:
                 piece = None  # the mask only holds a band (tracks, ground): show the still itself
         if piece is None:
-            photo = cover(ctx.frame(e, still_t, step), size * 0.75, size).convert("RGBA")
+            photo = cover(ctx.frame(e, still_t, later_frame), size * 0.75, size).convert("RGBA")
             edge = max(5, int(size * 0.03))
             piece = Image.new("RGBA", (photo.width + 2 * edge, photo.height + 2 * edge), (255, 255, 255, 255))
             piece.alpha_composite(photo, (edge, edge))
