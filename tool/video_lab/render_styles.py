@@ -112,6 +112,9 @@ class Event:
         self.kind = raw.get("treatment", "rhythm")
         self.role = raw.get("role")  # melody / bass / kick / snare / hat in score arrangements
         self.midi = raw.get("targetMidiNote")
+        self.notes = raw.get("notes")  # sung events: [[offset, midi], ...]
+        self.tune = raw.get("tune", 1.0)
+        self.rate = raw.get("rate")  # sampler-style speed change (drums)
         self.src_start = raw["sourceStartSample"]
         self.src_dur = raw.get("sourceDurationSamples") or raw["durationSamples"]
         self.gain = raw["gain"]
@@ -126,7 +129,7 @@ class Event:
 
     def source_sample(self, t, src: Source):
         """Source position for output time t: loops the event's source window."""
-        offset = int((t - self.t) * SR)
+        offset = int((t - self.t) * SR * (self.rate or 1.0))
         window = max(SPF, min(self.src_dur, src.samples))
         start = self.src_start % max(1, src.samples - window + 1)
         return start + offset % window
@@ -136,12 +139,23 @@ def render_audio(events, sources, total, source_pitch=None):
     """source_pitch: measured MIDI pitch per clip index. Without it the legacy
     recipes keep a gentle ±semitone range around middle C."""
     mix = np.zeros(total, np.float32)
+    voices = {}
     for e in events:
         src = sources[e.c]
         window = max(SPF, min(e.src_dur, src.samples))
         start = e.src_start % max(1, src.samples - window + 1)
         chunk = src.pcm[start:start + window]
-        if e.kind == "tuned" and e.midi:
+        if e.kind == "sung" and e.notes:
+            from lab_audio import Voice, sing
+            if e.c not in voices:
+                voices[e.c] = Voice(src.pcm)
+            buf = sing(voices[e.c], e.src_start, e.dur, e.notes, e.tune)
+        elif e.rate:
+            pos = e.src_start + np.arange(e.dur) * e.rate  # picture follows the same speed
+            buf = np.interp(pos, np.arange(src.samples), src.pcm, right=0.0).astype(np.float32)
+            if e.role == "kick":
+                buf *= np.exp(-np.arange(e.dur) / (0.07 * SR)).astype(np.float32)
+        elif e.kind == "tuned" and e.midi:
             if source_pitch:
                 ratio = float(np.clip(2 ** ((e.midi - source_pitch[e.c]) / 12), 0.3, 2.6))
             else:
@@ -338,8 +352,8 @@ def sequencer_ribbon(canvas, ctx, t):
 def lead_of(ctx, t):
     """Newest sounding melodic voice, else newest sounding voice, else the last one heard."""
     live = ctx.voices(t)
-    melodic = [e for e in live if e.role == "melody"] or [
-        e for e in live if e.kind != "rhythm" and e.role is None]
+    melodic = ([e for e in live if e.role == "phrase"] or [e for e in live if e.role == "melody"]
+               or [e for e in live if e.kind != "rhythm" and e.role in (None, "bass")])
     if melodic or live:
         return (melodic or live)[-1]
     return ctx.last_onset(t) or ctx.events[0]
@@ -564,8 +578,11 @@ def shot_pan(ctx, t, seg):
     vw, vh = W / zoom, H / zoom
     cx = min(max(cx, vw / 2), board_w - vw / 2)
     cy = min(max(cy, vh / 2), board_h - vh / 2)
-    box = tuple(int(v) for v in (cx - vw / 2, cy - vh / 2, cx + vw / 2, cy + vh / 2))
-    view = board.crop(box).resize((W, H), Image.BILINEAR)
+    # a paper margin around the board so a wide pull-back never shows black
+    padded = Image.new("RGB", (board.width + 2 * W, board.height + 2 * H), PAPER)
+    padded.paste(board, (W, H))
+    box = tuple(int(v) for v in (cx - vw / 2 + W, cy - vh / 2 + H, cx + vw / 2 + W, cy + vh / 2 + H))
+    view = padded.crop(box).resize((W, H), Image.BILINEAR)
     moving = 0 < (t - lead.t) < 0.22 and prev_slot is not target_slot
     if moving:
         view = view.filter(ImageFilter.BoxBlur(6 * math.sin(math.pi * (t - lead.t) / 0.22)))
@@ -612,7 +629,8 @@ def shot_pile(ctx, t, seg):
     for rank, e in enumerate(cards):
         idx = spawned.index(e)
         fx, fy, rot = layout[idx]
-        big = {"phrase": 0.86, "tuned": 0.62, "rhythm": 0.42}[e.kind]
+        big = {"phrase": 0.86, "melody": 0.66, "bass": 0.5, "chop": 0.46}.get(
+            e.role, {"phrase": 0.86, "tuned": 0.62, "sung": 0.62}.get(e.kind, 0.38))
         depth = len(cards) - 1 - rank
         scale = big * (1 - 0.04 * depth)
         age = max(0.0, t - max(e.t, section_t)) if e is spawned[0] else t - e.t
@@ -659,8 +677,9 @@ POOLS = {
 }
 
 
-def plan_shots(total_t, seed):
-    """Pick one shot per bar along an energy curve; the seed makes every video different."""
+def plan_shots(total_t, seed, sections=None):
+    """Pick one shot per bar along an energy curve; the seed makes every video different.
+    sections: optional [[bar_from, bar_to, energy], ...] from the arrangement."""
     rng = np.random.default_rng(seed)
     bars = int(round(total_t / BAR))
     plan, bar, last, used = [], 0, None, set()
@@ -669,6 +688,9 @@ def plan_shots(total_t, seed):
         energy = "calm" if p < 0.25 else "mid" if p < 0.6 else "high"
         if bar == bars - 1:
             energy = "high"
+        for a, b, level in sections or []:
+            if a <= bar < b:
+                energy = level
         choices = [c for c in POOLS[energy] if c != last and not (c in LONG and bar + 2 > bars - 1)]
         if bar == 0:  # the opening introduces a face, not a board
             choices = [c for c in choices if c in BLEED]
@@ -715,9 +737,10 @@ def main():
         wf.setframerate(SR)
         wf.writeframes((audio * 32767).astype(np.int16).tobytes())
     ctx = Ctx(events, sources, total, arrangement.get("title"))
+    sys.path.insert(0, str(Path(__file__).parent))
     frames = total // SPF
     for seed in seeds:
-        plan = plan_shots(total / SR, seed)
+        plan = plan_shots(total / SR, seed, arrangement.get("sections"))
         hud = False
         look = "bold" if seed % 3 else "paper"
         print(f"seed {seed}: look={look} hud={hud} " + " > ".join(p[0] for p in plan))
