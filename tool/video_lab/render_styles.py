@@ -322,18 +322,26 @@ def repeat_moment(canvas, ctx, t):
     Every still keeps its size and its place relative to the others once laid;
     nothing is squeezed to fit. Only the strip as a whole slides sideways so
     the newest still settles in the centre, older ones drifting off-screen."""
-    run = next((r for r in ctx.runs if r[0].t <= t < r[-1].end_t + 0.3), None)
-    if run is None:
+    active = [r for r in ctx.runs if r[0].t <= t < r[-1].end_t + 0.3]
+    if not active:
         return canvas
-    shown = [e for e in run if e.t <= t]
-    if len(shown) < 2:
+    # a long roll wins outright; otherwise the run heard most recently
+    run = max(active, key=lambda r: (len(r) >= 4, max(e.t for e in r if e.t <= t), len(r)))
+    # at most one still per 16th note: a 32nd-note pair shares one, so each still is seen
+    shown, slots = [], set()
+    for e in run:
+        slot = math.floor(e.t / (BEAT / 4) + 1e-6)
+        if e.t <= t and slot not in slots:
+            slots.add(slot)
+            shown.append(e)
+    if len(shown) < (1 if len(run) >= 4 else 2):  # a roll shows from its first hit
         return canvas
     base = ImageEnhance.Brightness(canvas).enhance(0.7).convert("RGBA")
-    size = H * 0.34
+    size = H * 0.42
     step = W * 0.2  # neighbours overlap heavily, like a row of clones
     # the strip slides to the new still and settles before the next hit arrives
     k = len(shown) - 1
-    gap = shown[k].t - shown[k - 1].t
+    gap = max(BEAT / 4, shown[k].t - shown[k - 1].t) if k else BEAT / 4
     glide = ease_out((t - shown[k].t) / max(1 / 60, min(0.1, 0.8 * gap)))
     centre = step * (k - 1 + glide)
     offset = W / 2 - centre
@@ -343,7 +351,7 @@ def repeat_moment(canvas, ctx, t):
             continue  # scrolled out of view
         src = ctx.sources[e.c]
         still_t = e.t  # the picture at the moment of this hit, frozen
-        piece = cutout(ctx, e, still_t, size, max_width=step * 1.3, outline=8) if getattr(src, "has_subject", False) else None
+        piece = cutout(ctx, e, still_t, size, max_width=W * 0.55, outline=8) if getattr(src, "has_subject", False) else None
         if piece is not None:
             alpha = np.asarray(piece.getchannel("A"), np.float32) / 255
             if (alpha.mean(axis=1) > 0.2).mean() < 0.6:
@@ -355,7 +363,8 @@ def repeat_moment(canvas, ctx, t):
             piece.alpha_composite(photo, (edge, edge))
         # entrance: each still drops in from above, lands with a small hop and
         # settles its tilt; the size never changes. Fast repeats get a quicker entrance.
-        nxt = run[run.index(e) + 1].t if run.index(e) + 1 < len(run) else e.t + 1.0
+        later = [x.t for x in shown if x.t > e.t] or [x.t for x in run if x.t > e.t + BEAT / 4 - 1e-6]
+        nxt = later[0] if later else e.t + 1.0
         dur = max(1 / 30, min(0.14, 0.7 * (nxt - e.t)))
         age = t - e.t
         tilt = (-5, 3, -2, 5, -4)[i % 5]
@@ -471,6 +480,9 @@ def sequencer_ribbon(canvas, ctx, t):
 def lead_of(ctx, t):
     """Newest sounding melodic voice, else newest sounding voice, else the last one heard."""
     live = ctx.voices(t)
+    featured = [e for e in live if e.role == "fx"]  # rolls, risers, reverses, scratches
+    if featured:
+        return featured[-1]
     melodic = [e for e in live if e.role == "phrase"] or [e for e in live if e.role == "melody"]
     if melodic:
         return melodic[-1]
@@ -1002,9 +1014,16 @@ def plan_shots(total_t, seed, sections=None):
 
 def director_frame(ctx, t, plan, hud):
     shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
-    canvas = SHOTS[shot](ctx, t, (start, end))
-    if shot not in ("cutout", "sticker"):  # those already show repeats as clones / a single sticker
+    long_run = any(len(r) >= 4 and r[0].t <= t < r[-1].end_t + 0.3 for r in ctx.runs)
+    if long_run and shot in ("cutout", "sticker"):
+        # a roll is the moment: show its strip on a clean ground instead of the clones
+        rng = np.random.default_rng(getattr(ctx, "seed", 0))
+        canvas = Image.new("RGB", (W, H), BACKDROPS[int(rng.integers(len(BACKDROPS)))])
         canvas = repeat_moment(canvas, ctx, t)
+    else:
+        canvas = SHOTS[shot](ctx, t, (start, end))
+        if shot not in ("cutout", "sticker"):  # those already show repeats as clones / a single sticker
+            canvas = repeat_moment(canvas, ctx, t)
     if shot in BLEED and hud:
         sequencer_ribbon(canvas, ctx, t)
     if energy != "calm" and t - start < 0.06 and start > 0:
