@@ -97,6 +97,38 @@ class Voice:
                     found.append((jump, i))
         return [i * HOP for _, i in sorted(found, reverse=True)]
 
+    def voiced_runs(self, min_len=0.06):
+        """Stretches that hold a pitch (gaps up to 20 ms bridged), in time order."""
+        runs, start, gap = [], None, 0
+        for i, v in enumerate(list(self.voiced) + [False] * 3):
+            if v:
+                start = i if start is None else start
+                gap = 0
+            elif start is not None:
+                gap += 1
+                if gap > 2:
+                    end = i - gap + 1
+                    if (end - start) * HOP >= min_len * SR:
+                        runs.append((start * HOP, end * HOP))
+                    start, gap = None, 0
+        return runs
+
+    def pitch_spread(self):
+        """10-90% range of the detected pitch in semitones: small for a steady,
+        tuneful sound, large for bells, noise or wildly gliding cries."""
+        v = self.midi[self.voiced]
+        return float(np.percentile(v, 90) - np.percentile(v, 10)) if len(v) > 4 else 99.0
+
+    def steadiest(self, frames=10):
+        """Sample position of the most stable 100 ms of voiced sound."""
+        best, where = 1e9, None
+        for i in range(len(self.midi) - frames):
+            if self.voiced[i:i + frames].all():
+                spread = float(np.std(self.midi[i:i + frames]))
+                if spread < best:
+                    best, where = spread, i
+        return (where if where is not None else int(np.argmax(self.rms))) * HOP
+
     def voiced_seconds(self):
         return float(self.voiced.sum()) * HOP / SR
 
@@ -105,7 +137,7 @@ class Voice:
         return float(np.median(v)) if len(v) else 60.0
 
 
-def sing(voice, src_start, duration, notes, tune=1.0):
+def sing(voice, src_start, duration, notes, tune=1.0, rate=1.0, accent=True):
     """Pitch-synchronous overlap-add (TD-PSOLA) with the source moving at 1x.
 
     notes: [(offset_samples, midi), ...] target steps from the event start.
@@ -137,7 +169,7 @@ def sing(voice, src_start, duration, notes, tune=1.0):
     while t < duration:
         while note_i + 1 < len(notes) and notes[note_i + 1][0] <= t:
             note_i += 1
-        s = src_start + t
+        s = src_start + t * rate  # rate < 1 stretches a short voiced run without changing pitch
         f = int(min(max(s // HOP, 0), len(voice.midi) - 1))
         if voice.voiced[f]:
             src_midi = voice.midi[f]
@@ -160,4 +192,13 @@ def sing(voice, src_start, duration, notes, tune=1.0):
             lay(s, t, 240)
             t += 240
     out = out[:duration] / np.maximum(norm[:duration], 0.35)
+    if accent:
+        # a small dip before each note and a lift on its attack make the tune's rhythm audible
+        env = np.ones(duration)
+        for off, _ in notes[1:]:
+            a = int(off)
+            if 480 < a < duration - 1_440:
+                env[a - 480:a] *= np.linspace(1, 0.35, 480)
+                env[a:a + 1_440] *= np.linspace(0.35, 1.15, 1_440)
+        out *= env
     return out.astype(np.float32)

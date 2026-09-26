@@ -135,7 +135,7 @@ class Event:
         return start + offset % window
 
 
-def render_audio(events, sources, total, source_pitch=None):
+def render_audio(events, sources, total, source_pitch=None, master=True):
     """source_pitch: measured MIDI pitch per clip index. Without it the legacy
     recipes keep a gentle ±semitone range around middle C."""
     mix = np.zeros(total, np.float32)
@@ -149,7 +149,7 @@ def render_audio(events, sources, total, source_pitch=None):
             from lab_audio import Voice, sing
             if e.c not in voices:
                 voices[e.c] = Voice(src.pcm)
-            buf = sing(voices[e.c], e.src_start, e.dur, e.notes, e.tune)
+            buf = sing(voices[e.c], e.src_start, e.dur, e.notes, e.tune, e.rate or 1.0)
         elif e.rate:
             pos = e.src_start + np.arange(e.dur) * e.rate  # picture follows the same speed
             buf = np.interp(pos, np.arange(src.samples), src.pcm, right=0.0).astype(np.float32)
@@ -177,6 +177,8 @@ def render_audio(events, sources, total, source_pitch=None):
         blocks = (n + SPF - 1) // SPF
         padded = np.pad(np.abs(buf), (0, blocks * SPF - n))
         e.env = padded.reshape(blocks, SPF).max(axis=1)
+    if not master:  # raw sum, for measuring stems against each other
+        return mix
     mix = np.tanh(mix * 1.4)
     mix *= 0.89 / max(1e-6, np.abs(mix).max())
     return mix
@@ -236,7 +238,8 @@ class Ctx:
 
     def voices(self, t, limit=9):
         """Events sounding at t, oldest first: one picture per voice."""
-        live = sorted(self.active(t), key=lambda e: (e.t, e.idx))
+        # a guide layer is part of its singer's sound, not another picture
+        live = sorted((e for e in self.active(t) if e.role != "guide"), key=lambda e: (e.t, e.idx))
         return live[-limit:]
 
     def level(self, e, t):

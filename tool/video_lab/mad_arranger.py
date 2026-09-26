@@ -65,23 +65,30 @@ class Arrangement:
             self.add(clip, start + k * step, chop, region[1] - chop, "rhythm", "chop", gain * (0.8 ** k))
 
     def sung_line(self, clip, cursor, notes, bar_offset, gain, role, tune=1.0):
-        """Sing notes with the clip's speech moving forward continuously.
+        """Sing notes with the clip moving forward through its *voiced* sound.
 
-        cursor walks through the clip's voiced regions; when a region runs out
-        the next one continues, so the words keep advancing instead of
-        restarting on every note. Returns the updated cursor."""
-        regions = sorted(self.voices[clip].regions)
+        The cursor walks the clip's voiced runs in order, so the words keep
+        advancing instead of restarting on every note, but a note never lands
+        on a consonant, breath or silence: when the current run cannot carry
+        it, the cursor skips to the next run. A run shorter than its note is
+        read more slowly (pitch unchanged) rather than letting the note die.
+        Returns the updated cursor."""
+        voice = self.voices[clip]
+        runs = voice.voiced_runs() or sorted(voice.regions)
         ri, pos = cursor
-        span = []  # notes of the current continuous event
+        ri %= len(runs)
+        pos = min(max(pos, runs[ri][0]), runs[ri][1])
+        span = []  # (start, dur, midi, src, rate) notes of the current continuous event
 
         def flush():
             if not span:
                 return
-            start = span[0][0]
+            start, rate = span[0][0], span[0][4]
             end = span[-1][0] + span[-1][1]
-            rel = [(n0 - start, midi) for n0, _, midi, _ in span]
+            rel = [(n0 - start, midi) for n0, _, midi, _, _ in span]
+            extra = {"rate": round(rate, 4)} if rate != 1.0 else {}
             self.add(clip, start, end - start, span[0][3], "sung", role, gain,
-                     notes=[[int(o), float(m)] for o, m in rel], tune=tune)
+                     notes=[[int(o), float(m)] for o, m in rel], tune=tune, **extra)
             span.clear()
 
         for b, length, midi in notes:
@@ -89,20 +96,53 @@ class Arrangement:
             dur = int(length * BEAT) - 300
             if span and start - (span[-1][0] + span[-1][1]) > BEAT // 4:
                 flush()  # a rest: the words pause and resume where they stopped
-            # inside one event the clip plays at 1x, so its read position is
-            # tied to output time; that is what keeps picture and sound together
-            here = span[0][3] + (start - span[0][0]) if span else pos
-            if here + dur > regions[ri][1]:  # this region is spent: continue with the next
+            if span and span[0][4] == 1.0:
+                pos = span[0][3] + (start - span[0][0])  # 1x inside an event keeps picture and sound tied
+            left = runs[ri][1] - pos
+            if left < 0.9 * dur:
+                if span or left < 0.4 * dur or left < 0.08 * SR:
+                    flush()
+                    ri = (ri + 1) % len(runs)
+                    pos = runs[ri][0]
+                    left = runs[ri][1] - pos
+            rate = 1.0 if left >= 0.9 * dur else max(0.3, left / dur)
+            if span and (rate != 1.0 or span[0][4] != 1.0):
                 flush()
-                ri = (ri + 1) % len(regions)
-                here = regions[ri][0]
             if span:  # legato: stretch the previous note to meet this one
                 prev = span[-1]
-                span[-1] = (prev[0], start - prev[0], prev[2], prev[3])
-            span.append((start, dur, midi, span[0][3] if span else here))
-            pos = here + dur
+                span[-1] = (prev[0], start - prev[0], prev[2], prev[3], prev[4])
+            span.append((start, dur, midi, span[0][3] if span else pos, rate))
+            pos += int(dur * rate)
+            if rate != 1.0:
+                flush()
         flush()
         return ri, pos
+
+    def guide_line(self, clip, notes, bar_offset, gain):
+        """The forced-melody layer: the singer's steadiest instant held and
+        retuned note by note, in its own timbre, under the moving words."""
+        src = self.voices[clip].steadiest()
+        group = []
+
+        def flush():
+            if not group:
+                return
+            start = group[0][0]
+            end = group[-1][0] + group[-1][1]
+            self.add(clip, start, end - start, src, "sung", "guide", gain,
+                     notes=[[int(n0 - start), float(m)] for n0, _, m in group], rate=0.04)
+            group.clear()
+
+        for b, length, midi in notes:
+            start = int((b + bar_offset * 4) * BEAT)
+            dur = int(length * BEAT) - 300
+            if group and start - (group[-1][0] + group[-1][1]) > BEAT // 4:
+                flush()
+            if group:
+                g = group[-1]
+                group[-1] = (g[0], start - g[0], g[2])
+            group.append((start, dur, midi))
+        flush()
 
     def sampled_line(self, clip, cursor, notes, bar_offset, gain, role, ref_midi):
         """For clips with no steady pitch (mumbles, noises): play them sampler-style,
@@ -148,9 +188,13 @@ def main():
     # a clip that is almost silent would only contribute amplified hiss
     usable = [i for i in range(n) if peaks[i] >= 0.03] or list(range(n))
 
-    # singers: clips that hold a pitch for a while; the top two trade phrases
-    singers = sorted((i for i in usable if voices[i].voiced_seconds() > 0.8),
-                     key=lambda i: -voices[i].voiced_seconds())[:2]
+    # singers: clips that hold a *steady* pitch; bells and noise make poor singers.
+    # A second singer trades phrases only if it is nearly as tuneful as the first.
+    candidates = sorted((i for i in usable if voices[i].voiced_seconds() > 0.5),
+                        key=lambda i: voices[i].pitch_spread())
+    singers = candidates[:1]
+    if len(candidates) > 1 and voices[candidates[1]].pitch_spread() < min(14.0, 1.5 * voices[candidates[0]].pitch_spread()):
+        singers.append(candidates[1])
     if not singers:
         singers = [max(usable, key=lambda i: voices[i].voiced_seconds())]
     lead = singers[0]
@@ -236,6 +280,7 @@ def main():
         s = singers[chunk % len(singers)]
         part = [(b, l, m) for b, l, m in sung[s] if chunk * 8 <= b < chunk * 8 + 8]
         cursors[s] = arr.sung_line(s, cursors[s], part, 4, 0.95, "melody")
+        arr.guide_line(s, part, 4, 0.75)
     bass_cursor = bass_part(bass_cursor, bass_notes, 4, 0.55)
     # chops answer in the gaps of bars 9-12, from clips that have not sung
     answer = [i for i in others if i not in singers] or others or [lead]
@@ -254,7 +299,9 @@ def main():
     # bars 15-16: climax — the hook again, full kit, everyone stutters at the end
     arr.drums(kit, 14, 16)
     s = singers[-1]
-    arr.sung_line(s, cursors[s], [(b, l, m) for b, l, m in sung[s] if b < 8], 14, 1.0, "melody")
+    hook = [(b, l, m) for b, l, m in sung[s] if b < 8]
+    arr.sung_line(s, cursors[s], hook, 14, 1.0, "melody")
+    arr.guide_line(s, hook, 14, 0.6)
     bass_part(bass_cursor, [(b, l, m) for b, l, m in bass_notes if b < 8], 14, 0.55)
     for k, i in enumerate(order):
         arr.stutter_head(i, 15 * BAR + 2 * BEAT + k * SIXTEENTH * 2 % (2 * BEAT), longest[i], times=2,
