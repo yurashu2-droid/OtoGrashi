@@ -568,6 +568,33 @@ def pulse_border(canvas, ctx, e, t, rect):
         outline=CLIP_COLORS[e.c % len(CLIP_COLORS)], width=width)
 
 
+HOLD = 0.3  # a full-frame picture never changes again sooner than this
+ACCENTS = ("phrase", "chop", "fx", "echo")  # sounds that punch the picture; melody notes do not
+
+
+def held(ctx, key, value, t, same=lambda a, b: a == b):
+    """`value`, unless it changed less than HOLD ago: then the previous one stays,
+    so a full frame never flickers to something else for a moment."""
+    store = ctx.__dict__.setdefault("_held", {})
+    old = store.get(key)
+    if old is None or t < old[1] or (not same(old[0], value) and t - old[1] >= HOLD):
+        store[key] = (value, t)
+        return value
+    if same(old[0], value):
+        store[key] = (value, old[1])
+        return value
+    return old[0]
+
+
+def steady_lead(ctx, t):
+    return held(ctx, "lead", lead_of(ctx, t), t, same=lambda a, b: a.c == b.c)
+
+
+def accent_punch(e, t, amount=0.14, length=0.12):
+    """Zoom punch on a spoken or chopped sound only; a sung line stays still."""
+    return punch(t - e.t, amount, length) if e.role in ACCENTS else 1.0
+
+
 def single(ctx, t, e, **kw):
     canvas = panel(ctx, e, t, W, H, soft=True, hold=BEAT / 2, **kw)
     voice_label(canvas, ctx, e, t, (0, 0, W, H), sum(v.c == e.c for v in ctx.voices(t)))
@@ -575,26 +602,26 @@ def single(ctx, t, e, **kw):
 
 
 def shot_full(ctx, t, seg):
-    lead = lead_of(ctx, t)
-    pitch = max(-3, min(6, (lead.midi or 60) - 60))
-    return single(ctx, t, lead, zoom=(1 + 0.04 * pitch / 6) * punch(t - lead.t))
+    lead = steady_lead(ctx, t)
+    return single(ctx, t, lead, zoom=accent_punch(lead, t))
 
 
 def shot_flip(ctx, t, seg):
     """Every melodic note cuts to a mirrored / shifted crop of the same face."""
-    lead = lead_of(ctx, t)
+    lead = steady_lead(ctx, t)
     notes = len(ctx.onsets_between(seg[0], t + 1e-6, lambda e: e.kind != "rhythm"))
-    return single(ctx, t, lead, zoom=1.08 * punch(t - lead.t, 0.1),
-                  mirror=notes % 2 == 1, dx=0.04 * (notes % 3 - 1))
+    mirror, dx = held(ctx, "flip", (notes % 2 == 1, 0.04 * (notes % 3 - 1)), t)
+    return single(ctx, t, lead, zoom=1.08 * accent_punch(lead, t, 0.1), mirror=mirror, dx=dx)
 
 
 def shot_stutter(ctx, t, seg):
     """Each new sound re-cuts to a tighter crop of the lead face."""
-    lead = lead_of(ctx, t)
+    lead = steady_lead(ctx, t)
     # one step per 16th-note slot that starts a sound (a note's attack and body count once)
     step = len({round(e.t / (BEAT / 2)) for e in ctx.onsets_between(seg[0], t + 1e-6)
                 if e.role != "guide"})
-    return single(ctx, t, lead, zoom=(1 + 0.12 * (step % 4)) * punch(t - lead.t, 0.08))
+    step = held(ctx, "step", step % 4, t)
+    return single(ctx, t, lead, zoom=(1 + 0.12 * step) * accent_punch(lead, t, 0.08))
 
 
 def voice_layout(n):
@@ -746,6 +773,8 @@ def shot_cutout(ctx, t, seg):
     canvas = Image.new("RGBA", (W, H), (*bg, 255))
     live = ctx.voices(t)
     lead = lead_of(ctx, t)
+    if not getattr(ctx.sources[lead.c], "has_subject", True):
+        return shot_full(ctx, t, seg)
     if not live and t - lead.end_t > 0.12:
         return canvas.convert("RGB")
     close = False  # the close-up with clones read as a blur of big shapes; full figure only
@@ -845,10 +874,11 @@ def flipped(im, k):
 def shot_mirror(ctx, t, seg):
     """Loops read as reflections: each repeat of the same chop flips the picture,
     and stacked voices of one sound become a symmetric pair or a four-way mirror."""
-    lead = lead_of(ctx, t)
+    lead = steady_lead(ctx, t)
     same = [e for e in ctx.voices(t) if e.c == lead.c]
-    k = repeat_index(ctx, lead)
-    zoom = 1.06 * punch(t - lead.t, 0.1)
+    # only repeated chops flip the picture, and never faster than HOLD
+    k = held(ctx, "mirror", repeat_index(ctx, lead) % 4 if lead.role in ACCENTS else 0, t)
+    zoom = 1.06 * accent_punch(lead, t, 0.1)
     if len(same) >= 3:
         q = panel(ctx, lead, t, W / 2, H / 2, zoom=zoom)
         canvas = Image.new("RGB", (W, H))
@@ -1187,6 +1217,15 @@ def cover_title(ctx, canvas):
     shadow.putalpha(card.getchannel("A").point(lambda v: v * 0.4))
     canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(14)), (46, 172))
     canvas.alpha_composite(card, (40, 160))
+    # the cast as round face stickers, overlapping a little like a group photo
+    cast = ctx.heard
+    n = len(cast)
+    disc = 118 if n <= 4 else 96
+    step = min(disc + 14, (W - 120) // max(1, n))
+    x0 = (W - 70 - (step * (n - 1) + disc)) // 2
+    for k, c in enumerate(cast):
+        face = face_disc(ctx, c, disc).rotate((-6, 4, -3, 6, -5, 3)[k % 6], expand=True, resample=Image.BICUBIC)
+        canvas.alpha_composite(face, (x0 + k * step, 420 + (12 if k % 2 else 0)))
     return canvas
 
 
@@ -1275,7 +1314,11 @@ def sticker_moment(ctx, e, t, intro_end):
     if after:
         b = t - intro_end
         scale *= 0.9 + 0.1 * overshoot(b / 0.3)
-        tilt = -3 * min(1.0, b / 0.2)
+        kick = ctx.last_onset(t, lambda k: k.role == "kick" and k.t >= intro_end)
+        if kick:
+            scale *= 1 + 0.05 * max(0.0, 1 - (t - kick.t) / 0.15)
+        beat = int((t - intro_end) / BEAT)
+        tilt = -3 * min(1.0, b / 0.2) if beat == 0 else (3 if beat % 2 else -3)
     if scale < 0.999:
         piece = piece.resize((int(piece.width * scale), int(piece.height * scale)), Image.BILINEAR)
     if tilt:
@@ -1315,10 +1358,9 @@ def director_frame(ctx, t, plan, hud):
     posts = feed_posts(ctx, intro_end)
     if posts and t < intro_end:
         return feed_frame(ctx, t, posts, intro_end)
-    if posts:
-        accent = accent_after_feed(ctx, posts[-1][0], intro_end)
-        if accent and t < accent.end_t:
-            return sticker_moment(ctx, posts[-1][0], t, intro_end)
+    if posts and t < intro_end + BAR and accent_after_feed(ctx, posts[-1][0], intro_end):
+        # the sticker holds the first bar of the song instead of a board of drum hits
+        return sticker_moment(ctx, posts[-1][0], t, intro_end)
     shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
     long_run = any(len(r) >= 4 and r[0].t <= t < r[-1].end_t + 0.3 for r in ctx.runs)
     if long_run and shot in ("cutout", "sticker"):
