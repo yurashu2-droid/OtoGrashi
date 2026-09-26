@@ -330,10 +330,11 @@ def repeat_moment(canvas, ctx, t):
         return canvas
     base = ImageEnhance.Brightness(canvas).enhance(0.7).convert("RGBA")
     size = H * 0.34
-    step = W * 0.36
-    # the strip slides from the previous newest to the new one in a tenth of a second
+    step = W * 0.2  # neighbours overlap heavily, like a row of clones
+    # the strip slides to the new still and settles before the next hit arrives
     k = len(shown) - 1
-    glide = ease_out((t - shown[k].t) / 0.1)
+    gap = shown[k].t - shown[k - 1].t
+    glide = ease_out((t - shown[k].t) / max(1 / 60, min(0.1, 0.8 * gap)))
     centre = step * (k - 1 + glide)
     offset = W / 2 - centre
     for i, e in enumerate(shown):
@@ -688,12 +689,25 @@ def shot_sticker(ctx, t, seg):
     other sounds, the scenery swapping on every beat."""
     lead = lead_of(ctx, t)
     others = sorted({e.c for e in ctx.events if e.t <= t and e.c != lead.c and e.role != "guide"}) or [lead.c]
-    pick = others[int(t / BEAT) % len(others)]  # a new scene on every beat
-    src = ctx.sources[pick]
-    still = src.frames[len(src.frames) // 2]
-    drift = 1.06 + 0.04 * ((t / BEAT) % 1)
-    bg = cover(still, W, H, zoom=drift).filter(ImageFilter.GaussianBlur(14))
-    bg = ImageEnhance.Brightness(bg).enhance(0.85).convert("RGBA")
+    beat = int(t / BEAT)
+
+    def scene(n, age):
+        src = ctx.sources[others[n % len(others)]]
+        still = src.frames[len(src.frames) // 2]
+        drift = 1.06 + 0.04 * min(1, age / BEAT)
+        img = cover(still, W, H, zoom=drift).filter(ImageFilter.GaussianBlur(14))
+        return ImageEnhance.Brightness(img).enhance(0.85).convert("RGBA")
+
+    # a new scene on every beat, rising from the bottom over the previous one
+    since = t - beat * BEAT
+    bg = scene(beat, since)
+    rise = ease_out(since / 0.28)
+    if beat > 0 and rise < 1:
+        old = scene(beat - 1, since + BEAT)
+        top = int(H * (1 - rise))
+        old.paste(bg.crop((0, top, W, H)), (0, top))
+        ImageDraw.Draw(old).rectangle((0, top - 3, W, top + 3), fill=(255, 255, 255, 180))
+        bg = old
     if not ctx.voices(t) and t - lead.end_t > 0.12:
         return bg.convert("RGB")
     bounce = 1 - min(1, (t - lead.t) / 0.12)
