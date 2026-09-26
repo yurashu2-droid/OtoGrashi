@@ -76,6 +76,7 @@ final class VideoRendererTests: XCTestCase {
     let modes = fullChecks
       ? ["mad", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"]
       : ["mad", "mosaic"]
+    print("MAD_CHECK full=\(fullChecks) modes=\(modes)")
     for mode in modes {
       let requestURL = directory.appendingPathComponent("native-\(mode).json")
       // Missing fixtures are a failure, not a silently skipped feature test.

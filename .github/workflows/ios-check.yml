@@ -94,13 +94,11 @@ jobs:
           set -o pipefail
           flutter test 2>&1 | tee ci-logs/test.txt
 
-      - name: Prepare iOS Simulator build
+      - name: Build unsigned iOS Simulator app
         shell: bash
         run: |
-          # xcodebuild test compiles the app itself; Flutter only needs to
-          # generate its configuration and install pods first.
           set -o pipefail
-          flutter build ios --simulator --debug --config-only 2>&1 | tee ci-logs/ios-simulator-build.txt
+          flutter build ios --simulator --debug 2>&1 | tee ci-logs/ios-simulator-build.txt
 
       - name: Run native tests on an installed iPhone simulator
         shell: bash
@@ -183,7 +181,14 @@ jobs:
           summarize analyze 'error|warning|info|•|issues? found'
           summarize test '\[E\]|Expected:|Actual:|Error:|Exception|FAILED|Some tests failed|All tests passed'
           summarize ios-simulator-build 'error:|Error'
-          summarize xctest 'error:|failed|Executed|TEST SUCCEEDED|TEST FAILED|XCTAssert'
+          summarize xctest 'error:|failed|Executed|TEST SUCCEEDED|TEST FAILED|XCTAssert|MAD_CHECK'
+          # the slowest native tests, so the check can be kept short
+          if [ -f ci-logs/xctest.txt ]; then
+            slow="$( (grep -oE "Test Case '-\[RunnerTests\.[A-Za-z]+ [A-Za-z0-9_]+\]' (passed|skipped|failed) \([0-9.]+ seconds\)" ci-logs/xctest.txt || true) \
+              | sed -E "s/Test Case '-\[RunnerTests\.([A-Za-z]+) ([A-Za-z0-9_]+)\]' ([a-z]+) \(([0-9.]+) seconds\)/\4s \3 \1.\2/" \
+              | sort -rn | head -15)"
+            [ -z "$slow" ] || echo "::notice title=slowest native tests::${slow//$'\n'/'%0A'}"
+          fi
 
       - name: Upload validation evidence
         if: always()
