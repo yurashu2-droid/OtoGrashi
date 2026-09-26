@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -173,6 +174,7 @@ final class CreationController extends ChangeNotifier {
   /// recipe arranged from now on.
   String? ownerName;
   CreationState _state = const CreationState();
+  final math.Random _random = math.Random();
   Future<void> _mutationTail = Future<void>.value();
   final Map<String, _CachedAnalysis> _analysisCache = {};
   Timer? _previewRenderTimer;
@@ -265,10 +267,13 @@ final class CreationController extends ChangeNotifier {
     ++_requestVersion;
     _clearAnalysisCache();
     try {
+      final fresh = _state.project == null;
       final current =
           _state.project ??
           await projects.create(_state.relayPending ? 'みんなの音' : '今日の音');
       if (_disposed) return;
+      // every new piece draws its own effects and shots
+      if (fresh) _set(_state.copyWith(seed: _random.nextInt(1 << 30) + 1));
       final clips = <ClipAsset>[..._state.clips, asset];
       final updated = current.copyWith(
         revision: current.revision + 1,

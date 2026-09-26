@@ -1830,6 +1830,7 @@ final class MadDirector {
   let heard: [Int]
   private var masks: [String: MadMask?] = [:]
   private var subjects: [Int: Bool] = [:]
+  private var figures: [Int: Bool] = [:]
   /// Whose everyday this is, for the cover.
   let owner: String
   /// The introductions play as a feed of posts until here; the song proper
@@ -2131,7 +2132,7 @@ final class MadDirector {
     case .flip:
       // a face flips on every note; a landscape only flickers, so it keeps still
       let notes = events.filter { $0.start >= segmentStart && $0.start <= s && ($0.role == "melody" || $0.role == "phrase") && $0.pitched }.count
-      if await hasSubject(lead.clip, image: image) {
+      if await hasFigure(lead.clip, image: image) {
         mirror = notes % 2 == 1
         dx = 0.04 * CGFloat(notes % 3 - 1)
       }
@@ -2154,7 +2155,7 @@ final class MadDirector {
     let lead = steadyLead(s)
     let same = voices(s).filter { $0.clip == lead.clip }
     // a face flips on each repeat, as fast as the loop; a landscape is never flipped
-    let repeats = await hasSubject(lead.clip, image: image) ? repeatIndex(lead) : 0
+    let repeats = await hasFigure(lead.clip, image: image) ? repeatIndex(lead) : 0
     let zoom = 1.06 * accentPunch(lead, s, 0.1)
     let flips = [(false, false), (true, false), (false, true), (true, true)]
     var canvas = CIImage(color: .black).cropped(to: CGRect(x: 0, y: 0, width: W, height: H))
@@ -2395,6 +2396,22 @@ final class MadDirector {
     }
     let result = count > 0 && votes * 2 >= count
     subjects[clip] = result
+    return result
+  }
+
+  /// Whether the clip shows someone or something at all (a face filling the
+  /// frame counts); only a bare landscape answers no. Flips follow this, since
+  /// a mirrored face reads clearly and a mirrored landscape only flickers.
+  private func hasFigure(_ clip: Int, image: (MadVideoEvent, Int) async throws -> CIImage) async -> Bool {
+    if let known = figures[clip] { return known }
+    var votes = 0, count = 0
+    for e in (events + backing).filter({ $0.clip == clip }).prefix(3) {
+      guard let picture = try? await image(e, e.start) else { continue }
+      count += 1
+      if let m = mask(e, e.start, picture: picture), m.coverage > 0.05 { votes += 1 }
+    }
+    let result = count > 0 && votes * 2 >= count
+    figures[clip] = result
     return result
   }
 
@@ -2824,7 +2841,14 @@ final class MadDirector {
 /// Deterministic generator so the same seed always edits the same video.
 struct SeededRandom {
   private var state: UInt64
-  init(seed: UInt64) { state = seed == 0 ? 0x2545F4914F6CDD1D : seed }
+  init(seed: UInt64) {
+    // splitmix64 first, so neighbouring seeds (1, 2, 3...) start far apart
+    var z = seed &+ 0x9E3779B97F4A7C15
+    z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+    z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+    z ^= z >> 31
+    state = z == 0 ? 0x2545F4914F6CDD1D : z
+  }
   mutating func nextRaw() -> UInt64 {
     state ^= state << 13
     state ^= state >> 7
