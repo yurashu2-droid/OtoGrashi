@@ -24,6 +24,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
+sys.path.insert(0, str(Path(__file__).parent))
+from lab_fx import apply_master, gate_envelope, has_motion_fx, positions, video_post, video_time  # noqa: E402
+
 import imageio_ffmpeg
 
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
@@ -116,6 +119,13 @@ class Event:
         self.tune = raw.get("tune", 1.0)
         self.ref = raw.get("refMidi")  # syllable events keep their own contour
         self.rate = raw.get("rate")  # sampler-style speed change (drums)
+        # MAD effects (see lab_fx.py); the picture reads the same positions as the sound
+        self.glide = raw.get("glide")
+        self.reverse = raw.get("reverse", False)
+        self.scratch = raw.get("scratch")
+        self.scratch_period = raw.get("scratchPeriod")
+        self.gate = raw.get("gate")
+        self._pos = None
         self.src_start = raw["sourceStartSample"]
         self.src_dur = raw.get("sourceDurationSamples") or raw["durationSamples"]
         self.gain = raw["gain"]
@@ -130,13 +140,18 @@ class Event:
 
     def source_sample(self, t, src: Source):
         """Source position for output time t: loops the event's source window."""
-        offset = int((t - self.t) * SR * (self.rate or 1.0))
+        if has_motion_fx(self):
+            if self._pos is None:
+                self._pos = positions(self, max(1, self.dur))
+            i = min(max(0, int((t - self.t) * SR)), len(self._pos) - 1)
+            return int(min(max(self._pos[i], 0), src.samples - 1))
+        offset = int((t - self.t) * SR)
         window = max(SPF, min(self.src_dur, src.samples))
         start = self.src_start % max(1, src.samples - window + 1)
         return start + offset % window
 
 
-def render_audio(events, sources, total, source_pitch=None, master=True):
+def render_audio(events, sources, total, source_pitch=None, master=True, fx=None):
     """source_pitch: measured MIDI pitch per clip index. Without it the legacy
     recipes keep a gentle ±semitone range around middle C."""
     mix = np.zeros(total, np.float32)
@@ -152,9 +167,9 @@ def render_audio(events, sources, total, source_pitch=None, master=True):
                 voices[e.c] = Voice(src.pcm)
             buf = sing(voices[e.c], e.src_start, e.dur, e.notes, e.tune, e.rate or 1.0,
                        accent=e.ref is None, ref=e.ref)
-        elif e.rate:
-            pos = e.src_start + np.arange(e.dur) * e.rate  # picture follows the same speed
-            buf = np.interp(pos, np.arange(src.samples), src.pcm, right=0.0).astype(np.float32)
+        elif has_motion_fx(e):
+            pos = positions(e, e.dur)  # the picture follows the same positions
+            buf = np.interp(pos, np.arange(src.samples), src.pcm, left=0.0, right=0.0).astype(np.float32)
             if e.role == "kick":
                 buf *= np.exp(-np.arange(e.dur) / (0.07 * SR)).astype(np.float32)
         elif e.kind == "tuned" and e.midi:
@@ -167,6 +182,8 @@ def render_audio(events, sources, total, source_pitch=None, master=True):
         else:
             reps = int(math.ceil(e.dur / len(chunk)))
             buf = np.tile(chunk, reps)[:e.dur].copy()
+        if e.gate:
+            buf = buf * gate_envelope(len(buf), e.gate)
         n = len(buf)
         fi, fo = min(e.fade_in, n // 2), min(max(e.fade_out, 240), n // 2)
         if fi:
@@ -181,6 +198,7 @@ def render_audio(events, sources, total, source_pitch=None, master=True):
         e.env = padded.reshape(blocks, SPF).max(axis=1)
     if not master:  # raw sum, for measuring stems against each other
         return mix
+    mix = apply_master(mix, fx)
     mix = np.tanh(mix * 1.4)
     mix *= 0.89 / max(1e-6, np.abs(mix).max())
     return mix
@@ -759,7 +777,8 @@ def main():
     events = [Event(raw, order.index(raw["assetId"]), i) for i, raw in enumerate(arrangement["events"])]
     total = arrangement["totalSamples"]
     pitch = arrangement.get("sourcePitch")
-    audio = render_audio(events, sources, total, [pitch[i] for i in order] if pitch else None)
+    master_fx = arrangement.get("fx")
+    audio = render_audio(events, sources, total, [pitch[i] for i in order] if pitch else None, fx=master_fx)
     wav_path = out_dir / "mix.wav"
     with wave.open(str(wav_path), "wb") as wf:
         wf.setnchannels(1)
@@ -781,7 +800,8 @@ def main():
                                  "-c:a", "aac", "-b:a", "160k", "-shortest", str(out)], stdin=subprocess.PIPE)
         for f in range(frames):
             t = f / FPS
-            img = director_frame(ctx, t, plan, hud)
+            img = director_frame(ctx, video_time(t, master_fx), plan, hud)
+            img = video_post(img, t, master_fx)
             img = draw_op(img, ctx, t, look)
             img = draw_ed(img, ctx, t, look)
             proc.stdin.write(img.convert("RGB").tobytes())

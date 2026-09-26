@@ -26,6 +26,7 @@ BEAT = 22_500
 BAR = BEAT * 4
 SIXTEENTH = BEAT // 4
 BARS = 16
+SEED = int(__import__("os").environ.get("OTO_SEED", "5"))  # picks the effects per slot
 FLATTEN = float(__import__("os").environ.get("OTO_FLATTEN", "0.6"))  # 0 natural glide … 1 flat
 GUIDE = float(__import__("os").environ.get("OTO_GUIDE", "0"))  # forced-melody layer, 0 = off
 
@@ -156,6 +157,46 @@ class Arrangement:
                 self.add(clip, start + hit, rest, src, "sung", role, gain, notes=[[0, float(midi)]], **extra)
             k += 1
         return (k % len(syl), pos)
+
+    # -- MAD effects (rendered by lab_fx.py) -----------------------------------
+
+    def fx_roll(self, clip, end, syllable, gain=0.8):
+        """Build-up roll into `end`: 8ths, then 16ths, then 32nds, pitch rising a fifth."""
+        hits, t = [], end - 2 * BEAT
+        for length, step in ((BEAT, BEAT // 2), (BEAT // 2, BEAT // 4), (BEAT // 2, BEAT // 8)):
+            for k in range(length // step):
+                hits.append((t + k * step, step))
+            t += length
+        for i, (at, step) in enumerate(hits):
+            rate = 2 ** (7 * i / max(1, len(hits) - 1) / 12)
+            self.add(clip, at, int(step * 0.8), syllable[0], "rhythm", "fx", gain * (0.6 + 0.4 * i / len(hits)),
+                     rate=round(rate, 4))
+
+    def fx_riser(self, clip, end, region, beats=4, gain=0.55):
+        """A long sound pushed up an octave over `beats`, speeding up as it climbs."""
+        dur = beats * BEAT
+        self.add(clip, end - dur, dur, region[0], "rhythm", "fx", gain, rate=0.7, glide=12)
+        self.events[-1]["fades"] = {"fadeInSamples": dur // 2, "fadeOutSamples": 480}
+
+    def fx_reverse(self, clip, end, region, beats=1.5, gain=0.8):
+        """The phrase played backwards, swelling into the downbeat (sucked in)."""
+        dur = min(int(beats * BEAT), region[1] - region[0])
+        self.add(clip, end - dur, dur, region[0], "rhythm", "fx", gain, reverse=True)
+        self.events[-1]["fades"] = {"fadeInSamples": int(dur * 0.85), "fadeOutSamples": 240}
+
+    def fx_scratch(self, clip, start, syllable, beats=2, gain=0.8):
+        """Rub a syllable back and forth on 8th notes like a record under a hand."""
+        self.add(clip, start, beats * BEAT, syllable[0], "rhythm", "fx", gain,
+                 scratch=round(min(0.2, (syllable[1] - syllable[0]) / SR), 3), scratchPeriod=BEAT // 2)
+
+    def fx_stabs(self, clip, syllable, ref, bar_from, bars, root, gain=0.22):
+        """Off-beat power chords (root, fifth, octave) cut from one syllable."""
+        for bar in range(bar_from, bar_from + bars):
+            for beat in range(4):
+                at = bar * BAR + beat * BEAT + BEAT // 2
+                for interval in (0, 7, 12):
+                    self.add(clip, at, int(0.16 * SR), syllable[0], "sung", "stab", gain,
+                             notes=[[0, float(root + interval)]], refMidi=round(ref, 2), tune=0.8)
 
     def guide_line(self, clip, notes, bar_offset, gain):
         """Off when gain is 0.
@@ -349,9 +390,50 @@ def main():
         arr.stutter_head(i, 15 * BAR + 2 * BEAT + k * SIXTEENTH * 2 % (2 * BEAT), longest[i], times=2,
                          step=SIXTEENTH, gain=0.7)
 
+    # MAD effects at the song's turning points; the seed picks one option per slot
+    rng = np.random.default_rng(SEED)
+    choose = lambda options: options[int(rng.integers(len(options)))]
+    syl = {i: (voices[i].syllables() or [(a, b, None) for a, b in voices[i].regions]) for i in range(n)}
+    long_clip = max(usable, key=lambda i: longest[i][1] - longest[i][0])
+    master, used = [], []
+    into_melody = choose(["roll", "riser", "reverse"])
+    into_break = choose(["tapestop", "scratch"])
+    in_break = choose(["sweep", "gate"])
+    into_climax = choose(["roll", "reverse", "riser"])
+    for slot, end in ((into_melody, 4 * BAR), (into_climax, 14 * BAR)):
+        if slot == "roll":
+            arr.fx_roll(lead, end, syl[lead][0])
+        elif slot == "riser":
+            arr.fx_riser(long_clip, end, longest[long_clip])
+        else:
+            arr.fx_reverse(lead, end, longest[lead])
+        used.append(slot)
+    if into_break == "tapestop":
+        master.append({"type": "tapestop", "start": 12 * BAR - BEAT, "dur": BEAT})
+    else:
+        arr.fx_scratch(lead, 12 * BAR - 2 * BEAT, syl[lead][0])
+    used.append(into_break)
+    if in_break == "sweep":
+        master.append({"type": "sweep", "start": 12 * BAR, "dur": 2 * BAR})
+    else:
+        for e in arr.events:
+            if e["role"] == "phrase" and 12 * BAR <= e["destinationStartSample"] < 13 * BAR:
+                e["gate"] = 4
+    used.append(in_break)
+    if rng.random() < 0.6:
+        stab_clip = next((i for i in usable if i not in singers and any(m for _, _, m in syl[i])), None)
+        if stab_clip is not None:
+            s0 = next(x for x in syl[stab_clip] if x[2] is not None)
+            root = bass_notes[0][2] + 12
+            arr.fx_stabs(stab_clip, s0, s0[2], 8, 2, root)
+            used.append("stabs")
+    if rng.random() < 0.6:
+        arr.fx_scratch(lead, 15 * BAR, syl[lead][0], beats=2, gain=0.6)
+        used.append("scratch-fill")
+
     arr.events.sort(key=lambda e: e["destinationStartSample"])
     recipe = {"arrangement": {"totalSamples": BARS * BAR, "sourceAssetIds": [f"clip-{i}" for i in range(n)],
-                              "events": arr.events, "title": score["title"],
+                              "events": arr.events, "title": score["title"], "fx": master,
                               # lets the video director follow the song's own structure
                               "sections": [[0, 2, "calm"], [2, 4, "mid"], [4, 8, "mid"], [8, 12, "high"],
                                            [12, 14, "calm"], [14, 16, "high"]]}}
@@ -359,6 +441,7 @@ def main():
     roles = {}
     for e in arr.events:
         roles[e["role"]] = roles.get(e["role"], 0) + 1
+    print("fx:", " / ".join(used))
     print(f"lead={names[lead]} bass={names[bass]} shift={shift} kit={ {k: names[v[0]] for k, v in kit.items()} }",
           roles, flush=True)
 
