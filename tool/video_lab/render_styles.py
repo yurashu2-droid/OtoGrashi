@@ -798,30 +798,21 @@ def shot_cutout(ctx, t, seg):
     hits = sorted((e for e in ctx.events if e.c == lead.c and e.role != "guide" and e.kind != "sung"
                    and beat_start <= e.t <= t), key=lambda e: e.t)[:5] or [lead]
     fall = drop_in(t - appeared_at(ctx, t), height)
-    base_x = W * (0.5 if close else 0.36)
+    base_x = W * (0.5 if close else 0.46)
     pieces = []
     for i, e in enumerate(hits):
         at = t if e.active(t) else e.t  # clones hold the pose of their own hit
         piece = cutout(ctx, e, at, height, close=close, max_width=W * (0.9 if close else 0.75), outline=8)
         if piece is not None:
             pieces.append((i, e, piece))
+    # the eye stays on the figure in front, so it steps left each time a clone
+    # arrives: the growth reads where you are looking, not only at the edge
+    arrived = [ease_out((t - e.t) / 0.12) for i, e, _ in pieces if i > 0]
+    step_left = sum(arrived) * W * 0.07
     # draw back to front: later clones sit behind and to the right of earlier ones
     for i, e, piece in reversed(pieces):
-        age = t - e.t
-        if i == 0 and not fall:
-            # the front figure lands on its hit: a springy pop and a small hop,
-            # so a new beat never just swaps the picture
-            scale = 0.84 + 0.16 * overshoot(age / 0.2)
-            hop = -height * 0.05 * math.sin(math.pi * min(1.0, age / 0.2))
-            piece = piece.resize((max(1, int(piece.width * scale)), max(1, int(piece.height * scale))),
-                                 Image.BILINEAR)
-            x = int(base_x - piece.width / 2)
-            canvas.alpha_composite(piece, (x, int(H * 0.99 - piece.height + hop)))
-            continue
-        # a clone slides out from behind the figure in front of it
-        slide = ease_out(age / 0.12)
-        x = int(base_x - piece.width / 2 + (i - 1 + slide) * piece.width * 0.25) if i else \
-            int(base_x - piece.width / 2)
+        slide = ease_out((t - e.t) / 0.12) if i else 1.0  # a clone slides out from behind
+        x = int(base_x - step_left - piece.width / 2 + max(0.0, i - 1 + slide) * piece.width * 0.25)
         canvas.alpha_composite(piece, (x, int(H * 0.99 - piece.height + fall)))
     d = ImageDraw.Draw(canvas)
     for j, ch in enumerate(ctx.names[lead.c][:10]):
@@ -1220,21 +1211,47 @@ def reverse_turntable(ctx, e, t):
 
 
 def reverse_vhs(ctx, e, t):
-    """The clip itself rewinding on tape: scan lines, a tracking band and ◀◀."""
-    frame = cover(ctx.frame(e, t), W, H)
-    jitter = int(6 * np.sin(t * 90))
-    img = Image.new("RGB", (W, H))
-    img.paste(frame, (jitter, 0))
-    arr = np.asarray(img).astype(np.float32)
-    arr[::3] *= 0.72  # scan lines
-    band = int((t * 900) % (H + 120)) - 60
-    lo, hi = max(0, band), min(H, band + 40)
-    if hi > lo:
-        arr[lo:hi] = arr[lo:hi] * 0.6 + 90 + np.random.default_rng(int(t * 30)).random((hi - lo, W, 1)) * 60
+    """The clip itself rewinding on tape: colour fringes, rows wobbling and
+    tearing at the bottom, rolling noise bars, a blinking ◀◀ and a counter
+    running backwards. Everything grows with the swell."""
+    u = min(1.0, max(0.0, (t - e.t) / max(1e-3, e.end_t - e.t)))
+    strength = 0.55 + 0.45 * u
+    rng = np.random.default_rng(int(t * 30) + 7)
+    arr = np.asarray(cover(ctx.frame(e, t), W, H), np.float32)
+    grey = arr.mean(axis=2, keepdims=True)
+    arr = arr * 0.65 + grey * 0.35  # tape colour, a little washed out
+    arr = (arr - 128) * 1.15 + 128
+    # rows wobble sideways; the bottom of the picture tears to the right
+    rows = np.arange(H)
+    shift = (np.sin(rows * 0.045 + t * 55) * 7 * strength).astype(int)
+    tear = rows > H * 0.86
+    shift[tear] += ((rows[tear] - H * 0.86) * 0.9 * strength).astype(int)
+    shift += int(rng.integers(-3, 4))
+    idx = (np.arange(W)[None, :] - shift[:, None]) % W
+    arr = arr[rows[:, None], idx]
+    # colour fringes: red one way, blue the other
+    off = int(6 + 8 * strength)
+    arr[:, :, 0] = np.roll(arr[:, :, 0], -off, axis=1)
+    arr[:, :, 2] = np.roll(arr[:, :, 2], off, axis=1)
+    arr[::3] *= 0.7  # scan lines
+    # noise bars rolling upwards, faster as it rewinds harder
+    for k in range(3):
+        y = int((H + 200) - ((t * (700 + 500 * u) + k * 520) % (H + 200)))
+        lo, hi = max(0, y), min(H, y + 18 + 26 * k)
+        if hi > lo:
+            snow = rng.random((hi - lo, W, 1)) * 170
+            arr[lo:hi] = arr[lo:hi] * 0.35 + snow + 50
+    speck = rng.random((H, W)) > 0.9975  # white dropouts
+    arr[speck] = 255
     img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    soft_text(layer, (44, 70), "◀◀", font(FONT_BOLD, 64), (255, 255, 255), 255)
-    soft_text(layer, (160, 82), "REW", font(FONT_BOLD, 44), (255, 255, 255), 255)
+    if int(t * 4) % 2 == 0:  # the ◀◀ blinks
+        soft_text(layer, (40, 64), "◀◀", font(FONT_BOLD, 76), (255, 255, 255), 255)
+    soft_text(layer, (178, 80), "REW", font(FONT_BOLD, 52), (255, 255, 255), 255)
+    # the tape counter runs backwards
+    back = max(0.0, 7.0 - (t - e.t) * 9)
+    counter = f"-0:{int(back // 60):02d}:{int(back % 60):02d}.{int(back * 30) % 30:02d}"
+    soft_text(layer, (44, 158), counter, font(FONT_BOLD, 40), (255, 255, 255), 235)
     return Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB")
 
 
