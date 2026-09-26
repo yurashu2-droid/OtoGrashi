@@ -329,7 +329,7 @@ def repeat_runs(events):
     return [r for r in runs if len(r) >= 2]
 
 
-def repeat_moment(canvas, ctx, t, dim=True, scale=1.0, y_at=0.42):
+def repeat_moment(canvas, ctx, t, dim=True):
     """While a sound repeats, a still captured at each hit joins a strip.
 
     Every still keeps its size and its place relative to the others once laid;
@@ -351,8 +351,8 @@ def repeat_moment(canvas, ctx, t, dim=True, scale=1.0, y_at=0.42):
         return canvas
     # footage behind the strip steps back; a plain ground stays as it is
     base = (ImageEnhance.Brightness(canvas).enhance(0.7) if dim else canvas).convert("RGBA")
-    size = H * 0.42 * scale
-    step = W * 0.2 * scale  # neighbours overlap heavily, like a row of clones
+    size = H * 0.42
+    step = W * 0.2  # neighbours overlap heavily, like a row of clones
     # the strip slides to the new still and settles before the next hit arrives
     k = len(shown) - 1
     gap = max(BEAT / 4, shown[k].t - shown[k - 1].t) if k else BEAT / 4
@@ -393,7 +393,7 @@ def repeat_moment(canvas, ctx, t, dim=True, scale=1.0, y_at=0.42):
         else:
             drop = 0.0
         piece = piece.rotate(tilt, expand=True, resample=Image.BICUBIC)
-        y = H * y_at + (18 if i % 2 else -18) * scale + drop
+        y = H * 0.42 + (18 if i % 2 else -18) + drop
         base.alpha_composite(piece, (int(x - piece.width / 2), int(y - piece.height / 2)))
     return base.convert("RGB")
 
@@ -1530,8 +1530,8 @@ def director_frame(ctx, t, plan, hud):
         # the swell is what you hear, so its backwards run is the ground under the scene
         canvas = REVERSE_LOOKS[look](ctx, rev, t)
         if long_run:
-            # the repeats stay, smaller and low, so the backwards run reads above them
-            canvas = repeat_moment(canvas, ctx, t, dim=False, scale=0.55, y_at=0.8)
+            # the repeats keep their usual size, spacing and place over it
+            canvas = repeat_moment(canvas, ctx, t, dim=False)
         return canvas
     if long_run and shot in ("cutout", "sticker"):
         # a roll is the moment: show its strip on a clean ground instead of the clones
