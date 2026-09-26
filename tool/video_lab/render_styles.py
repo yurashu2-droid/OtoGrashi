@@ -631,6 +631,18 @@ def cutout(ctx, e, t, height, close=False, outline=0, max_width=W * 0.8):
     if outline:
         # pad first so the white edge is not clipped at the cut-out's bounding box
         a = ImageOps.expand(piece.getchannel("A"), outline, 0).filter(ImageFilter.MaxFilter(outline * 2 + 1))
+        # where the subject runs off the edge of the shot there is no outline to draw
+        fw, fh = frame.size
+        edge_a = np.asarray(a).copy()
+        if box[0] <= 2:
+            edge_a[:, :outline + 2] = 0
+        if box[2] >= fw - 2:
+            edge_a[:, -outline - 2:] = 0
+        if box[1] <= 2 and not close:
+            edge_a[:outline + 2, :] = 0
+        if box[3] >= fh - 2 and not close:
+            edge_a[-outline - 2:, :] = 0
+        a = Image.fromarray(edge_a)
         board = Image.new("RGBA", a.size, (255, 255, 255, 255))
         board.putalpha(a.filter(ImageFilter.GaussianBlur(1)))
         board.alpha_composite(piece, (outline, outline))
@@ -638,13 +650,35 @@ def cutout(ctx, e, t, height, close=False, outline=0, max_width=W * 0.8):
     return piece
 
 
-def shot_cutout(ctx, t, seg):
-    """Flat pastel ground, the subject cut out and cloned on repeats.
+def appeared_at(ctx, t, gap=0.15):
+    """When the figure last came back after at least `gap` seconds of silence."""
+    def visible(x):
+        return bool(ctx.voices(x)) or any(0 <= x - e.end_t < 0.12 for e in ctx.voices(x - 0.12))
+    x = t
+    while x > t - 2 and visible(x - 1 / 30):
+        x -= 1 / 30
+    return x
 
-    - one clone per hit of the lead sound within the last beat, trailing left,
-      older clones fainter (a repeated sound reads as a row of the same figure)
-    - silence leaves the empty ground: the figure only exists while it sounds
-    - each bar switches between full figure, close-up and a jump
+
+def drop_in(age, height):
+    """Falls in from above in ~0.1 s (accelerating), then a small landing hop."""
+    if age < 0.1:
+        u = age / 0.1
+        return -height * 0.6 * (1 - u * u)
+    if age < 0.22:
+        return -height * 0.03 * math.sin(math.pi * (age - 0.1) / 0.12)
+    return 0.0
+
+
+def shot_cutout(ctx, t, seg):
+    """Flat pastel ground with the sounding subject cut out, after the reference:
+
+    - the figure drops in from above when it comes back, with a small landing hop
+    - repeats of the sound inside a beat add clones to its right, a quarter of a
+      figure apart and *behind* it; the first figure never moves
+    - clones are frozen at their own hit (only what sounds now moves)
+    - silence leaves the empty ground
+    - bars alternate full figure and close-up; a small vertical name sits at the right
     """
     rng = np.random.default_rng(getattr(ctx, "seed", 0))
     bg = BACKDROPS[int(rng.integers(len(BACKDROPS)))]
@@ -653,68 +687,62 @@ def shot_cutout(ctx, t, seg):
     lead = lead_of(ctx, t)
     if not live and t - lead.end_t > 0.12:
         return canvas.convert("RGB")
-    bar = int(t / BAR)
-    mode = ["full", "close", "jump", "full"][(bar + int(rng.integers(4))) % 4]
-    hits = [e for e in ctx.events if e.c == lead.c and e.role != "guide" and 0 <= t - e.t < BEAT and e.kind != "sung"]
-    hits = sorted(hits, key=lambda e: e.t)[-5:] or [lead]
-    # a burst of 4+ hits in half a beat smears into many thin copies
-    smear = len([e for e in hits if t - e.t < BEAT / 2]) >= 4
-    height = H * (0.95 if mode == "close" else 0.78)
-    base_x = W * (0.5 if mode == "close" else 0.42)
-    base_y = H * (0.98 if mode != "jump" else 0.98 - 0.16 * (int(t / (BEAT / 2)) % 2))
+    close = ((int(t / BAR) + int(rng.integers(2))) % 2) == 1
+    height = H * (0.95 if close else 0.8)
+    beat_start = math.floor(t / BEAT) * BEAT
+    hits = sorted((e for e in ctx.events if e.c == lead.c and e.role != "guide" and e.kind != "sung"
+                   and beat_start <= e.t <= t), key=lambda e: e.t)[:5] or [lead]
+    fall = drop_in(t - appeared_at(ctx, t), height)
+    base_x = W * (0.5 if close else 0.36)
+    pieces = []
     for i, e in enumerate(hits):
-        piece = cutout(ctx, e, t, height, close=mode == "close", max_width=W * (0.9 if mode == "close" else 0.8),
-                       outline=8)
-        if piece is None:
-            continue
-        back = len(hits) - 1 - i
-        fade = 1.0 if back == 0 else max(0.35, 0.8 - 0.15 * back)
-        copies = range(8, 0, -1) if smear and back == 0 else [0]
-        for k in copies:
-            ghost = piece
-            if k or fade < 1:
-                ghost = piece.copy()
-                ghost.putalpha(ghost.getchannel("A").point(lambda v: int(v * (fade if not k else 0.18))))
-            x = int(base_x - piece.width / 2 - back * W * 0.12 - k * W * 0.018)
-            canvas.alpha_composite(ghost, (x, int(base_y - piece.height)))
+        at = t if e.active(t) else e.t  # clones hold the pose of their own hit
+        piece = cutout(ctx, e, at, height, close=close, max_width=W * (0.9 if close else 0.75), outline=8)
+        if piece is not None:
+            pieces.append((i, piece))
+    # draw back to front: later clones sit behind and to the right of earlier ones
+    for i, piece in reversed(pieces):
+        x = int(base_x - piece.width / 2 + i * piece.width * 0.25)
+        canvas.alpha_composite(piece, (x, int(H * 0.99 - piece.height + fall)))
     d = ImageDraw.Draw(canvas)
-    name = ctx.names[lead.c]
-    for j, ch in enumerate(name[:10]):
-        d.text((W * 0.86, H * 0.36 + j * 34), ch, font=font(FONT_HAND, 28), fill=(255, 255, 255, 235), anchor="mm")
+    for j, ch in enumerate(ctx.names[lead.c][:10]):
+        d.text((W * 0.9, H * 0.36 + j * 34), ch, font=font(FONT_HAND, 26), fill=(255, 255, 255, 235), anchor="mm")
     return canvas.convert("RGB")
+
+
+def jump_height(phase):
+    """Measured on the reference: up in ~0.1 s, hang ~0.17 s, down in ~0.18 s."""
+    if phase < 0.1:
+        return ease_out(phase / 0.1)
+    if phase < 0.27:
+        return 1.0
+    if phase < 0.45:
+        u = (phase - 0.27) / 0.18
+        return 1 - u * u
+    return 0.0
 
 
 def shot_sticker(ctx, t, seg):
-    """On each hit the sounding subject is lifted out as a white-edged sticker on a
-    flat ground; then its own original surroundings rise back from the bottom,
-    until the next hit lifts it out again. The sticker sits exactly where the
-    subject is in the shot, so the returning scene closes around it."""
+    """White-edged sticker of the sounding subject over blurred scenery from the
+    other sounds, after the reference: the scenery hard-cuts on every beat, and
+    every other beat the sticker jumps (quick up, hang, drop)."""
     lead = lead_of(ctx, t)
-    src = ctx.sources[lead.c]
-    full = cover(ctx.frame(lead, t), W, H)
-    if not getattr(src, "has_subject", False):
-        return single(ctx, t, lead)
-    rng = np.random.default_rng(getattr(ctx, "seed", 0))
-    ground = BACKDROPS[int(rng.integers(len(BACKDROPS)))]
-    hits = [e.t for e in ctx.events if e.c == lead.c and e.role != "guide" and e.t <= t and e.kind != "sung"]
-    since = t - (max(hits) if hits else lead.t)
-    rise = ease_out((since - 0.06) / 0.35)
-    canvas = Image.new("RGBA", (W, H), (*ground, 255))
-    if rise > 0:
-        top = int(H * (1 - rise))
-        canvas.paste(full.crop((0, top, W, H)).convert("RGBA"), (0, top))
-        if rise < 1:
-            ImageDraw.Draw(canvas).rectangle((0, top - 3, W, top + 3), fill=(255, 255, 255, 200))
-    mask = cover(ctx.mask(lead, t), W, H).point(lambda v: 255 if v > 96 else 0)
-    edge = mask.filter(ImageFilter.MaxFilter(21)).filter(ImageFilter.GaussianBlur(1))
-    white = Image.new("RGBA", (W, H), (255, 255, 255, 255))
-    white.putalpha(edge)
-    subject = full.convert("RGBA")
-    subject.putalpha(mask.filter(ImageFilter.GaussianBlur(1)))
-    canvas.alpha_composite(white)
-    canvas.alpha_composite(subject)
-    voice_label(canvas, ctx, lead, t, (0, 0, W, H), sum(v.c == lead.c for v in ctx.voices(t)))
-    return canvas.convert("RGB")
+    others = sorted({e.c for e in ctx.events if e.t <= t and e.c != lead.c and e.role != "guide"}) or [lead.c]
+    beat = int(t / BEAT)
+    src = ctx.sources[others[beat % len(others)]]
+    still = src.frames[(beat * 7) % len(src.frames)]
+    bg = cover(still, W, H, zoom=1.08).filter(ImageFilter.GaussianBlur(14))
+    bg = ImageEnhance.Brightness(bg).enhance(0.85).convert("RGBA")
+    if not ctx.voices(t) and t - lead.end_t > 0.12:
+        return bg.convert("RGB")
+    lift = jump_height(t - beat * BEAT) if beat % 2 == 0 else 0.0
+    piece = cutout(ctx, lead, t, H * 0.6, outline=10, max_width=W * 0.85)
+    if piece is not None:
+        x = int(W / 2 - piece.width / 2)
+        y = int(H * 0.99 - piece.height - lift * H * 0.14)
+        bg.alpha_composite(piece, (x, y))
+    voice_label(bg, ctx, lead, t, (0, 0, W, H), sum(v.c == lead.c for v in ctx.voices(t)))
+    return bg.convert("RGB")
 
 
 def shot_burst(ctx, t, seg):
@@ -917,9 +945,9 @@ SHOTS = {"cutout": shot_cutout, "sticker": shot_sticker,
 BLEED = {"full", "flip", "stutter", "mirror", "burst"}
 LONG = {"pan", "pile"}  # need two bars to build up
 POOLS = {
-    "calm": ["full", "flip", "pan", "sticker"],
+    "calm": ["full", "flip", "pan", "sticker", "cutout"],
     "mid": ["mirror", "stutter", "pile", "pan", "flip", "cutout", "sticker"],
-    "high": ["burst", "mirror", "stutter", "burst", "cutout"],
+    "high": ["burst", "mirror", "stutter", "burst"],
 }
 
 
@@ -956,7 +984,8 @@ def plan_shots(total_t, seed, sections=None):
 def director_frame(ctx, t, plan, hud):
     shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
     canvas = SHOTS[shot](ctx, t, (start, end))
-    canvas = repeat_moment(canvas, ctx, t)
+    if shot not in ("cutout", "sticker"):  # those already show repeats as clones / a single sticker
+        canvas = repeat_moment(canvas, ctx, t)
     if shot in BLEED and hud:
         sequencer_ribbon(canvas, ctx, t)
     if energy != "calm" and t - start < 0.06 and start > 0:
