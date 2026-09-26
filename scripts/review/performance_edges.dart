@@ -1,8 +1,11 @@
+// Command-line review tool: it reports on stdout.
+// ignore_for_file: avoid_print
+
 import 'dart:io';
 
-import '../../lib/domain/arrangement.dart';
-import '../../lib/domain/arrangement_engine.dart';
-import '../../lib/domain/melody_template.dart';
+import 'package:otogurashi/domain/arrangement.dart';
+import 'package:otogurashi/domain/arrangement_engine.dart';
+import 'package:otogurashi/domain/melody_template.dart';
 
 void main() {
   var count = 0;
@@ -45,16 +48,18 @@ void main() {
                             4800 + length) {
                       throw StateError('out of selected source');
                     }
-                    if (!e.hasValidPitchSteps)
+                    if (!e.hasValidPitchSteps) {
                       throw StateError('invalid note duration');
+                    }
                   }
                   Arrangement.fromJson(a.toJson());
                   count++;
                 } catch (e, st) {
-                  if (failures++ < 8)
+                  if (failures++ < 8) {
                     print(
                       'FAIL length=$length register=$register $seconds $mode $melody $style seed=$seed: $e\n${st.toString().split('\n').take(4).join('\n')}',
                     );
+                  }
                 }
               }
             }

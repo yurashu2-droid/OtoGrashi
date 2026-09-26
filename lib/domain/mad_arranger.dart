@@ -162,11 +162,10 @@ class _MadBuilder {
   _MadBuilder({
     required this.clips,
     required List<AnalyzedClip> audible,
-    required int seed,
+    required this.seed,
     required this.melodic,
     required this.total,
   }) : random = math.Random(seed),
-       seed = seed,
        voices = [for (final clip in clips) _Voice(clip)] {
     final loud = voices
         .where((v) => audible.contains(v.clip) && v.clip.peak >= .03)
@@ -376,7 +375,7 @@ class _MadBuilder {
         gain: gain.clamp(0.0, 1.0).toDouble(),
         fades: EventFades(fadeInSamples: inFade, fadeOutSamples: outFade),
         partIndex: _parts[role] ?? 0,
-        targetMidiNote: note == null ? null : note.clamp(24.0, 100.0).toDouble(),
+        targetMidiNote: note?.clamp(24.0, 100.0).toDouble(),
         reverse: reverse,
         treatment: switch (role) {
           'phrase' || 'echo' => SoundTreatment.phrase,

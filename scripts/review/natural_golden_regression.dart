@@ -1,9 +1,12 @@
+// Command-line review tool: it reports on stdout.
+// ignore_for_file: avoid_print
+
 import 'dart:convert';
 import 'dart:io';
 
-import '../../lib/domain/arrangement.dart';
-import '../../lib/domain/arrangement_engine.dart';
-import '../../lib/domain/melody_template.dart';
+import 'package:otogurashi/domain/arrangement.dart';
+import 'package:otogurashi/domain/arrangement_engine.dart';
+import 'package:otogurashi/domain/melody_template.dart';
 
 void main(List<String> args) {
   final clips = List.generate(

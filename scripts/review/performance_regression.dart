@@ -1,10 +1,13 @@
+// Command-line review tool: it reports on stdout.
+// ignore_for_file: avoid_print
+
 import 'dart:convert';
 import 'dart:io';
 
-import '../../lib/domain/arrangement.dart';
-import '../../lib/domain/arrangement_engine.dart';
-import '../../lib/domain/video_recipe.dart';
-import '../../lib/domain/melody_template.dart';
+import 'package:otogurashi/domain/arrangement.dart';
+import 'package:otogurashi/domain/arrangement_engine.dart';
+import 'package:otogurashi/domain/video_recipe.dart';
+import 'package:otogurashi/domain/melody_template.dart';
 
 void check(bool pass, String message) {
   if (!pass) throw StateError(message);
@@ -93,13 +96,15 @@ void main() {
             'different moments as parts',
           );
         }
-        if (mode == PerformanceMode.vinyl)
+        if (mode == PerformanceMode.vinyl) {
           check(a.events.any((e) => e.reverse), 'scratch reversal');
-        if (seconds == 30)
+        }
+        if (seconds == 30) {
           check(
             a.events.any((e) => e.destinationStartSample >= 720000),
             '30s second section',
           );
+        }
         checks++;
         if (count == 3) {
           Directory('ci-artifacts').createSync(recursive: true);

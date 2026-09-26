@@ -1,6 +1,9 @@
-import '../../lib/domain/arrangement.dart';
-import '../../lib/domain/arrangement_engine.dart';
-import '../../lib/domain/melody_template.dart';
+// Command-line review tool: it reports on stdout.
+// ignore_for_file: avoid_print
+
+import 'package:otogurashi/domain/arrangement.dart';
+import 'package:otogurashi/domain/arrangement_engine.dart';
+import 'package:otogurashi/domain/melody_template.dart';
 
 void check(bool value, String why) {
   if (!value) throw StateError(why);
@@ -46,8 +49,9 @@ void main() {
       // MAD places its own stutters by song structure, not on these cues.
       if (mode == PerformanceMode.natural ||
           mode == PerformanceMode.loopStation ||
-          mode == PerformanceMode.mad)
+          mode == PerformanceMode.mad) {
         continue;
+      }
       final a = arrange(
         clips: [clip],
         style: ArrangementStyle.lively,
