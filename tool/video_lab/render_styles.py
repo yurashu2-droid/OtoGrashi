@@ -264,16 +264,18 @@ class Ctx:
     def onsets_between(self, a, b, pred=lambda e: True):
         return [e for e in self.events if a <= e.t < b and pred(e)]
 
-    def frame(self, e, t):
-        """Picture for event e at time t. A finished sound holds its last frame."""
+    def frame(self, e, t, advance=0.0):
+        """Picture for event e at time t. A finished sound holds its last frame.
+        advance: read that many seconds further into the clip (frame by frame
+        stills of one repeated sound)."""
         src = self.sources[e.c]
         t = min(max(t, e.t), e.end_t - 1 / FPS)
-        return src.frame_at_sample(e.source_sample(t, src))
+        return src.frame_at_sample(min(src.samples - 1, e.source_sample(t, src) + int(advance * SR)))
 
-    def mask(self, e, t):
+    def mask(self, e, t, advance=0.0):
         src = self.sources[e.c]
         t = min(max(t, e.t), e.end_t - 1 / FPS)
-        return src.mask_at_sample(e.source_sample(t, src))
+        return src.mask_at_sample(min(src.samples - 1, e.source_sample(t, src) + int(advance * SR)))
 
     def voices(self, t, limit=9):
         """Events sounding at t, oldest first: one picture per voice."""
@@ -363,13 +365,15 @@ def repeat_moment(canvas, ctx, t, dim=True, scale=1.0, y_at=0.42):
             continue  # scrolled out of view
         src = ctx.sources[e.c]
         still_t = e.t  # the picture at the moment of this hit, frozen
-        piece = cutout(ctx, e, still_t, size, max_width=W * 0.55, outline=8) if getattr(src, "has_subject", False) else None
+        step = i * FRAME_STEP
+        piece = (cutout(ctx, e, still_t, size, max_width=W * 0.55, outline=8, advance=step)
+                 if getattr(src, "has_subject", False) else None)
         if piece is not None:
             alpha = np.asarray(piece.getchannel("A"), np.float32) / 255
             if (alpha.mean(axis=1) > 0.2).mean() < 0.6:
                 piece = None  # the mask only holds a band (tracks, ground): show the still itself
         if piece is None:
-            photo = cover(ctx.frame(e, still_t), size * 0.75, size).convert("RGBA")
+            photo = cover(ctx.frame(e, still_t, step), size * 0.75, size).convert("RGBA")
             edge = max(5, int(size * 0.03))
             piece = Image.new("RGBA", (photo.width + 2 * edge, photo.height + 2 * edge), (255, 255, 255, 255))
             piece.alpha_composite(photo, (edge, edge))
@@ -716,10 +720,15 @@ def largest_blob(mask):
     return Image.fromarray(np.minimum(np.array(mask), np.array(keep)))
 
 
-def cutout(ctx, e, t, height, close=False, outline=0, max_width=W * 0.8, largest=False):
+# stacked stills of one repeated sound step this far through the clip each,
+# so a row of them reads as frame-by-frame animation instead of copies
+FRAME_STEP = 0.1
+
+
+def cutout(ctx, e, t, height, close=False, outline=0, max_width=W * 0.8, largest=False, advance=0.0):
     """The sounding subject on transparency, scaled to `height`. close=True keeps
     the top of the subject (a face or head) for a close-up."""
-    frame = ctx.frame(e, t)
+    frame = ctx.frame(e, t, advance)
     if not getattr(ctx.sources[e.c], "has_subject", True):
         # nothing to cut out (a landscape, a crowd blur): use the shot as a photo card
         ph = height * (0.62 if not close else 0.8)
@@ -729,7 +738,7 @@ def cutout(ctx, e, t, height, close=False, outline=0, max_width=W * 0.8, largest
         board = Image.new("RGBA", (photo.width + 2 * edge, photo.height + 2 * edge), (255, 255, 255, 255))
         board.alpha_composite(photo, (edge, edge))
         return board.rotate(-3, expand=True, resample=Image.BICUBIC)
-    mask = ctx.mask(e, t).resize(frame.size, Image.BILINEAR)
+    mask = ctx.mask(e, t, advance).resize(frame.size, Image.BILINEAR)
     if largest:
         mask = largest_blob(mask)
     box = mask.point(lambda v: 255 if v > 96 else 0).getbbox()
@@ -802,7 +811,8 @@ def shot_cutout(ctx, t, seg):
     pieces = []
     for i, e in enumerate(hits):
         at = t if e.active(t) else e.t  # clones hold the pose of their own hit
-        piece = cutout(ctx, e, at, height, close=close, max_width=W * (0.9 if close else 0.75), outline=8)
+        piece = cutout(ctx, e, at, height, close=close, max_width=W * (0.9 if close else 0.75), outline=8,
+                       advance=i * FRAME_STEP)
         if piece is not None:
             pieces.append((i, e, piece))
     # the eye stays on the figure in front, so it steps left each time a clone
