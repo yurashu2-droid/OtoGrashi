@@ -471,14 +471,17 @@ def sequencer_ribbon(canvas, ctx, t):
 def lead_of(ctx, t):
     """Newest sounding melodic voice, else newest sounding voice, else the last one heard."""
     live = ctx.voices(t)
-    melodic = ([e for e in live if e.role == "phrase"] or [e for e in live if e.role == "melody"]
-               or [e for e in live if e.kind != "rhythm" and e.role in (None, "bass")])
+    melodic = [e for e in live if e.role == "phrase"] or [e for e in live if e.role == "melody"]
     if melodic:
         return melodic[-1]
-    # between two melody notes, stay on the singer instead of flickering to a drum hit
+    # the singer keeps the picture through the small gaps of its line (up to a beat);
+    # bass and drum hits underneath must not steal it for a frame or two
     held = ctx.last_onset(t, lambda e: e.role in ("melody", "phrase"))
-    if held and t - held.end_t < 0.3:
+    if held and t - held.end_t < BEAT:
         return held
+    melodic = [e for e in live if e.kind != "rhythm" and e.role in (None, "bass")]
+    if melodic:
+        return melodic[-1]
     if live:
         return live[-1]
     return ctx.last_onset(t) or ctx.events[0]
@@ -495,9 +498,10 @@ def dim(im, soft=False):
     return ImageEnhance.Brightness(Image.blend(im, grey, amount)).enhance(light)
 
 
-def panel(ctx, e, t, w, h, mirror=False, zoom=1.0, dx=0.0, soft=False):
-    """One voice's picture: moving and pulsing while it sounds, frozen and dim after."""
-    live = e.active(t)
+def panel(ctx, e, t, w, h, mirror=False, zoom=1.0, dx=0.0, soft=False, hold=0.0):
+    """One voice's picture: moving and pulsing while it sounds, frozen and dim after.
+    hold: gaps shorter than this (between staccato notes) do not dim the picture."""
+    live = e.active(t) or (hold > 0 and 0 <= t - e.end_t < hold)
     lvl = ctx.norm_level(e, t) if live else 0.0
     im = cover(ctx.frame(e, t), w, h, zoom=zoom * (1 + 0.04 * lvl), mirror=mirror, dx=dx)
     if not live:
@@ -542,7 +546,7 @@ def pulse_border(canvas, ctx, e, t, rect):
 
 
 def single(ctx, t, e, **kw):
-    canvas = panel(ctx, e, t, W, H, soft=True, **kw)
+    canvas = panel(ctx, e, t, W, H, soft=True, hold=BEAT / 2, **kw)
     voice_label(canvas, ctx, e, t, (0, 0, W, H), sum(v.c == e.c for v in ctx.voices(t)))
     return canvas
 
@@ -565,7 +569,7 @@ def shot_stutter(ctx, t, seg):
     """Each new sound re-cuts to a tighter crop of the lead face."""
     lead = lead_of(ctx, t)
     # one step per 16th-note slot that starts a sound (a note's attack and body count once)
-    step = len({round(e.t / (BEAT / 4)) for e in ctx.onsets_between(seg[0], t + 1e-6)
+    step = len({round(e.t / (BEAT / 2)) for e in ctx.onsets_between(seg[0], t + 1e-6)
                 if e.role != "guide"})
     return single(ctx, t, lead, zoom=(1 + 0.12 * (step % 4)) * punch(t - lead.t, 0.08))
 
@@ -689,7 +693,7 @@ def shot_cutout(ctx, t, seg):
     lead = lead_of(ctx, t)
     if not live and t - lead.end_t > 0.12:
         return canvas.convert("RGB")
-    close = ((int(t / BAR) + int(rng.integers(2))) % 2) == 1
+    close = False  # the close-up with clones read as a blur of big shapes; full figure only
     height = H * (0.95 if close else 0.8)
     beat_start = math.floor(t / BEAT) * BEAT
     hits = sorted((e for e in ctx.events if e.c == lead.c and e.role != "guide" and e.kind != "sung"
@@ -724,11 +728,15 @@ def shot_sticker(ctx, t, seg):
         return single(ctx, t, lead)
     full = cover(ctx.frame(lead, t), W, H)
     hits = [e for e in ctx.events if e.c == lead.c and e.role != "guide" and e.t <= t and e.kind != "sung"]
-    hit_t = max((e.t for e in hits), default=lead.t)
+    # like the reference, the lift-out restarts at most once per beat: the first hit
+    # in a beat starts it and later hits in that beat let it play through
+    beats_hit = sorted({math.floor(e.t / BEAT) for e in hits})
+    beat_idx = beats_hit[-1] if beats_hit else math.floor(lead.t / BEAT)
+    hit_t = min(e.t for e in hits if math.floor(e.t / BEAT) == beat_idx) if hits else lead.t
     since = t - hit_t
-    # blurred scenery from another sound, a different one on every hit
+    # blurred scenery from another sound, a different one on every such beat
     others = sorted({e.c for e in ctx.events if e.c != lead.c and e.role != "guide"}) or [lead.c]
-    n = len(hits)
+    n = len(beats_hit)
     other = ctx.sources[others[n % len(others)]]
     scene = cover(other.frames[(n * 11) % len(other.frames)], W, H, zoom=1.08).filter(ImageFilter.GaussianBlur(14))
     canvas = ImageEnhance.Brightness(scene).enhance(0.85).convert("RGBA")
