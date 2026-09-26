@@ -605,17 +605,22 @@ class _MadBuilder {
 
   // -- song structures ----------------------------------------------------------
 
+  /// Every clip says its phrase in turn; the song proper then opens on the
+  /// last one introduced (the picture turns it into a sticker there).
   void _introductions(int bars) {
     final order = [lead, ...others];
     var t = 0;
+    var last = lead;
     // at least half a beat each, so six clips still all fit into one bar
     final slot = math.max(_beat ~/ 2, (bars * _bar - 3 * _sixteenth) ~/ math.max(1, order.length));
     for (final (k, v) in order.indexed) {
       if (t >= bars * _bar - _beat ~/ 2) break;
+      last = v;
       if (k == 0) t += stutterHead(v, t, v.longest);
       final duration = phrase(v, t, v.longest, limit: math.min(1.4, (slot - 600) / _sampleRate));
       t = order.length > 3 ? t + slot : ((t + duration) / _beat).ceil() * _beat;
     }
+    phrase(last, bars * _bar, last.longest, limit: .45);
   }
 
   void _melodyBars(int barOffset, int barCount, Map<String, (int, int?)> cursors, {int chunkBeats = 8}) {

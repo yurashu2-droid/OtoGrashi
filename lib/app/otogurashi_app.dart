@@ -9,6 +9,7 @@ import '../domain/project.dart';
 import '../features/create/creation_controller.dart';
 import '../features/create/creation_flow.dart';
 import '../features/onboarding/onboarding_screen.dart';
+import '../storage/profile_store.dart';
 import '../storage/project_repository.dart';
 import 'app_dependencies.dart';
 
@@ -50,6 +51,7 @@ class _CreationHostState extends State<_CreationHost> {
   bool _showOnboarding = true;
   bool _startWithCapture = false;
   bool _startInLibrary = false;
+  String? _ownerName;
   Object? _error;
 
   @override
@@ -80,6 +82,8 @@ class _CreationHostState extends State<_CreationHost> {
           ? await (dependencies.projects as SqliteProjectRepository)
                 .listCompletedExports()
           : const <CompletedExport>[];
+      final ownerName = await dependencies.profile?.loadName();
+      controller.ownerName = ownerName;
       final project = _recentUnfinishedProject(projects, exports);
       if (project != null) await controller.openProject(project);
       if (!mounted) {
@@ -93,6 +97,7 @@ class _CreationHostState extends State<_CreationHost> {
         _showOnboarding = resume && projects.isEmpty;
         _startWithCapture = !resume;
         _startInLibrary = resume && project == null && projects.isNotEmpty;
+        _ownerName = ownerName;
         _busy = false;
         _error = null;
       });
@@ -127,8 +132,13 @@ class _CreationHostState extends State<_CreationHost> {
     return unfinished.firstOrNull;
   }
 
-  void _begin() {
+  void _begin(String name) {
     if (_busy) return;
+    final profile = _dependencies?.profile;
+    final cleaned = profile == null ? null : ProfileStore.clean(name);
+    _ownerName = cleaned;
+    _controller?.ownerName = cleaned;
+    if (profile != null) unawaited(profile.saveName(name));
     if (_controller != null && _dependencies != null) {
       setState(() {
         _showOnboarding = false;
@@ -162,6 +172,7 @@ class _CreationHostState extends State<_CreationHost> {
     return OnboardingScreen(
       busy: _busy,
       error: _error == null ? null : '準備できませんでした。もう一度お試しください。',
+      initialName: _ownerName,
       onCreate: _begin,
     );
   }

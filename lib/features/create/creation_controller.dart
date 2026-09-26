@@ -168,6 +168,10 @@ final class CreationController extends ChangeNotifier {
   final MediaPresentationGateway presentation;
   final DemoAssetSource demo;
   final RenderController _render;
+
+  /// The creator's name for the cover ("〇〇の日常"); written into every
+  /// recipe arranged from now on.
+  String? ownerName;
   CreationState _state = const CreationState();
   Future<void> _mutationTail = Future<void>.value();
   final Map<String, _CachedAnalysis> _analysisCache = {};
@@ -730,6 +734,8 @@ final class CreationController extends ChangeNotifier {
         recipe.toJson(),
         project.videoRecipe,
       );
+      final owner = ownerName;
+      if (owner != null) recipeJson['ownerName'] = owner;
       final updated = project.copyWith(
         revision: project.revision + 1,
         arrangement: arrangementJson,

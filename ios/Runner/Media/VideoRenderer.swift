@@ -75,9 +75,11 @@ struct VideoRecipePayload: Decodable {
   let events: [VideoSceneEventPayload]
   let effects: VideoEffectsPayload
   let clipNames: [String: String]
+  /// Whose everyday this is: the cover of a MAD reads "〇〇の日常".
+  let ownerName: String?
 
   private enum CodingKeys: String, CodingKey {
-    case schemaVersion, totalSamples, layout, clipCrops, captions, events, effects, clipNames
+    case schemaVersion, totalSamples, layout, clipCrops, captions, events, effects, clipNames, ownerName
   }
 
   init(from decoder: Decoder) throws {
@@ -98,6 +100,7 @@ struct VideoRecipePayload: Decodable {
     effects = try container.decodeIfPresent(VideoEffectsPayload.self, forKey: .effects)
       ?? VideoEffectsPayload(enabled: [])
     clipNames = try container.decodeIfPresent([String: String].self, forKey: .clipNames) ?? [:]
+    ownerName = try container.decodeIfPresent(String.self, forKey: .ownerName)
     let cropIds = clipCrops.map(\.assetId)
     guard schemaVersion == 1, [720_000, 1_440_000].contains(totalSamples),
       (1...6).contains(clipCrops.count),
@@ -110,6 +113,8 @@ struct VideoRecipePayload: Decodable {
       clipNames.allSatisfy({ cropIds.contains($0.key) &&
         !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         $0.value.count <= 40 }),
+      ownerName == nil || (!ownerName!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        ownerName!.count <= 20),
       effects.enabled.count <= 3,
       Set(effects.enabled).count == effects.enabled.count,
       effects.enabled.allSatisfy({ ["mirrorCuts", "beatPunch", "echoTiles"].contains($0) }),
@@ -1748,6 +1753,15 @@ struct MadVideoEvent {
 
   func active(_ sample: Int) -> Bool { sample >= start && sample < end }
 
+  /// The same sound read `samples` further into its clip: stacked stills of
+  /// one repeated sound step through it frame by frame instead of repeating.
+  func advanced(_ samples: Int) -> MadVideoEvent {
+    MadVideoEvent(index: index, assetId: assetId, clip: clip, start: start, end: end, role: role,
+      pitched: pitched, sourceStart: sourceStart + samples, sourceSpan: sourceSpan, reverse: reverse,
+      rate: rate, glide: glide, scratch: scratch, scratchPeriod: scratchPeriod, peaks: peaks,
+      peakMax: peakMax)
+  }
+
   /// Loudness of this event alone at `sample`, 0...1 of its own peak.
   func level(_ sample: Int) -> Float {
     let i = (sample - start) / 1_600
@@ -1816,6 +1830,22 @@ final class MadDirector {
   let heard: [Int]
   private var masks: [String: MadMask?] = [:]
   private var subjects: [Int: Bool] = [:]
+  /// Whose everyday this is, for the cover.
+  let owner: String
+  /// The introductions play as a feed of posts until here; the song proper
+  /// opens on `opener`, the last clip introduced, lifted out as a sticker.
+  let introEnd: Int
+  let posts: [(event: MadVideoEvent, start: Int)]
+  let opener: MadVideoEvent?
+  private var heldLead: (event: MadVideoEvent, since: Int)?
+  private var heldSteps: [String: (value: Int, since: Int)] = [:]
+
+  /// A full-frame picture, zoom step or flip never changes again sooner.
+  static let hold = 14_400
+  /// Stacked stills of one sound each read this much further into the clip.
+  static let frameStep = 4_800
+  /// How long before the downbeat the last post starts to lift off.
+  static let liftIn = 19_200
 
   init(request: VideoRenderRequestPayload, peaks: [[Float]]) {
     let arrangement = request.arrangement
@@ -1838,6 +1868,14 @@ final class MadDirector {
     }
     events = built.filter { $0.role != "backing" }
     backing = built.filter { $0.role == "backing" }
+    owner = request.video.ownerName ?? "わたし"
+    let intro = (arrangement.totalSamples > 960_000 ? 2 : 1) * Self.bar
+    introEnd = intro
+    let feed = Self.feedPosts(built.filter { $0.role != "backing" }, introEnd: intro)
+    posts = feed
+    opener = feed.last.flatMap { last in
+      built.first { $0.clip == last.event.clip && $0.role == "phrase" && abs($0.start - intro) < 1_600 }
+    }
     heard = Array(Set(built.map(\.clip))).sorted()
     runs = Self.repeatRuns(events)
     plan = Self.planShots(total: arrangement.totalSamples, seed: arrangement.seed,
@@ -1963,7 +2001,16 @@ final class MadDirector {
     var canvas: CIImage
     var overlays: [(CGContext) -> Void] = []
     let longRun = runs.contains { $0.count >= 4 && $0[0].start <= s && s < Self.runUntil($0) }
-    if longRun && (current.shot == .cutout || current.shot == .sticker) {
+    if !posts.isEmpty && s < introEnd {
+      canvas = try await feedFrame(s, W: W, H: H, image: image, overlays: &overlays)
+    } else if !posts.isEmpty && opener != nil && s < introEnd + Self.bar {
+      // the sticker holds the first bar of the song instead of a board of drum hits
+      canvas = try await stickerMoment(s, W: W, H: H, image: image)
+    } else if let rewinding = reversing(s) {
+      // the swell is what you hear, so its tape rewind is the ground under the scene
+      canvas = try await rewind(rewinding, s, W: W, H: H, image: image, overlays: &overlays)
+      if longRun { canvas = try await strip(s, over: canvas, dim: false, W: W, H: H, image: image) }
+    } else if longRun && (current.shot == .cutout || current.shot == .sticker) {
       canvas = CIImage(color: backdrop()).cropped(to: canvasRect)
       canvas = try await strip(s, over: canvas, dim: false, W: W, H: H, image: image)
     } else {
@@ -2013,7 +2060,7 @@ final class MadDirector {
         bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue)
     else { throw VideoRenderError.writerFailed }
     for overlay in overlays { overlay(g) }
-    if t < 1.6 { openingText(g, t: t, W: W, H: H) }
+    if t < 1.6 && posts.isEmpty { openingText(g, t: t, W: W, H: H) }
   }
 
   private func rank(_ energy: String) -> Int { energy == "high" ? 2 : energy == "mid" ? 1 : 0 }
@@ -2075,20 +2122,23 @@ final class MadDirector {
   private func single(_ s: Int, shot: MadShot, segmentStart: Int, W: CGFloat, H: CGFloat,
                       image: (MadVideoEvent, Int) async throws -> CIImage,
                       overlays: inout [(CGContext) -> Void]) async throws -> CIImage {
-    let lead = lead(s)
+    let lead = steadyLead(s)
     let full = CGRect(x: 0, y: 0, width: W, height: H)
-    var zoom = punch(s - lead.start)
+    var zoom = accentPunch(lead, s)
     var mirror = false
     var dx: CGFloat = 0
     switch shot {
     case .flip:
+      // a face flips on every note; a landscape only flickers, so it keeps still
       let notes = events.filter { $0.start >= segmentStart && $0.start <= s && ($0.role == "melody" || $0.role == "phrase") && $0.pitched }.count
-      mirror = notes % 2 == 1
-      dx = 0.04 * CGFloat(notes % 3 - 1)
-      zoom = 1.08 * punch(s - lead.start, 0.1)
+      if await hasSubject(lead.clip, image: image) {
+        mirror = notes % 2 == 1
+        dx = 0.04 * CGFloat(notes % 3 - 1)
+      }
+      zoom = 1.08 * accentPunch(lead, s, 0.1)
     case .stutter:
       let steps = Set(events.filter { $0.start >= segmentStart && $0.start <= s }.map { $0.start / (Self.beat / 2) }).count
-      zoom = (1 + 0.12 * CGFloat(steps % 4)) * punch(s - lead.start, 0.08)
+      zoom = (1 + 0.12 * CGFloat(heldStep("stutter", steps % 4, s))) * accentPunch(lead, s, 0.08)
     default:
       break
     }
@@ -2101,10 +2151,11 @@ final class MadDirector {
 
   private func mirror(_ s: Int, W: CGFloat, H: CGFloat, image: (MadVideoEvent, Int) async throws -> CIImage,
                       overlays: inout [(CGContext) -> Void]) async throws -> CIImage {
-    let lead = lead(s)
+    let lead = steadyLead(s)
     let same = voices(s).filter { $0.clip == lead.clip }
-    let repeats = repeatIndex(lead)
-    let zoom = 1.06 * punch(s - lead.start, 0.1)
+    // a face flips on each repeat, as fast as the loop; a landscape is never flipped
+    let repeats = await hasSubject(lead.clip, image: image) ? repeatIndex(lead) : 0
+    let zoom = 1.06 * accentPunch(lead, s, 0.1)
     let flips = [(false, false), (true, false), (false, true), (true, true)]
     var canvas = CIImage(color: .black).cropped(to: CGRect(x: 0, y: 0, width: W, height: H))
     if same.count >= 3 {
@@ -2468,20 +2519,26 @@ final class MadDirector {
     var appeared = s
     while appeared > s - 96_000, !voices(appeared - 1_600).isEmpty { appeared -= 1_600 }
     let fall = Self.dropIn(Double(s - appeared) / 48_000, height: H * 0.8)
-    let subject = await hasSubject(lead.clip, image: image)
+    // clones need a subject; a landscape shows as a plain full frame
+    guard await hasSubject(lead.clip, image: image) else {
+      return try await single(s, shot: .full, segmentStart: s, W: W, H: H, image: image, overlays: &overlays)
+    }
     var pieces: [(Int, CIImage)] = []
     for (i, e) in hits.enumerated() {
       let at = e.active(s) ? s : e.start
-      var piece: CIImage?
-      if subject {
-        piece = try await cutout(e, at, height: H * 0.8, maxWidth: W * 0.75, outline: 8, image: image)
-      } else {
-        piece = try await photoCard(e, at, height: H * 0.55, H: H, image: image)
+      // each clone is a later frame of the clip, so the row reads frame by frame
+      let shown = i == 0 ? e : e.advanced(i * Self.frameStep)
+      if let piece = try await cutout(shown, at, height: H * 0.8, maxWidth: W * 0.75, outline: 8, image: image) {
+        pieces.append((i, piece))
       }
-      if let piece { pieces.append((i, piece)) }
     }
+    // the eye stays on the figure in front, so it steps a little left each
+    // time a clone arrives; spacing follows the front figure's width
+    let front = pieces.first?.1.extent.width ?? W * 0.5
+    let arrivals = hits.dropFirst().map { CGFloat(Self.easeOut(Double(s - $0.start) / 5_760)) }.reduce(0, +)
+    let stepLeft = arrivals * W * 0.03
     for (i, piece) in pieces.reversed() {
-      let x = W * 0.36 + CGFloat(i) * piece.extent.width * 0.25
+      let x = W * 0.40 - stepLeft + CGFloat(i) * front * 0.25
       canvas = place(piece, centre: CGPoint(x: x, y: 0), bottom: H * 0.99 + fall, H: H).composited(over: canvas)
     }
     let name = names[lead.clip]
@@ -2588,10 +2645,11 @@ final class MadDirector {
       let x = offset + CGFloat(i) * step
       guard x > -step, x < W + step else { continue }
       var piece: CIImage?
+      let frame = e.advanced(i * Self.frameStep)  // frame by frame, not copies
       if subject {
-        piece = try await cutout(e, e.start, height: size, maxWidth: W * 0.55, outline: 8, image: image)
+        piece = try await cutout(frame, e.start, height: size, maxWidth: W * 0.55, outline: 8, image: image)
       }
-      if piece == nil { piece = try await photoCard(e, e.start, height: size, H: H, image: image) }
+      if piece == nil { piece = try await photoCard(frame, e.start, height: size, H: H, image: image) }
       guard let still = piece else { continue }
       let later = shown.first(where: { $0.start > e.start })?.start ?? e.start + 48_000
       let duration = max(1_600, min(6_720, Int(Double(later - e.start) * 0.7)))
@@ -2775,4 +2833,421 @@ struct SeededRandom {
   }
   mutating func next(_ bound: Int) -> Int { Int(nextRaw() % UInt64(max(1, bound))) }
   mutating func unit() -> Double { Double(nextRaw() % 1_000_000) / 1_000_000 }
+}
+
+// MARK: - MAD opening feed, sticker lift-off, steadiness and tape rewind
+
+extension MadDirector {
+  /// The introductions as a feed: one post per clip in the order they speak,
+  /// each lasting until the next one starts.
+  static func feedPosts(_ events: [MadVideoEvent], introEnd: Int) -> [(event: MadVideoEvent, start: Int)] {
+    var posts: [(event: MadVideoEvent, start: Int)] = []
+    for e in events.sorted(by: { ($0.start, $0.index) < ($1.start, $1.index) })
+    where e.start < introEnd && (e.role == "phrase" || e.role == "chop") {
+      if let last = posts.last, last.event.clip == e.clip {
+        // the stuttered head leads into its phrase
+        if e.role == "phrase" { posts[posts.count - 1] = (e, last.start) }
+      } else {
+        posts.append((e, e.start))
+      }
+    }
+    return posts
+  }
+
+  // MARK: steadiness
+
+  /// The lead picture, never switched to another clip within `hold`, so a
+  /// full frame never flickers to something else for a moment.
+  func steadyLead(_ s: Int) -> MadVideoEvent {
+    let candidate = lead(s)
+    if let held = heldLead, s >= held.since, held.event.clip != candidate.clip, s - held.since < Self.hold {
+      return held.event
+    }
+    if let held = heldLead, s >= held.since, held.event.clip == candidate.clip {
+      heldLead = (candidate, held.since)
+    } else {
+      heldLead = (candidate, s)
+    }
+    return candidate
+  }
+
+  /// `value`, unless it changed less than `hold` ago.
+  func heldStep(_ key: String, _ value: Int, _ s: Int) -> Int {
+    if let old = heldSteps[key], s >= old.since {
+      if old.value == value { return value }
+      if s - old.since < Self.hold { return old.value }
+    }
+    heldSteps[key] = (value, s)
+    return value
+  }
+
+  /// Zoom punch on a spoken, chopped or effect sound only; a sung line stays still.
+  func accentPunch(_ e: MadVideoEvent, _ s: Int, _ amount: CGFloat = 0.14, _ length: Int = 5_760) -> CGFloat {
+    ["phrase", "chop", "fx", "echo"].contains(e.role)
+      ? 1 + amount * max(0, 1 - CGFloat(s - e.start) / CGFloat(length)) : 1
+  }
+
+  // MARK: feed
+
+  /// Swiping through a feed: each new clip pushes the last one up and away,
+  /// so a phrase cut short reads as a flick to the next post.
+  func feedFrame(_ s: Int, W: CGFloat, H: CGFloat, image: (MadVideoEvent, Int) async throws -> CIImage,
+                 overlays: inout [(CGContext) -> Void]) async throws -> CIImage {
+    let full = CGRect(x: 0, y: 0, width: W, height: H)
+    let k = posts.lastIndex(where: { $0.start <= s }) ?? 0
+    let (e, start) = posts[k]
+    if k == posts.count - 1 && s >= introEnd - Self.liftIn {
+      return try await stickerMoment(s, W: W, H: H, image: image)
+    }
+    let end = k + 1 < posts.count ? posts[k + 1].start : introEnd
+    let progress = min(1, max(0, Double(s - start) / Double(max(1, end - start))))
+    let current = try await feedPicture(e, s, first: k == 0, W: W, H: H, image: image)
+    let swipe = 7_680
+    guard k > 0, s - start < swipe else {
+      overlays.append { g in self.feedChrome(g, e, progress: progress, dy: 0, first: k == 0, W: W, H: H) }
+      return current
+    }
+    let previous = posts[k - 1].event
+    let shift = H * CGFloat(Self.easeOut(Double(s - start) / Double(swipe)))
+    let before = try await feedPicture(previous, s, first: k == 1, W: W, H: H, image: image)
+    overlays.append { g in
+      self.feedChrome(g, previous, progress: 1, dy: -shift, first: k == 1, W: W, H: H)
+      self.feedChrome(g, e, progress: progress, dy: H - shift, first: false, W: W, H: H)
+    }
+    let leaving = before.transformed(by: CGAffineTransform(translationX: 0, y: shift))
+    let arriving = current.transformed(by: CGAffineTransform(translationX: 0, y: shift - H))
+    return arriving.composited(over: leaving).composited(over: CIImage(color: .black)).cropped(to: full)
+  }
+
+  /// One full-screen post; the first carries the cover's faces.
+  func feedPicture(_ e: MadVideoEvent, _ s: Int, first: Bool, W: CGFloat, H: CGFloat,
+                   image: (MadVideoEvent, Int) async throws -> CIImage) async throws -> CIImage {
+    let full = CGRect(x: 0, y: 0, width: W, height: H)
+    let k = W / 720
+    var out = cover(try await image(e, s), full, H: H)
+    if let shade = CIFilter(name: "CILinearGradient", parameters: [
+      "inputPoint0": CIVector(x: 0, y: 0), "inputPoint1": CIVector(x: 0, y: H * 0.36),
+      "inputColor0": CIColor(red: 0, green: 0, blue: 0, alpha: 0.66),
+      "inputColor1": CIColor(red: 0, green: 0, blue: 0, alpha: 0),
+    ])?.outputImage {
+      out = shade.cropped(to: full).composited(over: out)
+    }
+    guard first else { return out }
+    // the cast as round face stickers, overlapping a little like a group photo
+    let n = heard.count
+    let disc = (n <= 4 ? 118 : 96) * k
+    let step = min(disc + 14 * k, (W - 120 * k) / CGFloat(max(1, n)))
+    let x0 = (W - 70 * k - (step * CGFloat(max(0, n - 1)) + disc)) / 2
+    let tilts: [CGFloat] = [-6, 4, -3, 6, -5, 3]
+    for (i, clip) in heard.enumerated() {
+      guard var face = try await faceDisc(clip, size: disc, image: image) else { continue }
+      let box = face.extent
+      let centre = CGPoint(x: x0 + CGFloat(i) * step + disc / 2, y: H - (420 * k + (i % 2 == 1 ? 12 * k : 0) + disc / 2))
+      face = face.transformed(by: CGAffineTransform(translationX: -box.midX, y: -box.midY)
+        .concatenating(CGAffineTransform(rotationAngle: tilts[i % tilts.count] * .pi / 180))
+        .concatenating(CGAffineTransform(translationX: centre.x, y: centre.y)))
+      out = face.composited(over: out)
+    }
+    return out.cropped(to: full)
+  }
+
+  /// A round face sticker of `clip`: its first picture inside a white rim.
+  func faceDisc(_ clip: Int, size: CGFloat, image: (MadVideoEvent, Int) async throws -> CIImage) async throws -> CIImage? {
+    guard let e = (events + backing).first(where: { $0.clip == clip }) else { return nil }
+    let square = cover(try await image(e, e.start), CGRect(x: 0, y: 0, width: size, height: size), H: size)
+    let r = size / 2
+    let rim = max(3, size * 0.05)
+    guard let hole = CIFilter(name: "CIRadialGradient", parameters: [
+      "inputCenter": CIVector(x: r, y: r), "inputRadius0": r - 1, "inputRadius1": r,
+      "inputColor0": CIColor(red: 1, green: 1, blue: 1, alpha: 1), "inputColor1": CIColor(red: 0, green: 0, blue: 0, alpha: 0),
+    ])?.outputImage,
+      let ring = CIFilter(name: "CIRadialGradient", parameters: [
+        "inputCenter": CIVector(x: r, y: r), "inputRadius0": r + rim - 1, "inputRadius1": r + rim,
+        "inputColor0": CIColor(red: 1, green: 1, blue: 1, alpha: 1), "inputColor1": CIColor(red: 1, green: 1, blue: 1, alpha: 0),
+      ])?.outputImage
+    else { return nil }
+    let face = square.applyingFilter("CIBlendWithMask", parameters: [
+      kCIInputBackgroundImageKey: CIImage.empty(), kCIInputMaskImageKey: hole.cropped(to: square.extent),
+    ])
+    return face.composited(over: ring.cropped(to: CGRect(x: -rim, y: -rim, width: size + 2 * rim, height: size + 2 * rim)))
+  }
+
+  /// Plausible like and comment counts, fixed per clip and seed; the likes
+  /// climb a little while the post is on screen.
+  func feedNumbers(_ clip: Int, progress: Double) -> (likes: Int, comments: Int) {
+    var rng = SeededRandom(seed: UInt64(bitPattern: Int64(seed &* 31 &+ clip)) &+ 0x51)
+    let likes = Int(pow(10, 2.6 + 2.3 * rng.unit()))
+    let comments = max(3, Int(Double(likes) * (0.01 + 0.04 * rng.unit())))
+    return (likes + Int(progress * Double(likes) * 0.04), comments)
+  }
+
+  static func feedCount(_ n: Int) -> String {
+    n >= 10_000 ? String(format: "%.1f万", Double(n) / 10_000) : n.formatted()
+  }
+
+  /// The post's own layer: side icons with counts, handle, tags, progress bar
+  /// and, on the first post, the cover card. dy moves it with a swipe.
+  func feedChrome(_ g: CGContext, _ e: MadVideoEvent, progress: Double, dy: CGFloat, first: Bool,
+                  W: CGFloat, H: CGFloat) {
+    let k = W / 720
+    let white = CGColor(gray: 1, alpha: 1)
+    let color = Self.colors[e.clip % Self.colors.count]
+    func at(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x, y: H - y) }
+    g.saveGState()
+    g.translateBy(x: 0, y: -dy)
+    let (likes, comments) = feedNumbers(e.clip, progress: progress)
+    let x = W - 62 * k
+    var y = H * 0.52
+    // like
+    g.setFillColor(color)
+    g.fillEllipse(in: ci(CGRect(x: x - 22 * k, y: y - 16 * k, width: 23 * k, height: 22 * k), H))
+    g.fillEllipse(in: ci(CGRect(x: x - 1 * k, y: y - 16 * k, width: 23 * k, height: 22 * k), H))
+    let heart = CGMutablePath()
+    heart.move(to: at(x - 21 * k, y - 1 * k))
+    heart.addLine(to: at(x + 21 * k, y - 1 * k))
+    heart.addLine(to: at(x, y + 22 * k))
+    heart.closeSubpath()
+    g.addPath(heart)
+    g.fillPath()
+    text(g, Self.feedCount(likes), at: CGPoint(x: x, y: y + 42 * k), size: 20 * k, color: white, H: H,
+      centred: true, shadow: true)
+    // comment
+    y += 104 * k
+    g.setFillColor(white)
+    g.addPath(CGPath(roundedRect: ci(CGRect(x: x - 22 * k, y: y - 18 * k, width: 44 * k, height: 30 * k), H),
+      cornerWidth: 12 * k, cornerHeight: 12 * k, transform: nil))
+    g.fillPath()
+    let tail = CGMutablePath()
+    tail.move(to: at(x - 8 * k, y + 10 * k))
+    tail.addLine(to: at(x + 4 * k, y + 10 * k))
+    tail.addLine(to: at(x - 10 * k, y + 22 * k))
+    tail.closeSubpath()
+    g.addPath(tail)
+    g.fillPath()
+    text(g, Self.feedCount(comments), at: CGPoint(x: x, y: y + 42 * k), size: 20 * k, color: white, H: H,
+      centred: true, shadow: true)
+    // share
+    y += 104 * k
+    let arrow = CGMutablePath()
+    let points: [(CGFloat, CGFloat)] = [(-20, 14), (-20, -2), (4, -2), (4, -14), (24, 4), (4, 22), (4, 10), (-8, 10)]
+    arrow.move(to: at(x + points[0].0 * k, y + points[0].1 * k))
+    for (px, py) in points.dropFirst() { arrow.addLine(to: at(x + px * k, y + py * k)) }
+    arrow.closeSubpath()
+    g.addPath(arrow)
+    g.fillPath()
+    text(g, "シェア", at: CGPoint(x: x, y: y + 44 * k), size: 20 * k, color: white, H: H, centred: true, shadow: true)
+    // handle, tags and progress
+    g.setFillColor(color)
+    g.fillEllipse(in: ci(CGRect(x: 28 * k, y: H - 196 * k, width: 48 * k, height: 48 * k), H))
+    g.setStrokeColor(white)
+    g.setLineWidth(3 * k)
+    g.strokeEllipse(in: ci(CGRect(x: 28 * k, y: H - 196 * k, width: 48 * k, height: 48 * k), H))
+    text(g, "@" + names[e.clip], at: CGPoint(x: 90 * k, y: H - 172 * k), size: 30 * k, color: white, H: H, shadow: true)
+    text(g, "#日常の音  #オトグラシ", at: CGPoint(x: 30 * k, y: H - 118 * k), size: 24 * k,
+      color: CGColor(gray: 1, alpha: 0.9), H: H, shadow: true)
+    g.setFillColor(CGColor(gray: 1, alpha: 0.27))
+    g.fill(ci(CGRect(x: 0, y: H - 6 * k, width: W, height: 6 * k), H))
+    g.setFillColor(CGColor(gray: 1, alpha: 0.92))
+    g.fill(ci(CGRect(x: 0, y: H - 6 * k, width: W * CGFloat(progress), height: 6 * k), H))
+    if first { coverCard(g, W: W, H: H) }
+    g.restoreGState()
+  }
+
+  /// The first frame is the cover a friend (and a feed thumbnail) sees before
+  /// pressing play: whose everyday this is, and that オトグラシ made it. Kept
+  /// clear of the app's own buttons at the bottom and right.
+  func coverCard(_ g: CGContext, W: CGFloat, H: CGFloat) {
+    let k = W / 720
+    let rect = ci(CGRect(x: 40 * k, y: 160 * k, width: W - 110 * k, height: 210 * k), H)
+    let ink = CGColor(red: 0.14, green: 0.11, blue: 0.10, alpha: 1)
+    let coral = Self.colors[0]
+    func line(_ string: String, _ font: String, _ size: CGFloat, _ color: CGColor) -> CTLine {
+      CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [
+        NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(font as CFString, size, nil),
+        NSAttributedString.Key(kCTForegroundColorAttributeName as String): color,
+      ]))
+    }
+    g.saveGState()
+    g.translateBy(x: rect.midX, y: rect.midY)
+    g.rotate(by: 3 * .pi / 180)
+    g.translateBy(x: -rect.midX, y: -rect.midY)
+    g.setShadow(offset: CGSize(width: 6 * k, height: -12 * k), blur: 28 * k, color: CGColor(gray: 0, alpha: 0.4))
+    g.setFillColor(CGColor(red: 0.984, green: 0.953, blue: 0.902, alpha: 0.98))
+    g.addPath(CGPath(roundedRect: rect, cornerWidth: 26 * k, cornerHeight: 26 * k, transform: nil))
+    g.fillPath()
+    g.setShadow(offset: .zero, blur: 0, color: nil)
+    let headline = "\(owner)の日常"
+    var size = 104 * k
+    var title = line(headline, "HiraginoSans-W6", size, ink)
+    while size > 48 * k, CGFloat(CTLineGetTypographicBounds(title, nil, nil, nil)) > rect.width - 68 * k {
+      size -= 2 * k
+      title = line(headline, "HiraginoSans-W6", size, ink)
+    }
+    g.textPosition = CGPoint(x: rect.minX + 34 * k, y: rect.maxY - 26 * k - size * 0.88)
+    CTLineDraw(title, g)
+    let by = line("by オトグラシ", "HiraMaruProN-W4", 32 * k, coral)
+    let byWidth = CGFloat(CTLineGetTypographicBounds(by, nil, nil, nil))
+    g.textPosition = CGPoint(x: rect.maxX - 34 * k - byWidth, y: rect.minY + 26 * k)
+    CTLineDraw(by, g)
+    g.restoreGState()
+  }
+
+  // MARK: the last post lifts off as a sticker
+
+  /// ぐんっ: the last post punches in, its scene blurs away into a flat ground
+  /// and the subject is left as a white-edged sticker, which then bops through
+  /// the first bar of the song as its own sound opens it.
+  func stickerMoment(_ s: Int, W: CGFloat, H: CGFloat,
+                     image: (MadVideoEvent, Int) async throws -> CIImage) async throws -> CIImage {
+    let full = CGRect(x: 0, y: 0, width: W, height: H)
+    guard let last = posts.last?.event else { return CIImage(color: backdrop()).cropped(to: full) }
+    let k = W / 720
+    let after = s >= introEnd
+    let shown = after ? (opener ?? last) : last
+    let at = min(max(s, shown.start), shown.end - 1)
+    let picture = try await image(shown, at)
+    let u = min(1, max(0, Double(s - (introEnd - Self.liftIn)) / Double(Self.liftIn)))
+    let zoom = CGFloat(1 + 0.14 * Self.overshoot(min(1, u / 0.35)))
+    let lift = after ? 1.0 : Self.easeOut((u - 0.3) / 0.7)
+    let scene = cover(picture, full, H: H, zoom: zoom)
+    let blurred = scene.clampedToExtent().applyingGaussianBlur(sigma: (2 + 16 * lift) * Double(k)).cropped(to: full)
+    let veil = CIImage(color: backdrop()).cropped(to: full).applyingFilter("CIColorMatrix", parameters: [
+      "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(0.75 * lift)),
+    ])
+    var out = veil.composited(over: blurred)
+    var piece: CIImage
+    if await hasSubject(shown.clip, image: image), let m = mask(shown, at, picture: picture, largest: true) {
+      let matte = cover(m.image, full, H: H, zoom: zoom)
+      let subject = scene.applyingFilter("CIBlendWithMask", parameters: [
+        kCIInputBackgroundImageKey: CIImage.empty(), kCIInputMaskImageKey: matte,
+      ])
+      let edge = CGFloat(14 * lift) * k
+      if edge > 1 {
+        // grown past the frame, so the edge also closes where the subject is cut off
+        let grown = matte.applyingFilter("CIMorphologyMaximum", parameters: ["inputRadius": edge])
+        let white = CIImage(color: .white).cropped(to: grown.extent).applyingFilter("CIBlendWithMask", parameters: [
+          kCIInputBackgroundImageKey: CIImage.empty(), kCIInputMaskImageKey: grown,
+        ])
+        piece = subject.composited(over: white)
+      } else {
+        piece = subject
+      }
+    } else {
+      // nothing to cut out: the frame becomes a white-edged photo
+      let edge = (4 + 12 * CGFloat(lift)) * k
+      piece = scene.composited(over: CIImage(color: .white).cropped(to: full.insetBy(dx: -edge, dy: -edge)))
+    }
+    // it shrinks as it lifts off, so even a close-up leaves ground around it,
+    // then pops on the downbeat and bops on each kick
+    var scale = 1 - 0.3 * CGFloat(lift)
+    var tilt: CGFloat = 0
+    if after {
+      let b = Double(s - introEnd) / 48_000
+      scale *= CGFloat(0.9 + 0.1 * Self.overshoot(b / 0.3))
+      let start = introEnd
+      if let kick = lastOnset(s, { $0.role == "kick" && $0.start >= start }) {
+        scale *= 1 + 0.05 * CGFloat(max(0, 1 - Double(s - kick.start) / 7_200))
+      }
+      let beat = (s - introEnd) / Self.beat
+      tilt = beat == 0 ? -3 * CGFloat(min(1, b / 0.2)) : (beat % 2 == 1 ? 3 : -3)
+    }
+    let pivot = CGPoint(x: W / 2, y: H * 0.55)
+    piece = piece.transformed(by: CGAffineTransform(translationX: -pivot.x, y: -pivot.y)
+      .concatenating(CGAffineTransform(scaleX: scale, y: scale))
+      .concatenating(CGAffineTransform(rotationAngle: tilt * .pi / 180))
+      .concatenating(CGAffineTransform(translationX: pivot.x, y: pivot.y)))
+    let shadow = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.35 * CGFloat(lift))).cropped(to: piece.extent)
+      .applyingFilter("CIBlendWithAlphaMask", parameters: [
+        kCIInputBackgroundImageKey: CIImage.empty(), kCIInputMaskImageKey: piece,
+      ])
+      .applyingGaussianBlur(sigma: 12 * Double(k))
+      .transformed(by: CGAffineTransform(translationX: 8 * k, y: -14 * k))
+    out = piece.composited(over: shadow.composited(over: out))
+    return out.cropped(to: full)
+  }
+
+  // MARK: tape rewind for a reverse swell
+
+  func reversing(_ s: Int) -> MadVideoEvent? {
+    events.first { $0.reverse && $0.role == "fx" && $0.active(s) }
+  }
+
+  /// The clip itself rewinding on tape: washed colour, red and blue fringes,
+  /// rows wobbling and tearing at the bottom, rolling noise bars, a blinking
+  /// ◀◀ and a counter running backwards. Everything grows with the swell.
+  func rewind(_ e: MadVideoEvent, _ s: Int, W: CGFloat, H: CGFloat,
+              image: (MadVideoEvent, Int) async throws -> CIImage,
+              overlays: inout [(CGContext) -> Void]) async throws -> CIImage {
+    let full = CGRect(x: 0, y: 0, width: W, height: H)
+    let k = W / 720
+    let u = min(1, max(0, Double(s - e.start) / Double(max(1, e.end - e.start))))
+    let strength = CGFloat(0.55 + 0.45 * u)
+    let t = Double(s) / 48_000
+    let washed = cover(try await image(e, s), full, H: H)
+      .applyingFilter("CIColorControls", parameters: ["inputSaturation": 0.65, "inputContrast": 1.15])
+    // rows wobble sideways; the bottom of the picture tears to the right
+    let bands = 32
+    let bandHeight = H / CGFloat(bands)
+    var wobbled = CIImage(color: .black).cropped(to: full)
+    for band in 0..<bands {
+      let top = CGFloat(band) * bandHeight
+      var shift = CGFloat(sin(Double(top / k) * 0.045 + t * 55)) * 7 * strength * k
+      if top > H * 0.86 { shift += (top - H * 0.86) * 0.9 * strength }
+      let slice = washed.cropped(to: ci(CGRect(x: 0, y: top, width: W, height: bandHeight + 1), H))
+      wobbled = slice.transformed(by: CGAffineTransform(translationX: shift, y: 0)).composited(over: wobbled)
+    }
+    let picture = wobbled.cropped(to: full)
+    // colour fringes: red one way, blue the other
+    let off = (6 + 8 * strength) * k
+    let zero = CIVector(x: 0, y: 0, z: 0, w: 0)
+    func channel(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CIImage {
+      picture.applyingFilter("CIColorMatrix", parameters: [
+        "inputRVector": r > 0 ? CIVector(x: 1, y: 0, z: 0, w: 0) : zero,
+        "inputGVector": g > 0 ? CIVector(x: 0, y: 1, z: 0, w: 0) : zero,
+        "inputBVector": b > 0 ? CIVector(x: 0, y: 0, z: 1, w: 0) : zero,
+      ])
+    }
+    let red = channel(1, 0, 0).transformed(by: CGAffineTransform(translationX: -off, y: 0))
+    let blue = channel(0, 0, 1).transformed(by: CGAffineTransform(translationX: off, y: 0))
+    var out = red.applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: channel(0, 1, 0)])
+      .applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: blue])
+      .cropped(to: full)
+    // scan lines
+    if let stripes = CIFilter(name: "CIStripesGenerator", parameters: [
+      "inputColor0": CIColor(red: 0, green: 0, blue: 0, alpha: 0.3),
+      "inputColor1": CIColor(red: 0, green: 0, blue: 0, alpha: 0),
+      "inputWidth": 1.5 * k, "inputSharpness": 1,
+    ])?.outputImage {
+      out = stripes.transformed(by: CGAffineTransform(rotationAngle: .pi / 2)).cropped(to: full).composited(over: out)
+    }
+    // noise bars rolling upwards, faster as it rewinds harder
+    if let random = CIFilter(name: "CIRandomGenerator")?.outputImage {
+      let snow = random.transformed(by: CGAffineTransform(translationX: CGFloat(Int(t * 30) % 97) * 13, y: 0))
+        .applyingFilter("CIColorMatrix", parameters: [
+          "inputRVector": CIVector(x: 0.7, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0.7, y: 0, z: 0, w: 0),
+          "inputBVector": CIVector(x: 0.7, y: 0, z: 0, w: 0), "inputAVector": zero,
+          "inputBiasVector": CIVector(x: 0.2, y: 0.2, z: 0.2, w: 0.65),
+        ])
+      for bar in 0..<3 {
+        let span = Double(H / k + 200)
+        let travel = (t * (700 + 500 * u) + Double(bar) * 520).truncatingRemainder(dividingBy: span)
+        let top = (H + 200 * k) - CGFloat(travel) * k
+        let rect = ci(CGRect(x: 0, y: top, width: W, height: (18 + 26 * CGFloat(bar)) * k), H).intersection(full)
+        if !rect.isNull, rect.height > 0 { out = snow.cropped(to: rect).composited(over: out) }
+      }
+    }
+    let back = max(0, 7.0 - Double(s - e.start) / 48_000 * 9)
+    let counter = String(format: "-0:%02d:%02d.%02d", Int(back) / 60, Int(back) % 60, Int(back * 30) % 30)
+    let blink = Int(t * 4) % 2 == 0
+    overlays.append { g in
+      let white = CGColor(gray: 1, alpha: 1)
+      if blink {
+        self.text(g, "◀◀", at: CGPoint(x: 40 * k, y: 102 * k), size: 76 * k, color: white, H: H, shadow: true)
+      }
+      self.text(g, "REW", at: CGPoint(x: 178 * k, y: 106 * k), size: 52 * k, color: white, H: H, shadow: true)
+      self.text(g, counter, at: CGPoint(x: 44 * k, y: 178 * k), size: 40 * k,
+        color: CGColor(gray: 1, alpha: 0.92), H: H, shadow: true)
+    }
+    return out.cropped(to: full)
+  }
 }

@@ -3,6 +3,7 @@ import 'dart:io';
 import '../media/media_presentation_gateway.dart';
 import '../media/platform_media_gateway.dart';
 import '../storage/asset_repository.dart';
+import '../storage/profile_store.dart';
 import '../storage/project_database.dart';
 import '../storage/project_repository.dart';
 
@@ -13,6 +14,7 @@ final class AppDependencies {
     required this.presentation,
     required this.projects,
     required this.assets,
+    this.profile,
   });
 
   final ProjectDatabase database;
@@ -20,6 +22,7 @@ final class AppDependencies {
   final MediaPresentationGateway presentation;
   final ProjectRepository projects;
   final AssetRepository assets;
+  final ProfileStore? profile;
 
   static Future<AppDependencies> bootstrap() async {
     final media = PlatformMediaGateway();
@@ -34,6 +37,7 @@ final class AppDependencies {
         database,
         inspector: NativeAssetInspector(media),
       ),
+      profile: ProfileStore(File('$root/owner_name.txt')),
     );
   }
 

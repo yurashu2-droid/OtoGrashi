@@ -121,6 +121,7 @@ final class VideoRecipe {
     Map<String, String> clipNames = const <String, String>{},
     this.effects = VideoEffects.none,
     this.totalSamples = 720000,
+    this.ownerName,
   }) : clipCrops = List<ClipCrop>.unmodifiable(clipCrops),
        captions = List<VideoCaption>.unmodifiable(captions),
        events = List<VideoSceneEvent>.unmodifiable(events),
@@ -145,6 +146,10 @@ final class VideoRecipe {
       throw const MediaContractException(
         'Video recipe sound names are invalid.',
       );
+    }
+    if (ownerName != null &&
+        (ownerName!.trim().isEmpty || ownerName!.runes.length > 20)) {
+      throw const MediaContractException('Video recipe owner name is invalid.');
     }
     if (clipCrops.any((value) => !_validCrop(value.crop)) ||
         captions.any(
@@ -280,6 +285,7 @@ final class VideoRecipe {
             : VideoEffects.fromJson(
                 (effectsJson as Map<Object?, Object?>).cast(),
               ),
+        ownerName: json['ownerName'] as String?,
       );
     } on TypeError {
       throw const MediaContractException('Malformed video recipe JSON.');
@@ -299,6 +305,9 @@ final class VideoRecipe {
   final Map<String, String> clipNames;
   final VideoEffects effects;
 
+  /// Whose everyday this is: the cover of a MAD reads "〇〇の日常".
+  final String? ownerName;
+
   static int nearestFrameForSample(int sample) {
     if (sample < 0 || sample > 1440000) {
       throw const MediaContractException('Video sample is out of range.');
@@ -315,6 +324,7 @@ final class VideoRecipe {
     'events': events.map((value) => value.toJson()).toList(),
     'clipNames': clipNames,
     'effects': effects.toJson(),
+    if (ownerName != null) 'ownerName': ownerName,
   };
 }
 
