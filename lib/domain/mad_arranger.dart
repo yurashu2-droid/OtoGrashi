@@ -605,7 +605,8 @@ class _MadBuilder {
   void _introductions(int bars) {
     final order = [lead, ...others];
     var t = 0;
-    final slot = math.max(_beat, (bars * _bar - 3 * _sixteenth) ~/ math.max(1, order.length));
+    // at least half a beat each, so six clips still all fit into one bar
+    final slot = math.max(_beat ~/ 2, (bars * _bar - 3 * _sixteenth) ~/ math.max(1, order.length));
     for (final (k, v) in order.indexed) {
       if (t >= bars * _bar - _beat ~/ 2) break;
       if (k == 0) t += stutterHead(v, t, v.longest);
