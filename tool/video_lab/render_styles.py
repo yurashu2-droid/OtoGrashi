@@ -243,9 +243,12 @@ class Ctx:
         self.sources = sources
         self.total_t = total / SR
         self.names = [s.name for s in sources]
-        self.runs = repeat_runs(events)
         # clips that actually sound; silent ones stay out of the credits
         self.heard = sorted({e.c for e in events})
+        # quiet backing plays show as a corner sticker, never in the main picture
+        self.backing = [e for e in events if e.role == "backing"]
+        self.events = events = [e for e in events if e.role != "backing"]
+        self.runs = repeat_runs(events)
         self.title = title
 
     def active(self, t, kinds=None):
@@ -634,7 +637,37 @@ def shot_voices(ctx, t, seg, limit=4):
 BACKDROPS = [(247, 190, 205), (196, 226, 242), (240, 232, 205), (204, 236, 214)]
 
 
-def cutout(ctx, e, t, height, close=False, outline=0, max_width=W * 0.8):
+def largest_blob(mask):
+    """Keep only the biggest connected subject, so a small sticker never
+    carries a stray piece of someone at the edge of the frame."""
+    small = np.array(mask.resize((96, max(1, int(96 * mask.height / mask.width))), Image.BILINEAR)) > 96
+    h, w = small.shape
+    label = np.zeros((h, w), int)
+    best, best_size, n = 0, 0, 0
+    for y0 in range(h):
+        for x0 in range(w):
+            if not small[y0, x0] or label[y0, x0]:
+                continue
+            n += 1
+            stack, size = [(y0, x0)], 0
+            label[y0, x0] = n
+            while stack:
+                y, x = stack.pop()
+                size += 1
+                for yy, xx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+                    if 0 <= yy < h and 0 <= xx < w and small[yy, xx] and not label[yy, xx]:
+                        label[yy, xx] = n
+                        stack.append((yy, xx))
+            if size > best_size:
+                best, best_size = n, size
+    if not best:
+        return mask
+    keep = Image.fromarray(((label == best) * 255).astype(np.uint8)).resize(mask.size, Image.BILINEAR)
+    keep = keep.filter(ImageFilter.MaxFilter(9))
+    return Image.fromarray(np.minimum(np.array(mask), np.array(keep)))
+
+
+def cutout(ctx, e, t, height, close=False, outline=0, max_width=W * 0.8, largest=False):
     """The sounding subject on transparency, scaled to `height`. close=True keeps
     the top of the subject (a face or head) for a close-up."""
     frame = ctx.frame(e, t)
@@ -648,6 +681,8 @@ def cutout(ctx, e, t, height, close=False, outline=0, max_width=W * 0.8):
         board.alpha_composite(photo, (edge, edge))
         return board.rotate(-3, expand=True, resample=Image.BICUBIC)
     mask = ctx.mask(e, t).resize(frame.size, Image.BILINEAR)
+    if largest:
+        mask = largest_blob(mask)
     box = mask.point(lambda v: 255 if v > 96 else 0).getbbox()
     if not box:
         return None
@@ -1013,6 +1048,43 @@ def plan_shots(total_t, seed, sections=None):
     return plan
 
 
+def backing_stickers(canvas, ctx, t):
+    """A clip playing quietly behind the melody pops up as a small sticker in
+    the bottom-right corner, sways with its own level and pops away after."""
+    out = None
+    for e in ctx.backing:
+        if not (e.t <= t < e.end_t + 0.15):
+            continue
+        age = t - e.t
+        scale = overshoot(age / 0.3) if t < e.end_t else 1 - ease_out((t - e.end_t) / 0.15)
+        if scale <= 0.02:
+            continue
+        piece = cutout(ctx, e, min(t, e.end_t - 1 / FPS), H * 0.24, outline=8, max_width=W * 0.34, largest=True)
+        if piece is None:
+            continue
+        level = ctx.norm_level(e, t) if t < e.end_t else 0.0
+        piece = piece.resize((max(1, int(piece.width * scale)), max(1, int(piece.height * scale))), Image.BILINEAR)
+        piece = piece.rotate(-6 + 5 * level * np.sin(age * 9), expand=True, resample=Image.BICUBIC)
+        if out is None:
+            out = canvas.convert("RGBA")
+        shadow = Image.new("RGBA", piece.size, (0, 0, 0, 0))
+        shadow.putalpha(piece.getchannel("A").point(lambda v: v * 0.35))
+        x = int(W - 36 - piece.width)
+        y = int(H - 170 - piece.height)
+        out.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(10)), (x + 6, y + 10))
+        out.alpha_composite(piece, (x, y))
+        if scale > 0.6:
+            d = ImageDraw.Draw(out)
+            f = font(FONT_BOLD, 24)
+            name = ctx.names[e.c]
+            tw = d.textlength(name, font=f)
+            cx = x + piece.width / 2
+            d.rounded_rectangle((cx - tw / 2 - 14, y + piece.height - 6, cx + tw / 2 + 14, y + piece.height + 30),
+                                18, fill=(*CLIP_COLORS[e.c % len(CLIP_COLORS)], 235))
+            d.text((cx, y + piece.height + 12), name, font=f, fill=(255, 255, 255), anchor="mm")
+    return canvas if out is None else out.convert("RGB")
+
+
 def director_frame(ctx, t, plan, hud):
     shot, start, end, energy = next((p for p in plan if p[1] <= t < p[2]), plan[-1])
     long_run = any(len(r) >= 4 and r[0].t <= t < r[-1].end_t + 0.3 for r in ctx.runs)
@@ -1079,6 +1151,7 @@ def main():
         for f in range(frames):
             t = f / FPS
             img = director_frame(ctx, video_time(t, master_fx), plan, hud)
+            img = backing_stickers(img, ctx, video_time(t, master_fx))
             img = video_post(img, t, master_fx)
             if finish and t < ctx.total_t - 1.3:
                 img = finish.apply(img, t)

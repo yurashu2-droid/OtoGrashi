@@ -3,7 +3,8 @@
 Structure (16 bars at 128 BPM):
   bars 1-2   introductions: each clip's own phrase, the first one stuttered in
   bars 3-4   beat + bass sung by a low voice, tail echoes as fills
-  bars 5-12  the melody sung continuously by the lead voice, chops in rests
+  bars 5-12  the melody sung continuously by the lead voice, chops in rests;
+             clips with no part of their own play quietly behind it
   bars 13-14 break: drums drop, the longest phrase plays raw up front
   bars 15-16 climax: the hook again, full kit, every clip stutters at the end
 
@@ -360,8 +361,8 @@ def main():
         if k == 0:
             t += arr.stutter_head(i, t, longest[i])
         dur = arr.phrase(i, t, longest[i], gain=1.0, limit=min(1.4, (slot - 600) / SR))
-        t += max(slot, int(np.ceil(dur / (BEAT // 2))) * (BEAT // 2)) if len(order) > 3 else \
-            int(np.ceil((t + dur) / BEAT)) * BEAT - t
+        # with many clips each one keeps to its slot, so nobody is squeezed out
+        t += slot if len(order) > 3 else int(np.ceil((t + dur) / BEAT)) * BEAT - t
     arr.drums(kit, 1, 2, snare=False, hats=False, gain=0.7)
 
     # bars 3-4: beat + bass, tail echoes as fills
@@ -386,8 +387,19 @@ def main():
         cursors[s] = arr.syllable_line(s, cursors[s], part, 4, 0.95, "melody")
         arr.guide_line(s, part, 4, GUIDE)
     bass_cursor = bass_part(bass_cursor, bass_notes, 4, 0.55)
-    # chops answer in the gaps of bars 9-12, from clips that have not sung
-    answer = [i for i in others if i not in singers] or others or [lead]
+    # clips with no part of their own (neither singing nor bass) are heard
+    # quietly behind the melody, whole, every other bar
+    cameo = [i for i in usable if i not in singers and i != bass]
+    whole = {i: (min(a for a, _ in voices[i].regions), max(b for _, b in voices[i].regions)) for i in cameo}
+    for k, bar in enumerate((5, 7, 9, 11) if cameo else ()):
+        i = cameo[k % len(cameo)]
+        a, b = whole[i]
+        # bars 9-12 keep their last beat clear for the answering chops
+        limit = int(1.6 * SR) if bar < 8 else int(1.1 * SR)
+        arr.add(i, bar * BAR + BEAT // 2, min(b - a, limit), a, "phrase", "backing", 0.38,
+                fades={"fadeInSamples": 480, "fadeOutSamples": 2400})
+    # chops answer in the gaps of bars 9-12, the clips with the least to do first
+    answer = cameo + [i for i in others if i not in singers and i not in cameo] or others or [lead]
     for k, bar in enumerate((8, 9, 10, 11)):
         clip = answer[k % len(answer)]
         arr.stutter_head(clip, bar * BAR + 3 * BEAT, longest[clip], times=4, step=SIXTEENTH, gain=0.55)
