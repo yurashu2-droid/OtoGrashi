@@ -3,6 +3,13 @@ import XCTest
 @testable import Runner
 
 final class VideoRendererTests: XCTestCase {
+  /// Every mode, the 1080p movie and the rotated/HDR sources are rendered on
+  /// main, pull requests and manual runs (OTO_FULL_CHECKS=1). Ordinary pushes
+  /// render a representative subset so a check stays within a few minutes.
+  private var fullChecks: Bool {
+    ProcessInfo.processInfo.environment["OTO_FULL_CHECKS"] == "1"
+  }
+
   func testVideoUsesTheSameLoopAndReverseSourceClockAsAudio() throws {
     for reverse in [false, true] {
       let event = VideoEventPayload(assetId: "voice", destinationStartSample: 12_000,
@@ -66,7 +73,10 @@ final class VideoRendererTests: XCTestCase {
 
   func testPerformanceModesRenderWithProductionValidation() async throws {
     let directory = try evidenceDirectory()
-    for mode in ["mad", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"] {
+    let modes = fullChecks
+      ? ["mad", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"]
+      : ["mad", "mosaic"]
+    for mode in modes {
       let requestURL = directory.appendingPathComponent("native-\(mode).json")
       // Missing fixtures are a failure, not a silently skipped feature test.
       let request = try JSONDecoder().decode(VideoRenderRequestPayload.self, from: Data(contentsOf: requestURL))
@@ -563,7 +573,7 @@ final class VideoRendererTests: XCTestCase {
       }
     }
 
-    for quality in ["preview", "full"] {
+    for quality in fullChecks ? ["preview", "full"] : ["preview"] {
       print("VIDEO_RENDER_START quality=\(quality) time=\(Date().timeIntervalSince1970)")
       let request = try decodeRequest(
         quality: quality,
@@ -610,6 +620,7 @@ final class VideoRendererTests: XCTestCase {
   }
 
   func testRotatedVFRAndHDRSourcesNormalizeToSDR30fps() async throws {
+    guard fullChecks else { throw XCTSkip("Rendered in full checks only.") }
     let renderer = VideoRenderer(audioRenderer: AudioRenderer(accompanimentGain: 0))
     var outputs: [URL] = []
     defer {

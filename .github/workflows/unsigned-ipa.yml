@@ -22,6 +22,12 @@ concurrency:
 
 jobs:
   ipa:
+    # claude/** branches build an IPA only when asked: [ipa] in the commit
+    # message or a manual run, so ordinary pushes do not queue two macOS jobs.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      !startsWith(github.ref, 'refs/heads/claude/') ||
+      contains(github.event.head_commit.message, '[ipa]')
     runs-on: macos-26
     timeout-minutes: 30
     env:

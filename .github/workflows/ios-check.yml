@@ -29,6 +29,10 @@ jobs:
     env:
       XCODE_PATH: /Applications/Xcode_26.6.app
       FLUTTER_VERSION: 3.47.5
+      # Full checks render every mode, the 1080p movie and the rotated/HDR
+      # sources. Ordinary branch pushes render a representative subset; add
+      # [full-ci] to a commit message to run everything on a branch.
+      OTO_FULL_CHECKS: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '[full-ci]')) && '1' || '0' }}
 
     steps:
       - name: Check out source
@@ -67,7 +71,9 @@ jobs:
           set -o pipefail
           flutter --version 2>&1 | tee ci-logs/flutter.txt
           dart --version 2>&1 | tee ci-logs/dart.txt
-          flutter doctor -v 2>&1 | tee ci-logs/flutter-doctor.txt
+          if [[ "$OTO_FULL_CHECKS" == 1 ]]; then
+            flutter doctor -v 2>&1 | tee ci-logs/flutter-doctor.txt
+          fi
           test "$(flutter --version --machine | ruby -rjson -e 'puts JSON.parse(STDIN.read)["frameworkVersion"]')" = "$FLUTTER_VERSION"
 
       - name: Resolve dependencies
@@ -88,11 +94,13 @@ jobs:
           set -o pipefail
           flutter test 2>&1 | tee ci-logs/test.txt
 
-      - name: Build unsigned iOS Simulator app
+      - name: Prepare iOS Simulator build
         shell: bash
         run: |
+          # xcodebuild test compiles the app itself; Flutter only needs to
+          # generate its configuration and install pods first.
           set -o pipefail
-          flutter build ios --simulator --debug 2>&1 | tee ci-logs/ios-simulator-build.txt
+          flutter build ios --simulator --debug --config-only 2>&1 | tee ci-logs/ios-simulator-build.txt
 
       - name: Run native tests on an installed iPhone simulator
         shell: bash
@@ -111,7 +119,8 @@ jobs:
           echo "simulator_udid=$SIMULATOR_UDID" | tee ci-logs/simulator.txt
           xcrun simctl boot "$SIMULATOR_UDID" 2>/dev/null || true
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b 2>&1 | tee -a ci-logs/simulator.txt
-          xcodebuild test \
+          echo "full_checks=$OTO_FULL_CHECKS" | tee -a ci-logs/simulator.txt
+          TEST_RUNNER_OTO_FULL_CHECKS="$OTO_FULL_CHECKS" xcodebuild test \
             -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Debug \
@@ -150,8 +159,10 @@ jobs:
         run: |
           test -f ci-artifacts/video-render-preview.mp4
           test -f ci-artifacts/video-render-preview.json
-          test -f ci-artifacts/video-render-full.mp4
-          test -f ci-artifacts/video-render-full.json
+          if [[ "$OTO_FULL_CHECKS" == 1 ]]; then
+            test -f ci-artifacts/video-render-full.mp4
+            test -f ci-artifacts/video-render-full.json
+          fi
 
       - name: Publish log summaries as annotations
         if: always()
