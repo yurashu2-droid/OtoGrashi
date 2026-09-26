@@ -434,20 +434,10 @@ def main():
     syl = {i: (voices[i].syllables() or [(a, b, None) for a, b in voices[i].regions]) for i in range(n)}
     long_clip = max(usable, key=lambda i: longest[i][1] - longest[i][0])
     master, used = [], []
-    # effects that make the clips sound synthetic (gate, character voices, octave
-    # jumps, bitcrush): at most one per video, so the everyday sounds stay themselves
-    digital = [1]
-
-    def digital_ok(p):
-        if digital[0] and rng.random() < p:
-            digital[0] -= 1
-            return True
-        return False
-
     into_melody = choose(["roll", "riser", "reverse"])
     into_break = choose(["tapestop", "scratch"])
     # pairs that belong together: after a tape stop the break usually opens with a sweep
-    in_break = "gate" if digital_ok(0.2 if into_break == "tapestop" else 0.35) else "sweep"
+    in_break = ("sweep" if rng.random() < 0.8 else "gate") if into_break == "tapestop" else choose(["sweep", "gate"])
     into_climax = choose(["roll", "reverse", "riser"])
     for slot, end in ((into_melody, 4 * BAR), (into_climax, 14 * BAR)):
         if slot == "roll":
@@ -469,13 +459,13 @@ def main():
             if e["role"] == "phrase" and 12 * BAR <= e["destinationStartSample"] < 13 * BAR:
                 e["gate"] = 4
     used.append(in_break)
-    # stabs sing a chord out of a clip: synthetic too, so they share the budget
-    stab_clip = next((i for i in usable if i not in singers and any(m for _, _, m in syl[i])), None)
-    if stab_clip is not None and digital_ok(0.4):
-        s0 = next(x for x in syl[stab_clip] if x[2] is not None)
-        root = bass_notes[0][2] + 12
-        arr.fx_stabs(stab_clip, s0, s0[2], 8, 2, root)
-        used.append("stabs")
+    if rng.random() < 0.6:
+        stab_clip = next((i for i in usable if i not in singers and any(m for _, _, m in syl[i])), None)
+        if stab_clip is not None:
+            s0 = next(x for x in syl[stab_clip] if x[2] is not None)
+            root = bass_notes[0][2] + 12
+            arr.fx_stabs(stab_clip, s0, s0[2], 8, 2, root)
+            used.append("stabs")
     if rng.random() < 0.6:
         arr.fx_scratch(lead, 15 * BAR, syl[lead][0], beats=2, gain=0.6)
         used.append("scratch-fill")
@@ -483,11 +473,11 @@ def main():
     # second wave of effects; each is optional so no two videos stack the same set
     intro_phrases = [e for e in arr.events if e["role"] == "phrase" and e["destinationStartSample"] < 2 * BAR
                      and e["assetId"] != f"clip-{lead}"]
-    if intro_phrases and digital_ok(0.3):
+    if intro_phrases and rng.random() < 0.5:
         e = intro_phrases[int(rng.integers(len(intro_phrases)))]
         e["rate"] = choose([1.45, 0.7])  # chipmunk or monster; the face speeds up or slows down with it
         used.append("character-high" if e["rate"] > 1 else "character-low")
-    if digital_ok(0.2):
+    if rng.random() < 0.4:
         bounce = [e for e in arr.events if e["role"] == "melody" and 8 * BAR <= e["destinationStartSample"] < 10 * BAR
                   and (e.get("notes") or e.get("targetMidiNote"))]
         for j, e in enumerate(bounce):
@@ -520,7 +510,7 @@ def main():
                             gain=round(e["gain"] * 0.5 ** k, 3), role="echo")
                 arr.events.append(copy)
         used.append("delay-throw")
-    if digital_ok(0.15):
+    if rng.random() < 0.35:
         master.append({"type": "bitcrush", "start": 11 * BAR, "dur": BAR - BEAT})
         used.append("bitcrush")
 
