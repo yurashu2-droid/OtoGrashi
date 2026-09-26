@@ -586,6 +586,12 @@ def held(ctx, key, value, t, same=lambda a, b: a == b):
     return old[0]
 
 
+def face_like(ctx, e):
+    """A clip with a subject (a face, a person) reads clearly when flipped; a
+    landscape just flickers, so it is never flipped."""
+    return getattr(ctx.sources[e.c], "has_subject", True)
+
+
 def steady_lead(ctx, t):
     return held(ctx, "lead", lead_of(ctx, t), t, same=lambda a, b: a.c == b.c)
 
@@ -610,7 +616,8 @@ def shot_flip(ctx, t, seg):
     """Every melodic note cuts to a mirrored / shifted crop of the same face."""
     lead = steady_lead(ctx, t)
     notes = len(ctx.onsets_between(seg[0], t + 1e-6, lambda e: e.kind != "rhythm"))
-    mirror, dx = held(ctx, "flip", (notes % 2 == 1, 0.04 * (notes % 3 - 1)), t)
+    # a face flips on every note; a landscape keeps still
+    mirror, dx = (notes % 2 == 1, 0.04 * (notes % 3 - 1)) if face_like(ctx, lead) else (False, 0.0)
     return single(ctx, t, lead, zoom=1.08 * accent_punch(lead, t, 0.1), mirror=mirror, dx=dx)
 
 
@@ -876,8 +883,8 @@ def shot_mirror(ctx, t, seg):
     and stacked voices of one sound become a symmetric pair or a four-way mirror."""
     lead = steady_lead(ctx, t)
     same = [e for e in ctx.voices(t) if e.c == lead.c]
-    # only repeated chops flip the picture, and never faster than HOLD
-    k = held(ctx, "mirror", repeat_index(ctx, lead) % 4 if lead.role in ACCENTS else 0, t)
+    # a face flips on each repeat, as fast as the loop; a landscape is never flipped
+    k = repeat_index(ctx, lead) if face_like(ctx, lead) else 0
     zoom = 1.06 * accent_punch(lead, t, 0.1)
     if len(same) >= 3:
         q = panel(ctx, lead, t, W / 2, H / 2, zoom=zoom)
