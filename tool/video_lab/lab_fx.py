@@ -14,6 +14,10 @@ Master effects act on the whole mix at a moment in the song:
 
   tapestop  the song slows to a halt            picture slows to a freeze and darkens
   sweep     low-pass opening from muffled       picture goes from blurred to sharp
+  bitcrush  8-bit, sample-and-hold crunch        picture turns to big pixels
+  sidechain everything but the kick ducks on    picture pumps with each kick
+            each kick (the "breathing" groove)
+  halftime  drums at half feel (arranger)        picture pushes in slowly
 """
 
 import math
@@ -69,6 +73,10 @@ def apply_master(mix, fx_list):
             src = a + n * (u - u ** 2 / 2)  # speed falls linearly from 1 to 0
             seg = np.interp(src, np.arange(len(mix)), mix)
             out[a:b] = seg * (1 - u ** 3)
+        elif fx["type"] == "bitcrush":
+            seg = out[a:b]
+            held = np.repeat(seg[::6], 6)[:len(seg)]  # ~8 kHz sample-and-hold
+            out[a:b] = np.round(held * 7) / 7          # ~4-bit steps
         elif fx["type"] == "sweep":
             # one-pole low-pass whose cutoff opens exponentially 250 Hz -> 16 kHz
             u = np.arange(b - a) / max(1, n)
@@ -81,6 +89,18 @@ def apply_master(mix, fx_list):
                 seg[i] = y
             out[a:b] = seg
     return out
+
+
+def sidechain_envelope(n, kicks, depth=0.35, release=0.18):
+    """Gain curve that dips on every kick and breathes back up."""
+    env = np.ones(n, np.float32)
+    rel = int(release * SR)
+    curve = (depth + (1 - depth) * (1 - np.exp(-np.arange(rel) / (rel / 4)))).astype(np.float32)
+    for k in kicks:
+        if 0 <= k < n:
+            m = min(rel, n - k)
+            env[k:k + m] = np.minimum(env[k:k + m], curve[:m])
+    return env
 
 
 def video_time(t, fx_list):
@@ -104,6 +124,21 @@ def video_post(img, t, fx_list):
         u = (t - a) / d
         if fx["type"] == "tapestop":
             img = ImageEnhance.Brightness(img).enhance(1 - 0.7 * u ** 2)
+        elif fx["type"] == "bitcrush":
+            w, h = img.size
+            img = img.resize((w // 14, h // 14)).resize((w, h), 0).quantize(24).convert("RGB")
+        elif fx["type"] == "sidechain":
+            since = [t - k / SR for k in fx.get("kicks", []) if 0 <= t - k / SR < 0.2]
+            if since:
+                z = 1 + 0.05 * (1 - since[-1] / 0.2)
+                w, h = img.size
+                cw, ch = w / z, h / z
+                img = img.crop((int((w - cw) / 2), int((h - ch) / 2), int((w + cw) / 2), int((h + ch) / 2))).resize((w, h))
+        elif fx["type"] == "halftime":
+            z = 1 + 0.14 * u
+            w, h = img.size
+            cw, ch = w / z, h / z
+            img = img.crop((int((w - cw) / 2), int((h - ch) / 2), int((w + cw) / 2), int((h + ch) / 2))).resize((w, h))
         elif fx["type"] == "sweep":
             img = img.filter(ImageFilter.GaussianBlur(16 * (1 - u) ** 1.5))
     return img

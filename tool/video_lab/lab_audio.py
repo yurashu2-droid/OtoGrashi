@@ -45,7 +45,7 @@ class Voice:
 
     def __init__(self, pcm):
         self.pcm = pcm
-        lo, hi = SR // 800, SR // 65
+        lo, hi = SR // 4000, SR // 65  # up to ~B7: whistles and high calls
         n = max(1, (len(pcm) - WIN) // HOP + 1)
         self.midi = np.zeros(n)
         self.voiced = np.zeros(n, bool)
@@ -150,6 +150,27 @@ class Voice:
                 out.append((s0 * HOP, s1 * HOP, float(np.median(v)) if len(v) >= 3 else None))
         return out
 
+    def purity(self):
+        """Share of a steady window's energy that sits on the fundamental.
+        Near 1 for whistles and pure sung tones. Pitch-synchronous grains
+        cannot retune those (a two-period grain of a sine still rings at the
+        old pitch), so they are retuned by playback speed instead."""
+        runs = self.voiced_runs()
+        if not runs:
+            return 0.0
+        a, z = max(runs, key=lambda r: r[1] - r[0])
+        size = min(4_800, (z - a) // 2 * 2)
+        at = (a + z) // 2 - size // 2
+        seg = self.pcm[at:at + size]
+        f = int(min(max((at + size // 2) // HOP, 0), len(self.midi) - 1))
+        if size < 1_200:
+            return 0.0
+        spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg)))) ** 2
+        freqs = np.fft.rfftfreq(len(seg), 1 / SR)
+        f0 = 440 * 2 ** ((self.midi[f] - 69) / 12)
+        band = (freqs > f0 * 0.94) & (freqs < f0 * 1.06)
+        return float(spec[band].sum() / max(1e-12, spec[freqs > 50].sum()))
+
     def voiced_seconds(self):
         return float(self.voiced.sum()) * HOP / SR
 
@@ -176,18 +197,26 @@ def sing(voice, src_start, duration, notes, tune=1.0, rate=1.0, accent=True, ref
     t = 0.0
     mark = None  # last source pitch mark, kept continuous between grains
 
+    axis = np.arange(len(pcm), dtype=np.float64)
+
     def lay(centre_src, at, half):
-        a, b = int(centre_src) - half, int(centre_src) + half
-        if a < 0 or b > len(pcm) or half < 8:
+        """Add one two-period grain. Both the source centre and the output
+        position may fall between samples; for high voices a period is only
+        ~60 samples, so rounding them would add a low buzz."""
+        if centre_src - half < 0 or centre_src + half > len(pcm) or half < 8:
             return
+        o = int(np.floor(at))
+        frac = at - o
+        k = np.arange(-half, half)
         w = np.hanning(2 * half)
-        o = int(at) - half
-        lo = max(0, -o)
-        hi = min(2 * half, len(out) - o)
+        vals = np.interp(centre_src + k - frac, axis, pcm)
+        start = o - half
+        lo = max(0, -start)
+        hi = min(2 * half, len(out) - start)
         if hi <= lo:
             return
-        out[o + lo:o + hi] += pcm[a + lo:a + hi] * w[lo:hi]
-        norm[o + lo:o + hi] += w[lo:hi]
+        out[start + lo:start + hi] += vals[lo:hi] * w[lo:hi]
+        norm[start + lo:start + hi] += w[lo:hi]
 
     while t < duration:
         while note_i + 1 < len(notes) and notes[note_i + 1][0] <= t:
@@ -213,8 +242,15 @@ def sing(voice, src_start, duration, notes, tune=1.0, rate=1.0, accent=True, ref
             lo = int(max(0, mark - p_src * 0.25))
             hi = int(min(len(pcm) - 1, mark + p_src * 0.25))
             if hi > lo:
-                mark = lo + int(np.argmax(pcm[lo:hi]))
-            lay(mark, t, int(p_src))
+                j = lo + int(np.argmax(pcm[lo:hi]))
+                # parabolic refinement puts the pitch mark between samples
+                if 0 < j < len(pcm) - 1:
+                    y0, y1, y2 = pcm[j - 1], pcm[j], pcm[j + 1]
+                    den = y0 - 2 * y1 + y2
+                    mark = j + (0.5 * (y0 - y2) / den if abs(den) > 1e-9 else 0.0)
+                else:
+                    mark = float(j)
+            lay(mark, t, int(round(p_src)))
             t += p_out
         else:
             mark = None

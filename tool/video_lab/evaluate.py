@@ -49,7 +49,7 @@ def main():
             if len(seg) < 1_920 or np.sqrt(np.mean(seg ** 2)) < 0.02:
                 continue
             sounding += 1
-            m, clarity = yin_frame(seg, SR // 800, SR // 65)
+            m, clarity = yin_frame(seg, SR // 4000, SR // 65)
             if clarity > 0.6 and abs(((m - midi + 6) % 12) - 6) < 1.0:
                 good += 1
         # judged on the part that sounds: a syllable may end before its note does

@@ -25,7 +25,8 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lab_fx import apply_master, gate_envelope, has_motion_fx, positions, video_post, video_time  # noqa: E402
+from lab_fx import (apply_master, gate_envelope, has_motion_fx, positions, sidechain_envelope,  # noqa: E402
+                    video_post, video_time)
 
 import imageio_ffmpeg
 
@@ -155,6 +156,7 @@ def render_audio(events, sources, total, source_pitch=None, master=True, fx=None
     """source_pitch: measured MIDI pitch per clip index. Without it the legacy
     recipes keep a gentle ±semitone range around middle C."""
     mix = np.zeros(total, np.float32)
+    kick_mix = np.zeros(total, np.float32)  # kept apart so sidechain can duck the rest
     voices = {}
     for e in events:
         src = sources[e.c]
@@ -192,10 +194,15 @@ def render_audio(events, sources, total, source_pitch=None, master=True, fx=None
             buf[-fo:] *= np.linspace(1, 0, fo)
         buf *= e.gain
         end = min(total, e.start + n)
-        mix[e.start:end] += buf[:end - e.start]
+        (kick_mix if e.role == "kick" else mix)[e.start:end] += buf[:end - e.start]
         blocks = (n + SPF - 1) // SPF
         padded = np.pad(np.abs(buf), (0, blocks * SPF - n))
         e.env = padded.reshape(blocks, SPF).max(axis=1)
+    for f in fx or []:
+        if f["type"] == "sidechain":
+            a, b = int(f["start"]), min(total, int(f["start"] + f["dur"]))
+            mix[a:b] *= sidechain_envelope(b - a, [k - a for k in f.get("kicks", [])])
+    mix = mix + kick_mix
     if not master:  # raw sum, for measuring stems against each other
         return mix
     mix = apply_master(mix, fx)

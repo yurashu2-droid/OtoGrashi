@@ -133,6 +133,7 @@ class Arrangement:
         voice = self.voices[clip]
         syl = voice.syllables() or [(a, b, None) for a, b in sorted(voice.regions)]
         runs = voice.voiced_runs() or sorted(voice.regions)
+        pure = voice.purity() > 0.6  # whistle-like: retune by speed, not by grains
         body = max(runs, key=lambda r: r[1] - r[0])  # the clearest sustained part
         k, pos = cursor
         pos = body[0] if pos is None else pos
@@ -145,16 +146,27 @@ class Arrangement:
             self.add(clip, start, hit, a0, "rhythm", role, gain)
             rest = dur - hit
             if rest > int(0.03 * SR):
-                if pos + rest > body[1]:
-                    pos = body[0]
-                src = pos
-                if rest > body[1] - body[0]:  # a very long note: read the body slower
-                    extra = {"rate": round((body[1] - body[0]) / rest, 4)}
-                    src = body[0]
+                span = body[1] - body[0]
+                # how fast the body is read: speed-retuned (pure) clips use more source
+                if pure:
+                    f = int(min(max(pos // 480, 0), len(voice.midi) - 1))
+                    here = voice.midi[f] if voice.voiced[f] else voice.median_midi()
+                    speed = float(np.clip(2 ** ((midi - here) / 12), 0.5, 2.0))
                 else:
-                    extra = {}
-                    pos += rest
-                self.add(clip, start + hit, rest, src, "sung", role, gain, notes=[[0, float(midi)]], **extra)
+                    speed = 1.0
+                need = int(rest * speed)
+                if need > span:  # a very long note: read the whole body, slower
+                    speed *= span / need
+                    need, pos = span, body[0]
+                elif pos + need > body[1]:
+                    pos = body[0]
+                if pure:
+                    self.add(clip, start + hit, rest, pos, "rhythm", role, gain,
+                             rate=round(speed, 4), targetMidiNote=float(midi))
+                else:
+                    extra = {"rate": round(speed, 4)} if speed != 1.0 else {}
+                    self.add(clip, start + hit, rest, pos, "sung", role, gain, notes=[[0, float(midi)]], **extra)
+                pos += need
             k += 1
         return (k % len(syl), pos)
 
@@ -276,7 +288,7 @@ def main():
     candidates = sorted((i for i in usable if voices[i].voiced_seconds() > 0.5),
                         key=lambda i: voices[i].pitch_spread())
     singers = candidates[:1]
-    if len(candidates) > 1 and voices[candidates[1]].pitch_spread() < min(14.0, 1.5 * voices[candidates[0]].pitch_spread()):
+    if len(candidates) > 1 and voices[candidates[1]].pitch_spread() < min(14.0, max(4.0, 1.5 * voices[candidates[0]].pitch_spread())):
         singers.append(candidates[1])
     if not singers:
         singers = [max(usable, key=lambda i: voices[i].voiced_seconds())]
@@ -303,8 +315,17 @@ def main():
             m += 12
         return m
 
-    sung = {s: [(b, l, octave_fit(m + shift, voices[s].median_midi() + (m - centre))) for b, l, m in melody]
-            for s in singers}
+    def fit_singer(s):
+        """Same key for everyone; each singer takes the whole tune in the octave
+        that keeps its highest and lowest notes closest to their own voice."""
+        line = [(b, l, m + shift) for b, l, m in melody]
+        top, bottom = max(m for _, _, m in line), min(m for _, _, m in line)
+        med = voices[s].median_midi()
+        octave = min((12 * k for k in range(-3, 4)),
+                     key=lambda o: (max(abs(top + o - med), abs(bottom + o - med)), abs(o)))
+        return [(b, l, m + octave) for b, l, m in line]
+
+    sung = {s: fit_singer(s) for s in singers}
     bass_line = score.get("bass_notes") or [(h * 2, 2, r) for h, r in enumerate(score["roots"])]
     bass_mid = voices[bass].median_midi() if not sampled_bass else 45.0
     bass_notes = []
@@ -398,7 +419,8 @@ def main():
     master, used = [], []
     into_melody = choose(["roll", "riser", "reverse"])
     into_break = choose(["tapestop", "scratch"])
-    in_break = choose(["sweep", "gate"])
+    # pairs that belong together: after a tape stop the break usually opens with a sweep
+    in_break = ("sweep" if rng.random() < 0.8 else "gate") if into_break == "tapestop" else choose(["sweep", "gate"])
     into_climax = choose(["roll", "reverse", "riser"])
     for slot, end in ((into_melody, 4 * BAR), (into_climax, 14 * BAR)):
         if slot == "roll":
@@ -430,6 +452,50 @@ def main():
     if rng.random() < 0.6:
         arr.fx_scratch(lead, 15 * BAR, syl[lead][0], beats=2, gain=0.6)
         used.append("scratch-fill")
+
+    # second wave of effects; each is optional so no two videos stack the same set
+    intro_phrases = [e for e in arr.events if e["role"] == "phrase" and e["destinationStartSample"] < 2 * BAR
+                     and e["assetId"] != f"clip-{lead}"]
+    if intro_phrases and rng.random() < 0.5:
+        e = intro_phrases[int(rng.integers(len(intro_phrases)))]
+        e["rate"] = choose([1.45, 0.7])  # chipmunk or monster; the face speeds up or slows down with it
+        used.append("character-high" if e["rate"] > 1 else "character-low")
+    if rng.random() < 0.4:
+        bounce = [e for e in arr.events if e["role"] == "melody" and 8 * BAR <= e["destinationStartSample"] < 10 * BAR
+                  and (e.get("notes") or e.get("targetMidiNote"))]
+        for j, e in enumerate(bounce):
+            if j % 2:
+                if e.get("notes"):
+                    e["notes"] = [[o, m + 12] for o, m in e["notes"]]
+                else:
+                    e["targetMidiNote"] += 12
+                    e["rate"] = round(min(2.0, e["rate"] * 2), 4)
+        used.append("octave-bounce")
+    halftime = rng.random() < 0.35
+    if halftime:
+        arr.events = [e for e in arr.events if not (e["role"] in ("kick", "snare", "hat")
+                                                    and 14 * BAR <= e["destinationStartSample"] < 15 * BAR)]
+        k_clip, k_src = kit["kick"]
+        s_clip, s_src = kit["snare"]
+        arr.add(k_clip, 14 * BAR, int(0.16 * SR), k_src, "rhythm", "kick", 0.95, rate=0.55)
+        arr.add(s_clip, 14 * BAR + 2 * BEAT, int(0.14 * SR), s_src, "rhythm", "snare", 0.85)
+        master.append({"type": "halftime", "start": 14 * BAR, "dur": BAR})
+        used.append("halftime")
+    if rng.random() < (0.3 if halftime else 0.5):
+        a, d = choose([(4 * BAR, 8 * BAR), (14 * BAR, 2 * BAR)])
+        kicks = [e["destinationStartSample"] for e in arr.events if e["role"] == "kick" and a <= e["destinationStartSample"] < a + d]
+        master.append({"type": "sidechain", "start": a, "dur": d, "kicks": kicks})
+        used.append("sidechain")
+    if rng.random() < 0.5:
+        for e in [e for e in arr.events if e["role"] == "phrase" and 12 * BAR <= e["destinationStartSample"] < 13 * BAR]:
+            for k in (1, 2, 3):  # a dotted-eighth echo trail after the break line
+                copy = dict(e, destinationStartSample=e["destinationStartSample"] + e["durationSamples"] + k * (3 * BEAT // 4),
+                            gain=round(e["gain"] * 0.5 ** k, 3), role="echo")
+                arr.events.append(copy)
+        used.append("delay-throw")
+    if rng.random() < 0.35:
+        master.append({"type": "bitcrush", "start": 11 * BAR, "dur": BAR - BEAT})
+        used.append("bitcrush")
 
     arr.events.sort(key=lambda e: e["destinationStartSample"])
     recipe = {"arrangement": {"totalSamples": BARS * BAR, "sourceAssetIds": [f"clip-{i}" for i in range(n)],
