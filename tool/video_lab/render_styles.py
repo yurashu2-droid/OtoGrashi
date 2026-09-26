@@ -361,8 +361,14 @@ def lead_of(ctx, t):
     live = ctx.voices(t)
     melodic = ([e for e in live if e.role == "phrase"] or [e for e in live if e.role == "melody"]
                or [e for e in live if e.kind != "rhythm" and e.role in (None, "bass")])
-    if melodic or live:
-        return (melodic or live)[-1]
+    if melodic:
+        return melodic[-1]
+    # between two melody notes, stay on the singer instead of flickering to a drum hit
+    held = ctx.last_onset(t, lambda e: e.role in ("melody", "phrase"))
+    if held and t - held.end_t < 0.3:
+        return held
+    if live:
+        return live[-1]
     return ctx.last_onset(t) or ctx.events[0]
 
 
@@ -446,7 +452,9 @@ def shot_flip(ctx, t, seg):
 def shot_stutter(ctx, t, seg):
     """Each new sound re-cuts to a tighter crop of the lead face."""
     lead = lead_of(ctx, t)
-    step = len(ctx.onsets_between(seg[0], t + 1e-6))
+    # one step per 16th-note slot that starts a sound (a note's attack and body count once)
+    step = len({round(e.t / (BEAT / 4)) for e in ctx.onsets_between(seg[0], t + 1e-6)
+                if e.role != "guide"})
     return single(ctx, t, lead, zoom=(1 + 0.12 * (step % 4)) * punch(t - lead.t, 0.08))
 
 
@@ -458,24 +466,39 @@ def voice_layout(n):
     return [(c * W / k, r * H / rows, W / k, H / rows) for r, k in enumerate(per_row) for c in range(k)]
 
 
-def shot_voices(ctx, t, seg):
-    """One picture per sounding voice. Repeats of the same sound alternate mirror."""
-    live = ctx.voices(t)
-    if not live:
+def shot_voices(ctx, t, seg, limit=4):
+    """One picture per *clip* heard so far in this bar: the grid grows 1→2→3→4
+    as sounds join and resets on the next downbeat. The clip sounding now moves
+    and glows; ones that have finished hold their last frame, dimmed.
+    Counting clips rather than events keeps a note's attack and body on one
+    picture, and each clip keeps its place for the whole shot."""
+    w0 = seg[0] + math.floor((t - seg[0]) / BAR) * BAR
+    window = [e for e in ctx.events if e.role != "guide" and w0 <= e.t <= t]
+    if not window:
         return single(ctx, t, lead_of(ctx, t))
-    rects = voice_layout(len(live))
+    first = {}
+    for e in ctx.events:
+        if e.role != "guide" and seg[0] <= e.t < seg[1]:
+            first.setdefault(e.c, e.t)
+    clips = sorted({e.c for e in window}, key=lambda c: first.get(c, 0))
+    if len(clips) > limit:  # keep the ones heard most recently
+        recent = sorted(clips, key=lambda c: max(e.t for e in window if e.c == c))[-limit:]
+        clips = [c for c in clips if c in recent]
+    rects = voice_layout(len(clips))
     canvas = Image.new("RGB", (W, H))
-    seen = {}
-    for e, (x, y, w, h) in zip(live, rects):
-        seen[e.c] = seen.get(e.c, 0) + 1
-        im = panel(ctx, e, t, w, h, mirror=seen[e.c] % 2 == 0, zoom=punch(t - e.t, 0.1, 0.1))
+    shown = []
+    for c, (x, y, w, h) in zip(clips, rects):
+        live = [e for e in ctx.voices(t) if e.c == c]
+        e = live[-1] if live else max((e for e in window if e.c == c), key=lambda e: e.t)
+        im = panel(ctx, e, t, w, h, zoom=punch(t - e.t, 0.08, 0.1) if live else 1.0)
         canvas.paste(im, (int(x), int(y)))
+        shown.append((e, (x, y, w, h), len(live)))
     d = ImageDraw.Draw(canvas)
     for x, y, w, h in rects:
         d.rectangle((x, y, x + w, y + h), outline=(0, 0, 0), width=3)
-    for e, rect in zip(live, rects):
+    for e, rect, count in shown:
         pulse_border(canvas, ctx, e, t, rect)
-        voice_label(canvas, ctx, e, t, rect)
+        voice_label(canvas, ctx, e, t, rect, max(1, count))
     return canvas
 
 
