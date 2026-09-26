@@ -334,8 +334,10 @@ def repeat_moment(canvas, ctx, t):
         src = ctx.sources[e.c]
         still_t = e.t  # the picture at the moment of this hit, frozen
         piece = cutout(ctx, e, still_t, size, max_width=step * 1.3) if getattr(src, "has_subject", False) else None
-        if piece is not None and piece.width > piece.height * 1.6:
-            piece = None  # a flat sliver is a poor cut-out (tracks, ground): show the still itself
+        if piece is not None:
+            alpha = np.asarray(piece.getchannel("A"), np.float32) / 255
+            if (alpha.mean(axis=1) > 0.2).mean() < 0.6:
+                piece = None  # the mask only holds a band (tracks, ground): show the still itself
         if piece is None:
             photo = cover(ctx.frame(e, still_t), size * 0.75, size).convert("RGBA")
             edge = max(5, int(size * 0.03))
