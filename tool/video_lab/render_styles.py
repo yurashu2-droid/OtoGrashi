@@ -807,7 +807,7 @@ def shot_cutout(ctx, t, seg):
     hits = sorted((e for e in ctx.events if e.c == lead.c and e.role != "guide" and e.kind != "sung"
                    and beat_start <= e.t <= t), key=lambda e: e.t)[:5] or [lead]
     fall = drop_in(t - appeared_at(ctx, t), height)
-    base_x = W * (0.5 if close else 0.46)
+    base_x = W * (0.5 if close else 0.4)
     pieces = []
     for i, e in enumerate(hits):
         at = t if e.active(t) else e.t  # clones hold the pose of their own hit
@@ -818,11 +818,13 @@ def shot_cutout(ctx, t, seg):
     # the eye stays on the figure in front, so it steps left each time a clone
     # arrives: the growth reads where you are looking, not only at the edge
     arrived = [ease_out((t - e.t) / 0.12) for i, e, _ in pieces if i > 0]
-    step_left = sum(arrived) * W * 0.07
+    step_left = sum(arrived) * W * 0.03
     # draw back to front: later clones sit behind and to the right of earlier ones
+    # spacing follows the front figure, so a clone in a narrower pose (a later
+    # frame) keeps its place instead of closing up on the one in front
+    front = pieces[0][2].width if pieces else W * 0.5
     for i, e, piece in reversed(pieces):
-        slide = ease_out((t - e.t) / 0.12) if i else 1.0  # a clone slides out from behind
-        x = int(base_x - step_left - piece.width / 2 + max(0.0, i - 1 + slide) * piece.width * 0.25)
+        x = int(base_x - step_left + i * front * 0.25 - piece.width / 2)
         canvas.alpha_composite(piece, (x, int(H * 0.99 - piece.height + fall)))
     d = ImageDraw.Draw(canvas)
     for j, ch in enumerate(ctx.names[lead.c][:10]):
