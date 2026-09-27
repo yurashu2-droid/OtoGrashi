@@ -57,9 +57,16 @@ void main() {
       expect(second, hasLength(2));
       expect(first.first.sourceStartSample, 4800);
       expect(second.first.sourceStartSample, 14400);
-      expect(first.first.durationSamples, 4320);
-      expect(second.first.durationSamples, 4320);
-      expect(first.last.destinationStartSample, 4320);
+      expect(first.first.durationSamples, inInclusiveRange(1, 4320));
+      expect(second.first.durationSamples, inInclusiveRange(1, 4320));
+      final overlap = first.first.destinationStartSample +
+          first.first.durationSamples - first.last.destinationStartSample;
+      expect(overlap, inInclusiveRange(480, 576));
+      expect(first.first.fades.fadeOutSamples, overlap);
+      expect(first.last.fades.fadeInSamples, overlap);
+      expect(first.last.destinationStartSample + first.last.durationSamples, 24000);
+      expect(first.last.sourceStartSample,
+          greaterThanOrEqualTo(first.first.sourceStartSample + first.first.durationSamples));
       expect(first.last.stretch, lessThan(1));
       expect(first.every((e) => e.targetMidiNote == 60), isTrue);
       expect(second.every((e) => e.targetMidiNote == 64), isTrue);
@@ -117,7 +124,7 @@ void main() {
       labArticulation: true,
     ).sing(0, 100000, 60, gain: .5);
     expect(events, hasLength(2));
-    expect(events.last.durationSamples, lessThan(100000 - 4320));
+    expect(events.last.durationSamples, lessThan(100000));
     expect(events.last.stretch, .1);
     expect(
       events.last.sourceStartSample + events.last.sourceDurationSamples!,
@@ -131,6 +138,101 @@ void main() {
       breathy.last.sourceStartSample + breathy.last.sourceDurationSamples!,
       lessThanOrEqualTo(40800),
     );
+  });
+
+  test('lab joins stay forward and bounded across short syllables', () {
+    final singer = WordedSinger(_motifSpeaker(), labArticulation: true);
+    final events = singer.sing(1000, 8000, 60, gain: .5);
+    expect(events, hasLength(2));
+    final head = events.first;
+    final vowel = events.last;
+    final join =
+        head.destinationStartSample +
+        head.durationSamples -
+        vowel.destinationStartSample;
+    expect(join, greaterThan(0));
+    expect(join, lessThanOrEqualTo(576));
+    expect(head.fades.fadeOutSamples, join);
+    expect(vowel.fades.fadeInSamples, join);
+    expect(
+      vowel.sourceStartSample,
+      greaterThanOrEqualTo(head.sourceStartSample + head.durationSamples),
+    );
+    expect(
+      vowel.sourceStartSample + vowel.sourceDurationSamples!,
+      lessThanOrEqualTo(3000),
+    );
+    expect(vowel.stretch, greaterThanOrEqualTo(.1));
+    expect(
+      vowel.destinationStartSample + vowel.durationSamples,
+      lessThanOrEqualTo(9000),
+    );
+  });
+
+  test('lab leaves a tiny syllable within its source bounds', () {
+    final clip = AnalyzedClip(
+      assetId: 'tiny',
+      sourceStartSample: 0,
+      durationSamples: 100,
+      sampleRate: 48000,
+      onsetSamples: const [0],
+      audibleRegions: const [
+        AudibleRegion(startSample: 0, durationSamples: 100),
+      ],
+      peak: .8,
+      rms: .2,
+      suggestedRole: SuggestedRole.sustain,
+      syllables: const [AudibleRegion(startSample: 0, durationSamples: 100)],
+      purity: .1,
+    );
+    final events = WordedSinger(
+      clip,
+      labArticulation: true,
+    ).sing(0, 5000, 60, gain: .5);
+    expect(events, hasLength(2));
+    for (final event in events) {
+      expect(event.durationSamples, greaterThan(0));
+      expect(event.sourceDurationSamples, greaterThan(0));
+      expect(
+        event.sourceStartSample + event.sourceDurationSamples!,
+        lessThanOrEqualTo(100),
+      );
+      expect(
+        event.fades.fadeInSamples + event.fades.fadeOutSamples,
+        lessThanOrEqualTo(event.durationSamples),
+      );
+    }
+  });
+
+  test('lab caps the join fade when the voiced core is only a few samples', () {
+    final clip = AnalyzedClip(
+      assetId: 'short-core',
+      sourceStartSample: 0,
+      durationSamples: 9600,
+      sampleRate: 48000,
+      onsetSamples: const [0],
+      audibleRegions: const [AudibleRegion(startSample: 0, durationSamples: 9600)],
+      peak: .8,
+      rms: .2,
+      suggestedRole: SuggestedRole.sustain,
+      syllables: const [AudibleRegion(startSample: 0, durationSamples: 9600)],
+      voicedRuns: const [AudibleRegion(startSample: 4200, durationSamples: 5)],
+      purity: .1,
+    );
+    final events = WordedSinger(clip, labArticulation: true)
+        .sing(0, 10000, 60, gain: .5);
+    expect(events, hasLength(2));
+    final head = events.first;
+    final vowel = events.last;
+    final overlap = head.destinationStartSample + head.durationSamples -
+        vowel.destinationStartSample;
+    expect(overlap, greaterThan(0));
+    expect(head.fades.fadeOutSamples, overlap);
+    expect(vowel.fades.fadeInSamples, overlap);
+    expect(vowel.fades.fadeInSamples + vowel.fades.fadeOutSamples,
+        lessThanOrEqualTo(vowel.durationSamples));
+    expect(vowel.sourceStartSample + vowel.sourceDurationSamples!,
+        lessThanOrEqualTo(4205));
   });
 
   test('seeded speech selects repeat, alternating, and jumping motifs', () {

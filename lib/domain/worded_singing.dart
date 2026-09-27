@@ -164,8 +164,40 @@ final class WordedSinger {
   ) {
     _chooseMotif();
     final syllable = _syllables[_next];
-    // Lab worded_line opens every note with at most 90 ms of this syllable.
-    final head = math.min(duration, math.min(4320, syllable.durationSamples));
+    final (coreStart, coreLength) = _labVowel(syllable);
+    final vowelEnd = coreStart + coreLength;
+    // Keep the attack natural, but leave source for a forward-reading vowel.
+    // The steady region can begin before the old 90 ms attack ends.
+    final reserve = math.min(480, syllable.durationSamples ~/ 4);
+    final joinedHead = math.min(
+      duration,
+      math.min(
+        4320,
+        math.min(
+          math.max(
+            coreStart - syllable.startSample,
+            math.min(1440, math.max(1, syllable.durationSamples ~/ 2)),
+          ),
+          syllable.durationSamples - reserve,
+        ),
+      ),
+    );
+    // Notes without room for a vowel still play their full natural attack.
+    final head =
+        joinedHead >= 4 &&
+            duration - joinedHead > 1440 &&
+            vowelEnd > syllable.startSample + joinedHead
+        ? joinedHead
+        : math.min(duration, math.min(4320, syllable.durationSamples));
+    final hold = duration - head;
+    final vowelStart = math.max(coreStart, syllable.startSample + head);
+    final vowelLength = vowelEnd - vowelStart;
+    final crossfade = hold > 1440 && vowelLength > 0
+        ? math.min(
+            576,
+            math.min(head ~/ 4, math.min(hold ~/ 4, vowelLength * 10 ~/ 4)),
+          )
+        : 0;
     final events = <SoundEvent>[
       _event(
         syllable.startSample,
@@ -177,26 +209,26 @@ final class WordedSinger {
         role,
         partIndex,
         sourceEnd: syllable.startSample + syllable.durationSamples,
+        fadeOut: crossfade > 0 ? crossfade : null,
       ),
     ];
-    final hold = duration - head;
-    if (hold > 1440) {
-      final (coreStart, coreLength) = _labVowel(syllable);
+    if (crossfade > 0) {
       // Limit the hold to the renderer's 0.1x stretch floor, so its source
       // read never extends beyond the selected syllable's vowel.
-      final sung = math.min(hold, coreLength * 10);
-      final input = math.min(coreLength, sung);
+      final sung = math.min(hold + crossfade, vowelLength * 10);
+      final input = math.min(vowelLength, sung);
       events.add(
         _event(
-          coreStart,
-          start + head,
+          vowelStart,
+          start + head - crossfade,
           sung,
           input,
           midi,
           gain,
           role,
           partIndex,
-          sourceEnd: coreStart + coreLength,
+          sourceEnd: vowelEnd,
+          fadeIn: crossfade,
         ),
       );
     }
@@ -242,6 +274,8 @@ final class WordedSinger {
     String? role,
     int partIndex, {
     int? sourceEnd,
+    int? fadeIn,
+    int? fadeOut,
   }) {
     final clipEnd = clip.sourceStartSample + clip.durationSamples;
     final read = math.min(
@@ -256,8 +290,8 @@ final class WordedSinger {
       durationSamples: duration,
       gain: gain,
       fades: EventFades(
-        fadeInSamples: math.min(96, duration ~/ 4),
-        fadeOutSamples: math.min(480, duration ~/ 4),
+        fadeInSamples: fadeIn ?? math.min(96, duration ~/ 4),
+        fadeOutSamples: fadeOut ?? math.min(480, duration ~/ 4),
       ),
       partIndex: partIndex,
       targetMidiNote: midi.clamp(24.0, 100.0).toDouble(),
