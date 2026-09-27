@@ -31,3 +31,11 @@ Remaining differences: source analysis and seed generators are not shared across
 The first grouped check (36319689187) passed Dart analysis/tests and iOS compilation. Native tests exposed two issues: the moving-voice pitch regression and exact encoded brightness values. The new sustained-level/consonant tests, existing high-note contour test, and production video renders passed.
 
 Follow-up fixes use Apple's actual working/output color-space matching rather than a hand-written transfer curve, and restore voiced-grain mean subtraction needed by the retained narrow-grain safeguard. The follow-up CI selects six affected native tests with `[media-parity]`; it does not repeat passed Dart tests or unrelated video renders.
+
+## Resolved low-note regression
+
+Run 36320871108 passed 5 of 6 selected native tests, including encoded brightness. The remaining failure was the generic moving-voice retune. A simulator-free compile/run of the actual Foundation-only DSP (36322953309) isolated it to MIDI 48, with the other tested targets passing.
+
+Cause: when an output pulse advances farther than one source period (downward pitch shifts), the source phase is unknown again. Searching only a quarter-period around that new position can select a window edge instead of a true crest. Reacquisition now searches a full cycle; ordinary continuous tracking keeps the narrow search.
+
+Run 36323016829 at 4066b47 passed both production Swift regression executables with zero failures. The formerly failing steady/gliding inputs measured MIDI 47.99977 / 48.00054 for target 48. Consonant identity and continuous note transitions also passed. This follow-up did not rebuild the iOS app or repeat the already-passing color test. Real-device listening and a new IPA remain separate from these automated checks.
