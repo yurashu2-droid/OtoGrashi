@@ -13,8 +13,8 @@ Arrangement arrangeEveryday({
   required int seed,
   required MelodyTemplate melodyTemplate,
 
-  /// 原声を楽しむ: a speaking melody clip sings its words one syllable per
-  /// note (see [WordedSinger]) instead of one flowing, pitch-bent phrase.
+  /// 原声を楽しむ: speech follows seeded syllable motifs (see [WordedSinger]),
+  /// keeping each selected syllable intact across note boundaries.
   bool wordedSpeech = false,
 }) {
   if (clips.isEmpty) {
@@ -135,7 +135,7 @@ Arrangement arrangeEveryday({
 
   final singers = <String, WordedSinger>{};
   WordedSinger? wordedFor(AnalyzedClip clip) => wordedSpeech && WordedSinger.isSpeech(clip)
-      ? singers.putIfAbsent(clip.assetId, () => WordedSinger(clip))
+      ? singers.putIfAbsent(clip.assetId, () => WordedSinger(clip, seed: seed))
       : null;
   void sing(WordedSinger singer, int start, int duration, double note, double gain) {
     if (start >= 720000) return;

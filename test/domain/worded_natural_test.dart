@@ -26,7 +26,68 @@ AnalyzedClip _speaker(int i) => AnalyzedClip(
   purity: .1,
 );
 
+AnalyzedClip _motifSpeaker() => AnalyzedClip(
+  assetId: 'motif-voice',
+  sourceStartSample: 0,
+  durationSamples: 18000,
+  sampleRate: 48000,
+  onsetSamples: const [0],
+  audibleRegions: const [AudibleRegion(startSample: 0, durationSamples: 15000)],
+  peak: .8,
+  rms: .2,
+  suggestedRole: SuggestedRole.sustain,
+  syllables: const [
+    AudibleRegion(startSample: 0, durationSamples: 3000),
+    AudibleRegion(startSample: 3000, durationSamples: 3000),
+    AudibleRegion(startSample: 6000, durationSamples: 3000),
+    AudibleRegion(startSample: 9000, durationSamples: 3000),
+    AudibleRegion(startSample: 12000, durationSamples: 3000),
+  ],
+  purity: .1,
+);
+
 void main() {
+  test('seeded speech selects repeat, alternating, and jumping motifs', () {
+    List<int> sequence(int seed) {
+      final singer = WordedSinger(_motifSpeaker(), seed: seed);
+      return [
+        for (var note = 0; note < 24; note++)
+          singer.sing(note * 3200, 3000, 60, gain: .5).single.sourceStartSample ~/ 3000,
+      ];
+    }
+
+    final patterns = [for (var seed = 0; seed < 32; seed++) sequence(seed)];
+    expect(sequence(7), sequence(7));
+    expect(patterns.map((p) => p.join(',')).toSet().length, greaterThan(1));
+    expect(patterns.any((p) => [for (var i = 1; i < p.length; i++) p[i] == p[i - 1]].contains(true)), isTrue);
+    expect(patterns.any((p) => [for (var i = 3; i < p.length; i++)
+      p[i] == p[i - 2] && p[i - 1] == p[i - 3] && p[i] != p[i - 1]].contains(true)), isTrue);
+    expect(patterns.any((p) => [for (var i = 1; i < p.length; i++)
+      p[i] == (p[i - 1] + 2) % 5].contains(true)), isTrue);
+
+    List<Map<String, Object?>> score(int seed) {
+      final singer = WordedSinger(_motifSpeaker(), seed: seed);
+      return [
+        for (var note = 0; note < 24; note++)
+          for (final event in singer.sing(note * 3200, 3000, 60 + note % 5,
+              gain: .5))
+            event.toJson(),
+      ];
+    }
+    expect(score(7), score(7));
+    expect(score(7), isNot(score(8)));
+  });
+
+  test('seeded speech completes a partial syllable before repeating it', () {
+    final singer = WordedSinger(_motifSpeaker(), seed: 7);
+    final first = singer.sing(0, 1800, 60, gain: .5).single;
+    final second = singer.sing(2000, 1200, 62, gain: .5).single;
+    expect(first.sourceStartSample, 0);
+    expect(second.sourceStartSample, 1800);
+    expect(first.sourceDurationSamples! + second.sourceDurationSamples!,
+        greaterThanOrEqualTo(3000));
+  });
+
   test('short notes carry all syllables forward at natural speed', () {
     final singer = WordedSinger(_speaker(0));
     final events = <SoundEvent>[];

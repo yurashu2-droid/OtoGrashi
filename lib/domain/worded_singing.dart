@@ -2,18 +2,47 @@ import 'dart:math' as math;
 
 import 'arrangement.dart';
 
-/// Sings speech in source order. A short note may contain only part of a
-/// syllable; the following note continues where it left off. Long notes hold
-/// the voiced centre while the onset and ending are spoken at natural speed.
+/// Sings complete speech syllables in source order or in short seeded motifs.
+/// A short note may contain only part of a syllable; the following note
+/// continues where it left off. Long notes hold the voiced centre while the
+/// onset and ending are spoken at natural speed.
 final class WordedSinger {
-  WordedSinger(this.clip)
-    : _syllables = clip.syllables.where((s) => s.durationSamples > 0).toList()
+  WordedSinger(this.clip, {int? seed})
+    : _random = seed == null ? null : math.Random(_stableSeed(seed, clip.assetId)),
+      _syllables = clip.syllables.where((s) => s.durationSamples > 0).toList()
         ..sort((a, b) => a.startSample.compareTo(b.startSample));
 
   final AnalyzedClip clip;
   final List<AudibleRegion> _syllables;
+  final math.Random? _random;
+  List<int> _motif = const [];
+  int _motifPosition = 0;
   int _next = 0;
   int _offset = 0;
+
+  static int _stableSeed(int seed, String assetId) {
+    var hash = 0x811c9dc5 ^ (seed & 0xffffffff);
+    for (final code in assetId.codeUnits) {
+      hash = ((hash ^ code) * 0x01000193) & 0xffffffff;
+    }
+    return hash;
+  }
+
+  void _chooseMotif() {
+    final random = _random;
+    if (random == null || _motif.isNotEmpty) return;
+    final count = _syllables.length;
+    final anchor = _next;
+    final choice = random.nextInt(count >= 3 ? 4 : count == 2 ? 3 : 2);
+    _motif = switch (choice) {
+      0 => [for (var i = 0; i < math.min(count, 2 + random.nextInt(3)); i++)
+          (anchor + i) % count],
+      1 => List<int>.filled(2 + random.nextInt(3), anchor),
+      2 => [anchor, (anchor + 1) % count, anchor, (anchor + 1) % count],
+      _ => [anchor, (anchor + 2) % count, (anchor + 3) % count],
+    };
+    _motifPosition = 0;
+  }
 
   static bool isSpeech(AnalyzedClip clip) =>
       clip.syllables.length >= 4 && (clip.purity ?? 0) < .8;
@@ -59,6 +88,7 @@ final class WordedSinger {
     var at = start;
     final end = start + duration;
     while (at < end) {
+      _chooseMotif();
       final syllable = _syllables[_next];
       final source = syllable.startSample + _offset;
       final remaining = syllable.durationSamples - _offset;
@@ -91,10 +121,18 @@ final class WordedSinger {
       }
       if (_offset >= syllable.durationSamples) {
         final reachedEnd = _next + 1 == _syllables.length;
-        _next = (_next + 1) % _syllables.length;
+        if (_random == null) {
+          _next = (_next + 1) % _syllables.length;
+        } else if (++_motifPosition < _motif.length) {
+          _next = _motif[_motifPosition];
+        } else {
+          _next = (_motif.last + 1) % _syllables.length;
+          _motif = const [];
+        }
         _offset = 0;
-        // A later note can restart the clip; do not restart words inside one.
-        if (reachedEnd) break;
+        // Chronological playback restarts on a later note. Seeded motifs may
+        // intentionally retrigger a completed syllable inside this note.
+        if (_random == null && reachedEnd) break;
       }
     }
     return events;

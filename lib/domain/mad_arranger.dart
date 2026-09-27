@@ -459,7 +459,7 @@ class _MadBuilder {
   /// Carry unfinished syllables onto later notes, including consonants and
   /// breathy syllables, while holding voiced vowels on sufficiently long notes.
   (int, int?) wordedLine(_Voice v, (int, int?) cursor, List<(double, double, double)> notes, int barOffset, double gain) {
-    final singer = _wordedSingers.putIfAbsent(v.id, () => WordedSinger(v.clip));
+    final singer = _wordedSingers.putIfAbsent(v.id, () => WordedSinger(v.clip, seed: seed));
     for (final (b, length, midi) in notes) {
       final start = ((b + barOffset * 4) * _beat).round();
       final duration = (length * _beat * .95).round();
