@@ -7,7 +7,7 @@ import 'arrangement.dart';
 /// the voiced centre while the onset and ending are spoken at natural speed.
 final class WordedSinger {
   WordedSinger(this.clip)
-    : _syllables = clip.syllables.toList()
+    : _syllables = clip.syllables.where((s) => s.durationSamples > 0).toList()
         ..sort((a, b) => a.startSample.compareTo(b.startSample));
 
   final AnalyzedClip clip;
@@ -46,9 +46,6 @@ final class WordedSinger {
     int partIndex = 0,
   }) {
     if (_syllables.isEmpty || duration < 48) return const <SoundEvent>[];
-    final syllable = _syllables[_next];
-    final source = syllable.startSample + _offset;
-    final remaining = syllable.durationSamples - _offset;
     final events = <SoundEvent>[];
 
     void add(int from, int at, int output, int input) {
@@ -59,33 +56,46 @@ final class WordedSinger {
       }
     }
 
-    if (_offset != 0 || remaining > duration) {
-      // Preserve consonants at their original speed. Later notes take over
-      // when the syllable is longer than this one.
-      final input = math.min(remaining, duration);
-      add(source, start, input, input);
-      _offset += input;
-    } else {
-      final vowel = _vowel(syllable);
-      if (vowel == null || duration == remaining) {
-        add(source, start, remaining, remaining);
+    var at = start;
+    final end = start + duration;
+    while (at < end) {
+      final syllable = _syllables[_next];
+      final source = syllable.startSample + _offset;
+      final remaining = syllable.durationSamples - _offset;
+      final available = end - at;
+      if (_offset != 0 || remaining >= available) {
+        // Finish an interrupted syllable at natural speed, then continue in
+        // source order if there is room for another one in the same note.
+        final input = math.min(remaining, available);
+        add(source, at, input, input);
+        at += input;
+        _offset += input;
       } else {
-        final (vowelStart, vowelLength) = vowel;
-        final onset = vowelStart - source;
-        final tail = remaining - onset - vowelLength;
-        // The renderer supports down to 0.1x. If a note is still longer,
-        // leave its final space silent rather than repeating earlier speech.
-        final held = math.min(duration - onset - tail, vowelLength * 10);
-        add(source, start, onset, onset);
-        add(vowelStart, start + onset, held, vowelLength);
-        add(vowelStart + vowelLength, start + onset + held, tail, tail);
+        final vowel = _vowel(syllable);
+        if (vowel == null) {
+          add(source, at, remaining, remaining);
+          at += remaining;
+        } else {
+          final (vowelStart, vowelLength) = vowel;
+          final onset = vowelStart - source;
+          final tail = remaining - onset - vowelLength;
+          // Stretch only the voiced centre, up to the renderer's 0.1x limit.
+          // Any further space flows into the next syllable.
+          final held = math.min(available - onset - tail, vowelLength * 10);
+          add(source, at, onset, onset);
+          add(vowelStart, at + onset, held, vowelLength);
+          add(vowelStart + vowelLength, at + onset + held, tail, tail);
+          at += onset + held + tail;
+        }
+        _offset = syllable.durationSamples;
       }
-      _offset = remaining;
-    }
-
-    if (_offset >= syllable.durationSamples) {
-      _next = (_next + 1) % _syllables.length;
-      _offset = 0;
+      if (_offset >= syllable.durationSamples) {
+        final reachedEnd = _next + 1 == _syllables.length;
+        _next = (_next + 1) % _syllables.length;
+        _offset = 0;
+        // A later note can restart the clip; do not restart words inside one.
+        if (reachedEnd) break;
+      }
     }
     return events;
   }

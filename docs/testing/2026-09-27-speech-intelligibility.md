@@ -31,3 +31,9 @@ Code and signal tests cannot certify how understandable every recording sounds. 
 - Two native regressions cover bounded retuning and preservation of pitch when a fragment is too short for tracking. Their execution requires the macOS CI runner.
 - A numerical fallback probe retained the 220 Hz component rather than halving it to 110 Hz (energy ratio 15.7). This is supporting signal evidence, not an iPhone listening test.
 - A proposed grain-width change was rejected: a source-period Hann grain cancelled most of a pure tone at an octave shift. The existing limited grain width is retained.
+
+## Follow-up: melody contour regression in Build 48
+
+The per-frame one-octave limit added in `c5bd670` was the wrong constraint: a source at MIDI 57 mapped target notes 72, 74 and 76 to the same MIDI 69. The passing clamp regression tested that limit, not preservation of the musical intervals. Register selection already happens for an entire melody in the arrangers; native rendering must respect the resulting distinct targets.
+
+Remove the per-note clipping, retaining only a small bounded source-inflection offset when a reference pitch is provided. Keep the pitch-preserving fallback and chronological speech sequencing. Also fill the unused portion of a note by continuing into the next syllable, rather than ending the event when a carried-over syllable finishes. Replace the clamp assertion with a three-note pitch-contour regression and add a no-gap source-continuation regression. Real-device melody/word balance still needs a listening comparison.

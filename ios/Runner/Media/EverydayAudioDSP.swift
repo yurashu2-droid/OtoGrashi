@@ -248,12 +248,10 @@ enum EverydayAudioDSP {
         abs(Double(mark) - centre) < Double(sampleRate) / pitch.hertz * 1.6 {
         var note = targetMidiNote
         if let refMidi {
-          let moved = pitch.midiNote + max(-12, min(12, targetMidiNote - refMidi))
-          note = moved + 0.8 * (targetMidiNote - moved)
+          // Keep a little of the source inflection without compressing the
+          // intervals between notes in the written melody.
+          note += 0.2 * max(-12, min(12, pitch.midiNote - refMidi))
         }
-        // Speech loses its identity when a distant score note overrides the
-        // singer's register, including when no reliable reference was supplied.
-        note = max(pitch.midiNote - 12, min(pitch.midiNote + 12, note))
         let targetPeriod = Double(sampleRate) / (440 * pow(2, (note - 69) / 12))
         period = targetPeriod
         // Limit the support of repeated grains on upward shifts; a full

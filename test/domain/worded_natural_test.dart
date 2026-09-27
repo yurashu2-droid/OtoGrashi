@@ -30,9 +30,16 @@ void main() {
   test('short notes carry all syllables forward at natural speed', () {
     final singer = WordedSinger(_speaker(0));
     final events = <SoundEvent>[];
+    var reachedEnd = false;
     for (var i = 0; i < 30; i++) {
-      events.addAll(singer.sing(i * 3200, 3000, 60, gain: .5));
-      if (events.last.sourceStartSample + events.last.sourceDurationSamples! >= 50400) break;
+      for (final event in singer.sing(i * 3200, 3000, 60, gain: .5)) {
+        events.add(event);
+        if (event.sourceStartSample + event.sourceDurationSamples! >= 50400) {
+          reachedEnd = true;
+          break;
+        }
+      }
+      if (reachedEnd) break;
     }
     expect(events.first.sourceStartSample, 4800);
     expect(events.every((e) => e.stretch == 1), isTrue);
@@ -45,6 +52,30 @@ void main() {
         greaterThanOrEqualTo(50400));
     expect(events.any((e) => e.sourceStartSample <= 26400 &&
         e.sourceStartSample + e.sourceDurationSamples! > 26400), isTrue);
+  });
+
+  test('a partial syllable continues into the next one without a note gap', () {
+    final singer = WordedSinger(_speaker(0));
+    singer.sing(0, 3000, 60, gain: .5);
+    final events = singer.sing(3200, 12000, 62, gain: .5);
+    expect(events, hasLength(2));
+    expect(events[0].sourceStartSample, 7800);
+    expect(events[1].sourceStartSample, 14400);
+    expect(events.every((e) => e.stretch == 1), isTrue);
+    expect(events[0].durationSamples + events[1].durationSamples, 12000);
+    expect(events[1].destinationStartSample,
+        events[0].destinationStartSample + events[0].durationSamples);
+  });
+
+  test('a vowel hold at its stretch limit continues into the next syllable', () {
+    final events = WordedSinger(_speaker(0)).sing(0, 100000, 60, gain: .5);
+    expect(events.any((e) => e.sourceStartSample >= 14400), isTrue);
+    expect(events.last.destinationStartSample + events.last.durationSamples, 100000);
+    for (var i = 1; i < events.length; i++) {
+      expect(events[i].destinationStartSample,
+          events[i - 1].destinationStartSample + events[i - 1].durationSamples);
+      expect(events[i].sourceStartSample, greaterThan(events[i - 1].sourceStartSample));
+    }
   });
 
   test('long notes hold only the voiced centre, after onset and before ending', () {

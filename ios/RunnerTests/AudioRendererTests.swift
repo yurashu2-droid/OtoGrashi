@@ -3,14 +3,18 @@ import XCTest
 @testable import Runner
 
 final class AudioRendererTests: XCTestCase {
-  func testStretchedSpeechLimitsPitchShiftWithoutReferenceNote() throws {
+  func testStretchedSpeechPreservesDistinctHighMelodyNotes() throws {
     let source = (0..<24_000).map { frame in
       Float(0.3 * sin(2 * Double.pi * 220 * Double(frame) / 48_000))
     }
-    let output = try EverydayAudioDSP.renderStretched(source, count: 24_000,
-      targetMidiNote: 84, stretch: 1, refMidi: nil)
-    let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(output, start: 8_000))
-    XCTAssertEqual(pitch.midiNote, 69, accuracy: 0.5)
+    for reference in [nil, 54.0] as [Double?] {
+      for target in [72.0, 74.0, 76.0] {
+        let output = try EverydayAudioDSP.renderStretched(source, count: 24_000,
+          targetMidiNote: target, stretch: 1, refMidi: reference)
+        let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(output, start: 8_000))
+        XCTAssertEqual(pitch.midiNote, target + (reference == nil ? 0 : 0.6), accuracy: 0.5)
+      }
+    }
   }
 
   func testShortUntrackedVoiceKeepsPitchWhenStretched() throws {
