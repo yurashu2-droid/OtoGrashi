@@ -23,7 +23,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dsp-check:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[dsp-only]')
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Check the production Swift DSP without booting a simulator
+        shell: bash
+        run: |
+          set -o pipefail
+          swiftc -O ios/Runner/Media/EverydayAudioDSP.swift scripts/review/DSPRegression.swift -o "$RUNNER_TEMP/dsp-regression"
+          "$RUNNER_TEMP/dsp-regression"
+          swiftc -O ios/Runner/Media/EverydayAudioDSP.swift scripts/review/NaturalVoiceRegression.swift -o "$RUNNER_TEMP/natural-regression"
+          "$RUNNER_TEMP/natural-regression"
   ios-check:
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[dsp-only]')
     runs-on: macos-26
     timeout-minutes: 45
     env:

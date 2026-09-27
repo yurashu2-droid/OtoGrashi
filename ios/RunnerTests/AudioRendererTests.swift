@@ -95,8 +95,10 @@ final class AudioRendererTests: XCTestCase {
           let bb = prefix.reduce(0.0) { $0 + Double($1 * $1) }
           XCTAssertGreaterThan(ab / sqrt(aa * bb), 0.8)
         } else {
-          let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(Array(output[8_000..<16_000])))
-          XCTAssertEqual(pitch.midiNote, target, accuracy: 0.2)
+          let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(Array(output[8_000..<16_000])),
+            "gliding voice target MIDI \(target)")
+          XCTAssertEqual(pitch.midiNote, target, accuracy: 0.2,
+            "gliding voice target MIDI \(target)")
         }
       }
     }
