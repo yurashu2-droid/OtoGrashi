@@ -1,8 +1,46 @@
 import AVFoundation
+import CoreImage
 import XCTest
 @testable import Runner
 
 final class VideoRendererTests: XCTestCase {
+  func testMadBrightnessMatchesEncodedRGBAndPreservesAlpha() throws {
+    let rect = CGRect(x: 0, y: 0, width: 1, height: 1)
+    let bt709 = try XCTUnwrap(CGColorSpace(name: CGColorSpace.itur_709))
+    let linear = try XCTUnwrap(CGColorSpace(name: CGColorSpace.extendedLinearSRGB))
+    let context = CIContext(options: [.workingColorSpace: linear])
+    func pixel(_ image: CIImage) -> [UInt8] {
+      var bytes = [UInt8](repeating: 0, count: 4)
+      bytes.withUnsafeMutableBytes { storage in
+        context.render(image, toBitmap: storage.baseAddress!, rowBytes: 4,
+          bounds: rect, format: .RGBA8, colorSpace: bt709)
+      }
+      return bytes
+    }
+    for value in [CGFloat(0.04), 0.45, 0.82] {
+      let source = CIImage(color: CIColor(red: value, green: value, blue: value, alpha: 1))
+        .cropped(to: rect)
+      let original = pixel(source)
+      for factor in [CGFloat(0.45), 0.7, 0.75, 0.85, 1.18] {
+        let changed = pixel(MadDirector.encodedBrightness(source, factor: factor))
+        for channel in 0..<3 {
+          XCTAssertLessThanOrEqual(abs(Int(changed[channel]) -
+            min(255, Int((Double(original[channel]) * Double(factor)).rounded()))), 2)
+        }
+        XCTAssertEqual(changed[3], original[3])
+      }
+      let flashed = pixel(MadDirector.encodedBrightness(source, factor: 1, whiteMix: 0.6))
+      XCTAssertLessThanOrEqual(abs(Int(flashed[0]) -
+        Int((Double(original[0]) * 0.4 + 255 * 0.6).rounded())), 2)
+    }
+    let translucent = CIImage(color: CIColor(red: 0.45, green: 0.2, blue: 0.1, alpha: 0.5))
+      .cropped(to: rect)
+    let original = pixel(translucent)
+    let changed = pixel(MadDirector.encodedBrightness(translucent, factor: 0.45))
+    XCTAssertEqual(changed[3], original[3])
+    XCTAssertTrue(changed[0] < original[0])
+  }
+
   /// Every mode, the 1080p movie and the rotated/HDR sources are rendered on
   /// main, pull requests and manual runs (OTO_FULL_CHECKS=1). Ordinary pushes
   /// render a representative subset so a check stays within a few minutes.

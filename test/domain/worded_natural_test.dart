@@ -47,6 +47,92 @@ AnalyzedClip _motifSpeaker() => AnalyzedClip(
 );
 
 void main() {
+  test(
+    'lab speech retriggers a short head and holds its own vowel per note',
+    () {
+      final singer = WordedSinger(_speaker(0), labArticulation: true);
+      final first = singer.sing(0, 24000, 60, gain: .5);
+      final second = singer.sing(25000, 24000, 64, gain: .5);
+      expect(first, hasLength(2));
+      expect(second, hasLength(2));
+      expect(first.first.sourceStartSample, 4800);
+      expect(second.first.sourceStartSample, 14400);
+      expect(first.first.durationSamples, 4320);
+      expect(second.first.durationSamples, 4320);
+      expect(first.last.destinationStartSample, 4320);
+      expect(first.last.stretch, lessThan(1));
+      expect(first.every((e) => e.targetMidiNote == 60), isTrue);
+      expect(second.every((e) => e.targetMidiNote == 64), isTrue);
+      expect(
+        first.last.sourceStartSample + first.last.sourceDurationSamples!,
+        lessThanOrEqualTo(14400),
+      );
+      expect(
+        second.last.sourceStartSample + second.last.sourceDurationSamples!,
+        lessThanOrEqualTo(26400),
+      );
+    },
+  );
+
+  test('lab speech keeps seeded repeats and skips on separate notes', () {
+    List<int> sequence(int seed) {
+      final singer = WordedSinger(
+        _motifSpeaker(),
+        seed: seed,
+        labArticulation: true,
+      );
+      return [
+        for (var note = 0; note < 24; note++)
+          singer
+                  .sing(note * 10000, 8000, 60, gain: .5)
+                  .first
+                  .sourceStartSample ~/
+              3000,
+      ];
+    }
+
+    final patterns = [for (var seed = 0; seed < 32; seed++) sequence(seed)];
+    expect(sequence(7), sequence(7));
+    expect(
+      patterns.any(
+        (p) =>
+            [for (var i = 1; i < p.length; i++) p[i] == p[i - 1]]
+                .contains(true),
+      ),
+      isTrue,
+    );
+    expect(
+      patterns.any(
+        (p) =>
+            [for (var i = 1; i < p.length; i++) p[i] == (p[i - 1] + 2) % 5]
+                .contains(true),
+      ),
+      isTrue,
+    );
+  });
+
+  test('lab speech caps a very long vowel hold inside its syllable', () {
+    final events = WordedSinger(
+      _speaker(0),
+      labArticulation: true,
+    ).sing(0, 100000, 60, gain: .5);
+    expect(events, hasLength(2));
+    expect(events.last.durationSamples, lessThan(100000 - 4320));
+    expect(events.last.stretch, .1);
+    expect(
+      events.last.sourceStartSample + events.last.sourceDurationSamples!,
+      lessThanOrEqualTo(14400),
+    );
+    final singer = WordedSinger(_speaker(0), labArticulation: true);
+    singer.sing(0, 3000, 60, gain: .5);
+    singer.sing(4000, 3000, 62, gain: .5);
+    final breathy = singer.sing(8000, 100000, 64, gain: .5);
+    expect(
+      breathy.last.sourceStartSample + breathy.last.sourceDurationSamples!,
+      lessThanOrEqualTo(40800),
+    );
+  });
+
   test('seeded speech selects repeat, alternating, and jumping motifs', () {
     List<int> sequence(int seed) {
       final singer = WordedSinger(_motifSpeaker(), seed: seed);

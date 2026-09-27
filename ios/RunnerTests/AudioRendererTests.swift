@@ -3,6 +3,43 @@ import XCTest
 @testable import Runner
 
 final class AudioRendererTests: XCTestCase {
+  func testStretchedVoicedToneHasSteadyLevelAcrossAnalysisFrames() throws {
+    let source = (0..<24_000).map { frame in
+      Float(0.3 * sin(2 * Double.pi * 220 * Double(frame) / 48_000))
+    }
+    let output = try EverydayAudioDSP.renderStretched(source, count: source.count,
+      targetMidiNote: 72, stretch: 1, refMidi: nil)
+    let levels = stride(from: 4_800, through: 18_240, by: 960).map { start in
+      sqrt(output[start..<(start + 960)].reduce(0.0) {
+        $0 + Double($1) * Double($1)
+      } / 960)
+    }
+    XCTAssertGreaterThan(try XCTUnwrap(levels.min()), try XCTUnwrap(levels.max()) * 0.45)
+  }
+
+  func testStretchedSpeechKeepsUnvoicedSoundBetweenVoicedPassages() throws {
+    var state: UInt32 = 91
+    let source = (0..<24_000).map { frame -> Float in
+      if (8_000..<16_000).contains(frame) {
+        state = state &* 1_664_525 &+ 1_013_904_223
+        return Float(Double(state) / Double(UInt32.max) - 0.5) * 0.5
+      }
+      return Float(0.3 * sin(2 * Double.pi * 220 * Double(frame) / 48_000))
+    }
+    let output = try EverydayAudioDSP.renderStretched(source, count: source.count,
+      targetMidiNote: 60, stretch: 1, refMidi: nil)
+    for start in [2_400, 18_000] {
+      let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(output, start: start))
+      XCTAssertEqual(pitch.midiNote, 60, accuracy: 0.5)
+    }
+    let inputNoise = source[10_000..<14_000]
+    let outputNoise = output[10_000..<14_000]
+    let dot = zip(inputNoise, outputNoise).reduce(0.0) { $0 + Double($1.0 * $1.1) }
+    let inputPower = inputNoise.reduce(0.0) { $0 + Double($1 * $1) }
+    let outputPower = outputNoise.reduce(0.0) { $0 + Double($1 * $1) }
+    XCTAssertGreaterThan(dot / sqrt(inputPower * outputPower), 0.8)
+  }
+
   func testStretchedSpeechPreservesDistinctHighMelodyNotes() throws {
     let source = (0..<24_000).map { frame in
       Float(0.3 * sin(2 * Double.pi * 220 * Double(frame) / 48_000))

@@ -1804,6 +1804,32 @@ enum MadShot: String {
 /// clips only, and adds the moments (a strip of stills for repeats, opening
 /// and ending cards, the picture side of master effects).
 final class MadDirector {
+  /// PIL multiplies display-encoded RGB. The writer outputs BT.709, while Core
+  /// Image works in linear light, so convert around PIL's multiplication.
+  private static let encodedBrightnessKernel: CIColorKernel = {
+    guard let kernel = CIColorKernel(source: """
+    float encodeChannel(float x) {
+      return x < 0.018 ? 4.5 * x : 1.099 * pow(x, 0.45) - 0.099;
+    }
+    float decodeChannel(float x) {
+      return x < 0.081 ? x / 4.5 : pow((x + 0.099) / 1.099, 1.0 / 0.45);
+    }
+    kernel vec4 encodedBrightness(__sample pixel, float factor, float desaturate, float whiteMix) {
+      vec4 straight = unpremultiply(pixel);
+      vec3 encoded = vec3(encodeChannel(max(straight.r, 0.0)),
+                          encodeChannel(max(straight.g, 0.0)),
+                          encodeChannel(max(straight.b, 0.0)));
+      float grey = dot(encoded, vec3(0.299, 0.587, 0.114));
+      encoded = mix(encoded, vec3(grey), desaturate);
+      encoded = clamp(encoded * factor, 0.0, 1.0);
+      encoded = mix(encoded, vec3(1.0), whiteMix);
+      return premultiply(vec4(decodeChannel(encoded.r), decodeChannel(encoded.g),
+                              decodeChannel(encoded.b), straight.a));
+    }
+    """) else { fatalError("MAD encoded brightness kernel failed to compile") }
+    return kernel
+  }()
+
   static let backdrops: [(CGFloat, CGFloat, CGFloat)] = [
     (0.97, 0.75, 0.80), (0.77, 0.89, 0.95), (0.94, 0.91, 0.80), (0.80, 0.93, 0.84),
   ]
@@ -2016,13 +2042,17 @@ final class MadDirector {
     let canvasRect = CGRect(x: 0, y: 0, width: W, height: H)
     var canvas: CIImage
     var overlays: [(CGContext) -> Void] = []
+    var sceneFlash = true
     let longRun = runs.contains { $0.count >= 4 && $0[0].start <= s && s < Self.runUntil($0) }
     if !posts.isEmpty && s < introEnd {
+      sceneFlash = false
       canvas = try await feedFrame(s, W: W, H: H, image: image, overlays: &overlays)
     } else if !posts.isEmpty && opener != nil && s < introEnd + Self.bar {
+      sceneFlash = false
       // the sticker holds the first bar of the song instead of a board of drum hits
       canvas = try await stickerMoment(s, W: W, H: H, image: image)
     } else if let rewinding = reversing(s) {
+      sceneFlash = false
       // the swell is what you hear, so its tape rewind is the ground under the scene
       canvas = try await rewind(rewinding, s, W: W, H: H, image: image, overlays: &overlays)
       if longRun { canvas = try await strip(s, over: canvas, dim: false, W: W, H: H, image: image) }
@@ -2052,14 +2082,12 @@ final class MadDirector {
         canvas = try await backingStickers(s, over: canvas, W: W, H: H, image: image, overlays: &overlays)
       }
     }
-    canvas = pictureEffects(canvas, sample: frame * 1_600, W: W, H: H)
-    // a louder section opens on a white flash
-    if let index = plan.firstIndex(where: { $0.start <= s && s < $0.end }), index > 0,
-      rank(plan[index].energy) > rank(plan[index - 1].energy), s - plan[index].start < 2_880 {
-      let a = 0.6 * (1 - Double(s - plan[index].start) / 2_880)
-      canvas = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: CGFloat(a))).cropped(to: canvasRect)
-        .composited(over: canvas)
+    // The lab flashes at the start of every non-calm scene it actually draws.
+    if sceneFlash, current.energy != "calm", current.start > 0, s - current.start < 2_880 {
+      let a = 0.6 * (1 - Double(s - current.start) / 2_880)
+      canvas = Self.encodedBrightness(canvas, factor: 1, whiteMix: CGFloat(a))
     }
+    canvas = pictureEffects(canvas, sample: frame * 1_600, W: W, H: H)
     let t = Double(frame) / 30
     let ending = Double(total) / 48_000 - 1.3
     if t >= ending {
@@ -2078,8 +2106,6 @@ final class MadDirector {
     for overlay in overlays { overlay(g) }
     if t < 1.6 && posts.isEmpty { openingText(g, t: t, W: W, H: H) }
   }
-
-  private func rank(_ energy: String) -> Int { energy == "high" ? 2 : energy == "mid" ? 1 : 0 }
 
   private func backdrop() -> CIColor {
     let c = Self.backdrops[abs(seed) % Self.backdrops.count]
@@ -2110,13 +2136,22 @@ final class MadDirector {
   }
 
   private func dimmed(_ image: CIImage, soft: Bool) -> CIImage {
-    image.applyingFilter("CIColorControls", parameters: [
-      "inputSaturation": soft ? 0.65 : 0.3, "inputBrightness": soft ? -0.1 : -0.28,
-    ])
+    Self.encodedBrightness(image, factor: soft ? 0.75 : 0.45,
+      desaturate: soft ? 0.35 : 0.7)
   }
 
   private func lit(_ image: CIImage, _ level: Float) -> CIImage {
-    level > 0 ? image.applyingFilter("CIColorControls", parameters: ["inputBrightness": 0.12 * Double(level)]) : image
+    level > 0 ? Self.encodedBrightness(image, factor: 1 + 0.18 * CGFloat(level)) : image
+  }
+
+  static func encodedBrightness(_ image: CIImage, factor: CGFloat,
+                                desaturate: CGFloat = 0, whiteMix: CGFloat = 0) -> CIImage {
+    guard factor != 1 || desaturate != 0 || whiteMix != 0 else { return image }
+    guard let output = encodedBrightnessKernel.apply(extent: image.extent,
+      arguments: [image, factor, desaturate, whiteMix]) else {
+      fatalError("MAD encoded brightness kernel failed to apply")
+    }
+    return output
   }
 
   private func punch(_ age: Int, _ amount: CGFloat = 0.14, _ length: Int = 5_760) -> CGFloat {
@@ -2605,10 +2640,10 @@ final class MadDirector {
     if let otherClip = (others.isEmpty ? nil : others[beats.count % others.count]),
       let otherEvent = events.first(where: { $0.clip == otherClip }) {
       let scene = try await image(otherEvent, otherEvent.start)
-      canvas = cover(scene, full, H: H, zoom: 1.08).clampedToExtent()
+      let scenery = cover(scene, full, H: H, zoom: 1.08).clampedToExtent()
         .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": W * 0.02])
         .cropped(to: ci(full, H))
-        .applyingFilter("CIColorControls", parameters: ["inputBrightness": -0.08])
+      canvas = Self.encodedBrightness(scenery, factor: 0.85)
     } else {
       canvas = CIImage(color: backdrop()).cropped(to: ci(full, H))
     }
@@ -2664,7 +2699,7 @@ final class MadDirector {
       }
     }
     guard shown.count >= (run.count >= 4 ? 1 : 2) else { return canvas }
-    var base = dim ? canvas.applyingFilter("CIColorControls", parameters: ["inputBrightness": -0.22]) : canvas
+    var base = dim ? Self.encodedBrightness(canvas, factor: 0.7) : canvas
     let size = H * 0.42
     let step = W * 0.2
     let k = shown.count - 1
@@ -2709,7 +2744,7 @@ final class MadDirector {
       let u = CGFloat(s - fx.startSample) / CGFloat(fx.durationSamples)
       switch fx.type {
       case "tapestop":
-        out = out.applyingFilter("CIColorControls", parameters: ["inputBrightness": -0.6 * Double(u * u)])
+        out = Self.encodedBrightness(out, factor: 1 - 0.7 * u * u)
       case "sweep":
         out = out.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: ["inputRadius": W * 0.022 * pow(1 - u, 1.5)])
           .cropped(to: rect)

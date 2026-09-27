@@ -7,12 +7,17 @@ import 'arrangement.dart';
 /// continues where it left off. Long notes hold the voiced centre while the
 /// onset and ending are spoken at natural speed.
 final class WordedSinger {
-  WordedSinger(this.clip, {int? seed})
-    : _random = seed == null ? null : math.Random(_stableSeed(seed, clip.assetId)),
+  WordedSinger(this.clip, {int? seed, this.labArticulation = false})
+    : _random = seed == null
+          ? null
+          : math.Random(_stableSeed(seed, clip.assetId)),
       _syllables = clip.syllables.where((s) => s.durationSamples > 0).toList()
         ..sort((a, b) => a.startSample.compareTo(b.startSample));
 
   final AnalyzedClip clip;
+
+  /// MAD's one-syllable-per-note articulation. Natural mode keeps complete speech.
+  final bool labArticulation;
   final List<AudibleRegion> _syllables;
   final math.Random? _random;
   List<int> _motif = const [];
@@ -33,10 +38,18 @@ final class WordedSinger {
     if (random == null || _motif.isNotEmpty) return;
     final count = _syllables.length;
     final anchor = _next;
-    final choice = random.nextInt(count >= 3 ? 4 : count == 2 ? 3 : 2);
+    final choice = random.nextInt(
+      count >= 3
+          ? 4
+          : count == 2
+          ? 3
+          : 2,
+    );
     _motif = switch (choice) {
-      0 => [for (var i = 0; i < math.min(count, 2 + random.nextInt(3)); i++)
-          (anchor + i) % count],
+      0 => [
+        for (var i = 0; i < math.min(count, 2 + random.nextInt(3)); i++)
+          (anchor + i) % count,
+      ],
       1 => List<int>.filled(2 + random.nextInt(3), anchor),
       2 => [anchor, (anchor + 1) % count, anchor, (anchor + 1) % count],
       _ => [anchor, (anchor + 2) % count, (anchor + 3) % count],
@@ -75,6 +88,9 @@ final class WordedSinger {
     int partIndex = 0,
   }) {
     if (_syllables.isEmpty || duration < 48) return const <SoundEvent>[];
+    if (labArticulation) {
+      return _singLab(start, duration, midi, gain, role, partIndex);
+    }
     final events = <SoundEvent>[];
 
     void add(int from, int at, int output, int input) {
@@ -138,6 +154,84 @@ final class WordedSinger {
     return events;
   }
 
+  List<SoundEvent> _singLab(
+    int start,
+    int duration,
+    double midi,
+    double gain,
+    String? role,
+    int partIndex,
+  ) {
+    _chooseMotif();
+    final syllable = _syllables[_next];
+    // Lab worded_line opens every note with at most 90 ms of this syllable.
+    final head = math.min(duration, math.min(4320, syllable.durationSamples));
+    final events = <SoundEvent>[
+      _event(
+        syllable.startSample,
+        start,
+        head,
+        head,
+        midi,
+        gain,
+        role,
+        partIndex,
+        sourceEnd: syllable.startSample + syllable.durationSamples,
+      ),
+    ];
+    final hold = duration - head;
+    if (hold > 1440) {
+      final (coreStart, coreLength) = _labVowel(syllable);
+      // Limit the hold to the renderer's 0.1x stretch floor, so its source
+      // read never extends beyond the selected syllable's vowel.
+      final sung = math.min(hold, coreLength * 10);
+      final input = math.min(coreLength, sung);
+      events.add(
+        _event(
+          coreStart,
+          start + head,
+          sung,
+          input,
+          midi,
+          gain,
+          role,
+          partIndex,
+          sourceEnd: coreStart + coreLength,
+        ),
+      );
+    }
+    if (_random == null) {
+      _next = (_next + 1) % _syllables.length;
+    } else if (++_motifPosition < _motif.length) {
+      _next = _motif[_motifPosition];
+    } else {
+      _next = (_motif.last + 1) % _syllables.length;
+      _motif = const [];
+    }
+    return events;
+  }
+
+  /// Approximate the lab's 80 ms steady vowel from the analyzed voiced runs.
+  (int, int) _labVowel(AudibleRegion syllable) {
+    final end = syllable.startSample + syllable.durationSamples;
+    var bestStart = syllable.startSample;
+    var bestLength = 0;
+    for (final run in clip.voicedRuns) {
+      final from = math.max(syllable.startSample, run.startSample);
+      final to = math.min(end, run.startSample + run.durationSamples);
+      if (to - from > bestLength) {
+        bestStart = from;
+        bestLength = to - from;
+      }
+    }
+    if (bestLength == 0) {
+      bestStart = syllable.startSample + syllable.durationSamples ~/ 2;
+      bestLength = end - bestStart;
+    }
+    final length = math.min(3840, bestLength);
+    return (bestStart + (bestLength - length) ~/ 2, length);
+  }
+
   SoundEvent _event(
     int source,
     int start,
@@ -146,10 +240,14 @@ final class WordedSinger {
     double midi,
     double gain,
     String? role,
-    int partIndex,
-  ) {
+    int partIndex, {
+    int? sourceEnd,
+  }) {
     final clipEnd = clip.sourceStartSample + clip.durationSamples;
-    final read = math.min(input + 2, clipEnd - source);
+    final read = math.min(
+      input + 2,
+      math.min(sourceEnd ?? clipEnd, clipEnd) - source,
+    );
     return SoundEvent(
       assetId: clip.assetId,
       sourceStartSample: source,

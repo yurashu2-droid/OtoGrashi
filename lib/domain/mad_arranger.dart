@@ -456,10 +456,10 @@ class _MadBuilder {
   /// One note = the raw attack of the next syllable + a sung body read
   /// forward from the clip's clearest stretch, stopping at 85% of the note.
   /// Pure tones (whistles) are retuned by speed instead of by grains.
-  /// Carry unfinished syllables onto later notes, including consonants and
-  /// breathy syllables, while holding voiced vowels on sufficiently long notes.
+  /// Speech opens each note with a fresh syllable head, then holds its vowel.
   (int, int?) wordedLine(_Voice v, (int, int?) cursor, List<(double, double, double)> notes, int barOffset, double gain) {
-    final singer = _wordedSingers.putIfAbsent(v.id, () => WordedSinger(v.clip, seed: seed));
+    final singer = _wordedSingers.putIfAbsent(v.id,
+        () => WordedSinger(v.clip, seed: seed, labArticulation: true));
     for (final (b, length, midi) in notes) {
       final start = ((b + barOffset * 4) * _beat).round();
       final duration = (length * _beat * .95).round();

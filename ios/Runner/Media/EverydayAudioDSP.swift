@@ -15,7 +15,9 @@ enum EverydayAudioDSP {
   /// Interpolated YIN. Search the FIRST trough, including out-of-band lags,
   /// before accepting the range; otherwise high notes alias to lower octaves.
   static func estimate(_ samples: [Float], start: Int = 0, count: Int? = nil,
-                       maximumHertz: Double = 2000) -> Pitch? {
+                       maximumHertz: Double = 2000, threshold: Double = 0.18,
+                       minimumConfidence: Double = 0.82,
+                       allowBestFallback: Bool = false) -> Pitch? {
     let start = max(0, start)
     guard start < samples.count else { return nil }
     let n = min(count ?? 4096, samples.count - start)
@@ -48,8 +50,10 @@ enum EverydayAudioDSP {
       if accumulated > 0 { cmnd[lag] = difference * Double(lag) / accumulated }
     }
     var lag = 2
+    var bestLag = 2
     while lag <= maxLag {
-      if cmnd[lag] < 0.18 {
+      if cmnd[lag] < cmnd[bestLag] { bestLag = lag }
+      if cmnd[lag] < threshold {
         while lag < maxLag && cmnd[lag + 1] < cmnd[lag] { lag += 1 }
         guard cmnd[lag + 1] >= cmnd[lag] else { return nil }
         let left = cmnd[lag - 1], mid = cmnd[lag], right = cmnd[lag + 1]
@@ -58,11 +62,17 @@ enum EverydayAudioDSP {
           ? max(-0.5, min(0.5, 0.5 * (left - right) / denominator)) : 0
         let hz = rate / (Double(lag) + correction)
         guard hz >= 55, hz <= maximumHertz else { return nil }
-        return Pitch(hertz: hz, confidence: max(0, min(1, 1 - mid)))
+        let confidence = max(0, min(1, 1 - mid))
+        return confidence >= minimumConfidence ? Pitch(hertz: hz, confidence: confidence) : nil
       }
       lag += 1
     }
-    return nil
+    // The lab accepts the clearest trough even when it misses the early
+    // threshold, provided that its periodicity is still strong enough.
+    guard allowBestFallback, 1 - cmnd[bestLag] >= minimumConfidence else { return nil }
+    let hz = rate / Double(bestLag)
+    guard hz >= 55, hz <= maximumHertz else { return nil }
+    return Pitch(hertz: hz, confidence: 1 - cmnd[bestLag])
   }
 
   /// A clip-level advisory pitch is only stable when windows agree. Rendering
@@ -159,12 +169,10 @@ enum EverydayAudioDSP {
     guard frames.contains(where: { $0.pitch != nil }) else {
       return resonantTexture(dry, steps: steps)
     }
-    let marks = pitchMarks(dry, frames: frames)
-    guard !marks.isEmpty else { return gated(dry, steps: steps) }
-    var wet = [Float](repeating: 0, count: count)
-    var weights = [Float](repeating: 0, count: count)
-    var nearest = 0
-    var position = Double(marks[0])
+    var output = [Float](repeating: 0, count: count)
+    var norm = [Float](repeating: 0, count: count)
+    var position = 0.0
+    var mark: Double?
     var stepIndex = 0
     while position < Double(count) {
       let t = Int(position)
@@ -173,46 +181,22 @@ enum EverydayAudioDSP {
       }
       let note = noteAt(t, steps: steps, index: stepIndex, transition: hardTune ? 48 : 384)
       let targetPeriod = Double(sampleRate) / (440 * pow(2, (note - 69) / 12))
-      while nearest + 1 < marks.count &&
-        abs(Double(marks[nearest + 1]) - position) < abs(Double(marks[nearest]) - position) {
-        nearest += 1
+      if let pitch = frames[min(frames.count - 1, t / trackingHop)].pitch {
+        let sourcePeriod = Double(sampleRate) / pitch.hertz
+        mark = crest(dry, prediction: mark, sourcePosition: position, period: sourcePeriod)
+        let half = min(1200, max(24, Int(min(sourcePeriod, targetPeriod).rounded())))
+        layGrain(dry, centre: mark!, at: position, half: half,
+                 output: &output, norm: &norm)
+        position += targetPeriod
+      } else {
+        mark = nil
+        layGrain(dry, centre: position, at: position, half: 240,
+                 output: &output, norm: &norm)
+        position += 240
       }
-      let mark = marks[nearest]
-      if let pitch = frames[min(frames.count - 1, mark / trackingHop)].pitch,
-        abs(Double(mark) - position) < Double(sampleRate) / pitch.hertz * 1.6 {
-        let half = min(1200, max(24, Int(min(Double(sampleRate) / pitch.hertz, targetPeriod).rounded())))
-        // Limit support at upward shifts, as in pitch-synchronous overlap-add.
-        // Subtract the grain DC, not its speech formants. A very high target
-        // otherwise repeats only the positive crest of a low source tone.
-        let grainLo = max(0, mark - half), grainHi = min(count, mark + half + 1)
-        let mean = dry[grainLo..<grainHi].reduce(0, +) / Float(grainHi - grainLo)
-        let lo = max(0, Int(ceil(position - Double(half))))
-        let hi = min(count - 1, Int(floor(position + Double(half))))
-        if lo <= hi {
-          for i in lo...hi {
-            let offset = Double(i) - position
-            let sourcePosition = Double(mark) + offset
-            guard sourcePosition >= 0, sourcePosition < Double(count - 1) else { continue }
-            let weight = Float(0.5 + 0.5 * cos(Double.pi * offset / Double(half)))
-            wet[i] += (read(dry, at: sourcePosition) - mean) * weight
-            weights[i] += weight
-          }
-        }
-      }
-      // Fractional pulse phase continues across all MIDI boundaries. Only the
-      // interval changes; no per-note reset, oscillator or sample-rate change.
-      position += targetPeriod
     }
-    var output = dry
-    var blend: Float = 0
     for i in output.indices {
-      let voiced = frames[min(frames.count - 1, i / trackingHop)].pitch != nil
-      let desired: Float = voiced && weights[i] > 0.03 ? 1 : 0
-      // 5 ms transition. Leave the original attack and unvoiced phonemes intact.
-      blend += max(-1 / 240.0, min(1 / 240.0, desired - blend))
-      if weights[i] > 0.03 {
-        output[i] = dry[i] * (1 - blend) + (wet[i] / weights[i]) * blend
-      }
+      output[i] = norm[i] > 0 ? output[i] / max(0.35, norm[i]) : dry[i]
     }
     return gated(output, steps: steps)
   }
@@ -228,64 +212,78 @@ enum EverydayAudioDSP {
       source.allSatisfy(\.isFinite), stretch.isFinite, (0.05...2).contains(stretch),
       targetMidiNote.isFinite, (24...100).contains(targetMidiNote)
     else { throw Failure.invalidInput }
-    let dry = timeStretchedDry(source, count: count, stretch: stretch)
     let frames = track(source)
-    let marks = pitchMarks(source, frames: frames)
-    guard !marks.isEmpty, frames.contains(where: { $0.pitch != nil }) else { return dry }
-    var wet = [Float](repeating: 0, count: count)
-    var weights = [Float](repeating: 0, count: count)
-    var nearest = 0
+    guard frames.contains(where: { $0.pitch != nil }) else {
+      return timeStretchedDry(source, count: count, stretch: stretch)
+    }
+    var output = [Float](repeating: 0, count: count)
+    var norm = [Float](repeating: 0, count: count)
     var position = 0.0
+    var mark: Double?
     while position < Double(count) {
       let centre = position * stretch
-      while nearest + 1 < marks.count &&
-        abs(Double(marks[nearest + 1]) - centre) < abs(Double(marks[nearest]) - centre) {
-        nearest += 1
-      }
-      let mark = marks[nearest]
-      var period = Double(sampleRate) / 220
-      if let pitch = frames[min(frames.count - 1, mark / trackingHop)].pitch,
-        abs(Double(mark) - centre) < Double(sampleRate) / pitch.hertz * 1.6 {
+      let frame = min(frames.count - 1, max(0, Int(centre) / trackingHop))
+      if let pitch = frames[frame].pitch, centre < Double(source.count) {
+        let sourcePeriod = Double(sampleRate) / pitch.hertz
         var note = targetMidiNote
         if let refMidi {
-          // Keep a little of the source inflection without compressing the
-          // intervals between notes in the written melody.
+          // The written intervals remain intact; retain one fifth of the
+          // source syllable's own inflection around its reference pitch.
           note += 0.2 * max(-12, min(12, pitch.midiNote - refMidi))
         }
         let targetPeriod = Double(sampleRate) / (440 * pow(2, (note - 69) / 12))
-        period = targetPeriod
-        // Limit the support of repeated grains on upward shifts; a full
-        // source period here cancels an octave-up sine almost completely.
-        let half = min(1200, max(24, Int(min(Double(sampleRate) / pitch.hertz, targetPeriod).rounded())))
-        let grainLo = max(0, mark - half), grainHi = min(source.count, mark + half + 1)
-        let mean = source[grainLo..<grainHi].reduce(0, +) / Float(max(1, grainHi - grainLo))
-        let lo = max(0, Int(ceil(position - Double(half))))
-        let hi = min(count - 1, Int(floor(position + Double(half))))
-        if lo <= hi {
-          for i in lo...hi {
-            let offset = Double(i) - position
-            let sourcePosition = Double(mark) + offset
-            guard sourcePosition >= 0, sourcePosition < Double(source.count - 1) else { continue }
-            let weight = Float(0.5 + 0.5 * cos(Double.pi * offset / Double(half)))
-            wet[i] += (read(source, at: sourcePosition) - mean) * weight
-            weights[i] += weight
-          }
-        }
-      }
-      position += period
-    }
-    var output = dry
-    var blend: Float = 0
-    for i in output.indices {
-      let at = min(source.count - 1, Int(Double(i) * stretch))
-      let voiced = frames[min(frames.count - 1, at / trackingHop)].pitch != nil
-      let desired: Float = voiced && weights[i] > 0.03 ? 1 : 0
-      blend += max(-1 / 240.0, min(1 / 240.0, desired - blend))
-      if weights[i] > 0.03 {
-        output[i] = dry[i] * (1 - blend) + (wet[i] / weights[i]) * blend
+        let pulse = crest(source, prediction: mark, sourcePosition: centre,
+                          period: sourcePeriod)
+        mark = pulse
+        // The lab uses the entire source period. For strong upward shifts,
+        // that support cancels a pure tone; retain the existing shorter grain.
+        let half = min(1200, max(24, Int(min(sourcePeriod, targetPeriod).rounded())))
+        layGrain(source, centre: pulse, at: position, half: half,
+                 output: &output, norm: &norm)
+        position += targetPeriod
+      } else {
+        mark = nil
+        layGrain(source, centre: centre, at: position, half: 240,
+                 output: &output, norm: &norm)
+        position += 240
       }
     }
+    for i in output.indices { output[i] /= max(0.35, norm[i]) }
     return output
+  }
+
+  private static func crest(_ source: [Float], prediction: Double?,
+                            sourcePosition: Double, period: Double) -> Double {
+    var pulse = prediction ?? sourcePosition
+    if abs(pulse - sourcePosition) > period { pulse = sourcePosition }
+    while pulse < sourcePosition - period / 2 { pulse += period }
+    // A continuous fractional peak avoids the 10 ms pitch-frame jitter.
+    let lo = max(0, Int((pulse - period * 0.25).rounded(.down)))
+    let hi = min(source.count - 1, Int((pulse + period * 0.25).rounded(.down)))
+    guard hi > lo else { return pulse }
+    var peak = lo
+    for i in (lo + 1)...hi where source[i] > source[peak] { peak = i }
+    guard peak > 0 && peak + 1 < source.count else { return Double(peak) }
+    let a = Double(source[peak - 1]), b = Double(source[peak]), c = Double(source[peak + 1])
+    let denominator = a - 2 * b + c
+    return Double(peak) + (abs(denominator) > 1e-9
+      ? max(-0.5, min(0.5, 0.5 * (a - c) / denominator)) : 0)
+  }
+
+  private static func layGrain(_ source: [Float], centre: Double, at: Double, half: Int,
+                               output: inout [Float], norm: inout [Float]) {
+    guard half >= 8 else { return }
+    let base = Int(floor(at))
+    let fraction = at - Double(base)
+    for k in -half..<half {
+      let i = base + k
+      guard i >= 0, i < output.count else { continue }
+      let sourcePosition = centre + Double(k) - fraction
+      guard sourcePosition >= 0, sourcePosition <= Double(source.count - 1) else { continue }
+      let weight = Float(0.5 + 0.5 * cos(Double.pi * Double(k) / Double(half)))
+      output[i] += read(source, at: sourcePosition) * weight
+      norm[i] += weight
+    }
   }
 
   /// Overlap speech grains at a new pace while matching each grain to the
@@ -330,70 +328,35 @@ enum EverydayAudioDSP {
     return output
   }
 
-  private static let trackingHop = 960 // 20 ms; beat targets change independently.
+  private static let trackingHop = 480 // Lab analysis advances every 10 ms.
   private struct Frame {
     let pitch: Pitch?
   }
 
   private static func track(_ source: [Float]) -> [Frame] {
-    var result: [Frame] = []
+    var candidates: [Pitch?] = []
+    var levels: [Double] = []
     for offset in stride(from: 0, to: source.count, by: trackingHop) {
-      let center = min(source.count - 1, offset + trackingHop / 2)
-      let n = min(4096, source.count)
-      let start = max(0, min(source.count - n, center - n / 2))
-      var pitch = estimate(source, start: start, count: n)
-      if let candidate = pitch {
-        // A long pitch window can straddle a vowel and /s/. Verify periodicity
-        // locally so the neighboring vowel does not "voice" the consonant.
-        let lag = max(1, Int((Double(sampleRate) / candidate.hertz).rounded()))
-        let lo = max(0, center - trackingHop / 2)
-        let hi = min(source.count - lag, center + trackingHop / 2)
-        var ab = 0.0, aa = 0.0, bb = 0.0
-        if hi > lo {
-          for i in lo..<hi {
-            let a = Double(source[i]), b = Double(source[i + lag])
-            ab += a * b; aa += a * a; bb += b * b
-          }
-        }
-        if aa < 1e-8 || bb < 1e-8 || ab / max(1e-12, sqrt(aa * bb)) < 0.65 {
-          pitch = nil
-        }
-      }
-      result.append(Frame(pitch: pitch))
+      let n = min(1920, source.count)
+      let start = max(0, min(source.count - n, offset))
+      let level = sqrt(source[start..<(start + n)].reduce(0.0) {
+        $0 + Double($1) * Double($1)
+      } / Double(n))
+      levels.append(level)
+      candidates.append(estimate(source, start: start, count: n,
+                                 maximumHertz: 4000, threshold: 0.2,
+                                 minimumConfidence: 0.6, allowBestFallback: true))
     }
-    return result
-  }
-
-  private static func pitchMarks(_ source: [Float], frames: [Frame]) -> [Int] {
-    var marks: [Int] = []
-    var cursor = 0
-    var previous: Int?
-    var polarity: Float = 1
-    while cursor < source.count {
-      let frameIndex = min(frames.count - 1, cursor / trackingHop)
-      guard let pitch = frames[frameIndex].pitch else {
-        cursor = (frameIndex + 1) * trackingHop
-        previous = nil
-        continue
-      }
-      let period = max(24, Int((Double(sampleRate) / pitch.hertz).rounded()))
-      let prediction = previous.map { $0 + period } ?? cursor
-      let radius = previous == nil ? period : max(2, period / 5)
-      let lo = max(cursor, prediction - (previous == nil ? 0 : radius))
-      let hi = min(source.count - 1, prediction + radius)
-      guard hi >= lo else { break }
-      var peak = lo
-      for i in lo...hi {
-        let value = previous == nil ? abs(source[i]) : source[i] * polarity
-        let best = previous == nil ? abs(source[peak]) : source[peak] * polarity
-        if value > best { peak = i }
-      }
-      if previous == nil { polarity = source[peak] < 0 ? -1 : 1 }
-      marks.append(peak)
-      previous = peak
-      cursor = peak + max(1, period / 2)
+    let floor = (levels.max() ?? 0) * 0.12
+    let voiced = candidates.indices.map { candidates[$0] != nil && levels[$0] > floor }
+    return candidates.indices.map { index in
+      guard voiced[index], let pitch = candidates[index] else { return Frame(pitch: nil) }
+      let near = max(0, index - 2)...min(candidates.count - 1, index + 2)
+      let notes = near.compactMap { voiced[$0] ? candidates[$0]?.midiNote : nil }.sorted()
+      let midi = notes[notes.count / 2]
+      let hertz = 440 * pow(2, (midi - 69) / 12)
+      return Frame(pitch: Pitch(hertz: hertz, confidence: pitch.confidence))
     }
-    return marks
   }
 
   private static func noteAt(_ offset: Int, steps: [NoteStep], index: Int, transition: Int = 384) -> Double {
