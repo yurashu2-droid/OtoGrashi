@@ -255,11 +255,16 @@ enum EverydayAudioDSP {
   private static func crest(_ source: [Float], prediction: Double?,
                             sourcePosition: Double, period: Double) -> Double {
     var pulse = prediction ?? sourcePosition
-    if abs(pulse - sourcePosition) > period { pulse = sourcePosition }
+    let reacquire = prediction == nil || abs(pulse - sourcePosition) > period
+    if reacquire { pulse = sourcePosition }
     while pulse < sourcePosition - period / 2 { pulse += period }
     // A continuous fractional peak avoids the 10 ms pitch-frame jitter.
-    let lo = max(0, Int((pulse - period * 0.25).rounded(.down)))
-    let hi = min(source.count - 1, Int((pulse + period * 0.25).rounded(.down)))
+    // A lower target can advance by more than a source period. After that
+    // jump the phase is unknown: search a full cycle to find a real crest,
+    // rather than treating the edge of a quarter-cycle search as a peak.
+    let radius = period * (reacquire ? 0.5 : 0.25)
+    let lo = max(0, Int((pulse - radius).rounded(.down)))
+    let hi = min(source.count - 1, Int((pulse + radius).rounded(.down)))
     guard hi > lo else { return pulse }
     var peak = lo
     for i in (lo + 1)...hi where source[i] > source[peak] { peak = i }
