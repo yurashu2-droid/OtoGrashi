@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'arrangement.dart';
 import 'melody_template.dart';
 import 'midi_score_data.dart';
+import 'worded_singing.dart';
 
 /// A MAD made of the clips themselves: the melody is sung by the most tuneful
 /// clip one syllable at a time, a low clip plays bass, sharp attacks become a
@@ -152,35 +153,6 @@ class _Voice {
   /// grains, even when it measures as nearly pure (a distant rooster, a call).
   bool get pure => (clip.purity ?? 0) > .6 && medianMidi >= 88;
 
-  /// Syllables that are mostly voice, not breath: at least 60% inside voiced runs.
-  List<_Span> get voicedSyllables {
-    final voiced = syllables
-        .where((s) => _voicedOverlap(s).length * 10 >= s.length * 6)
-        .toList();
-    return voiced.isNotEmpty ? voiced : syllables;
-  }
-
-  /// The longest stretch of `s` inside one voiced run.
-  _Span _voicedOverlap(_Span s) {
-    var best = const _Span(0, 0);
-    for (final r in voicedRuns) {
-      final from = math.max(s.start, r.start);
-      final to = math.min(s.end, r.end);
-      if (to - from > best.length) best = _Span(from, to - from);
-    }
-    return best;
-  }
-
-  /// Where the syllable's vowel sits: the middle 80 ms of its voiced part.
-  _Span vowelCore(_Span s) {
-    final voiced = _voicedOverlap(s);
-    if (voiced.length <= 0) return _Span(s.start + s.length ~/ 2, math.max(1, s.length - s.length ~/ 2));
-    final n = (.08 * _sampleRate).round();
-    final from = math.max(voiced.start, voiced.start + voiced.length ~/ 2 - n ~/ 2);
-    final to = math.min(voiced.end, from + n);
-    return _Span(from, math.max(1, to - from));
-  }
-
   /// Speech: several syllables and not a tone. It sings its words.
   bool get speech => syllables.length >= 4 && (clip.purity ?? 0) < .8;
 
@@ -236,6 +208,7 @@ class _MadBuilder {
   late final List<(double, double, double)> melody;
   late final List<(double, double, double)> bassLine;
   final events = <SoundEvent>[];
+  final _wordedSingers = <String, WordedSinger>{};
   final masterEffects = <MasterEffect>[];
   final sections = <SongSection>[];
 
@@ -483,31 +456,17 @@ class _MadBuilder {
   /// One note = the raw attack of the next syllable + a sung body read
   /// forward from the clip's clearest stretch, stopping at 85% of the note.
   /// Pure tones (whistles) are retuned by speed instead of by grains.
-  /// Speech sings its words: one syllable per note, in order. Each note opens
-  /// with the syllable as said (consonant and the start of its vowel, up to
-  /// 90 ms, at most 1.4x faster), so the word is heard; the rest of the note
-  /// holds the middle of that syllable's own vowel, stretched and tuned onto
-  /// the note, so the tune is heard. Mostly-breath syllables are skipped.
+  /// Carry unfinished syllables onto later notes, including consonants and
+  /// breathy syllables, while holding voiced vowels on sufficiently long notes.
   (int, int?) wordedLine(_Voice v, (int, int?) cursor, List<(double, double, double)> notes, int barOffset, double gain) {
-    var (k, pos) = cursor;
-    final spoken = v.voicedSyllables;
-    final headMax = (.09 * _sampleRate).round();
+    final singer = _wordedSingers.putIfAbsent(v.id, () => WordedSinger(v.clip));
     for (final (b, length, midi) in notes) {
       final start = ((b + barOffset * 4) * _beat).round();
       final duration = (length * _beat * .95).round();
-      final syllable = spoken[k % spoken.length];
-      k++;
-      final said = math.min(math.min(syllable.length, headMax), (duration / .7).round());
-      final head = math.min(duration, said);
-      add(v, start, head, syllable.start, role: 'melody', gain: gain, note: midi, stretch: said / head);
-      final hold = duration - head;
-      if (hold > (.03 * _sampleRate).round()) {
-        final core = v.vowelCore(syllable);
-        add(v, start + head, hold, core.start, role: 'melody', gain: gain, note: midi,
-            stretch: (core.length / hold).clamp(.12, 1.0).toDouble());
-      }
+      events.addAll(singer.sing(start, math.min(duration, total - start), midi,
+          gain: gain, role: 'melody', partIndex: _parts['melody']!));
     }
-    return (k % spoken.length, pos);
+    return cursor;
   }
 
   (int, int?) syllableLine(_Voice v, (int, int?) cursor, List<(double, double, double)> notes, int barOffset, double gain) {

@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:otogurashi/domain/arrangement.dart';
 import 'package:otogurashi/domain/arrangement_engine.dart';
 import 'package:otogurashi/domain/melody_template.dart';
+import 'package:otogurashi/domain/worded_singing.dart';
 
 AnalyzedClip _speaker(int i) => AnalyzedClip(
   assetId: 'talk-$i',
@@ -26,6 +27,42 @@ AnalyzedClip _speaker(int i) => AnalyzedClip(
 );
 
 void main() {
+  test('short notes carry all syllables forward at natural speed', () {
+    final singer = WordedSinger(_speaker(0));
+    final events = <SoundEvent>[];
+    for (var i = 0; i < 30; i++) {
+      events.addAll(singer.sing(i * 3200, 3000, 60, gain: .5));
+      if (events.last.sourceStartSample + events.last.sourceDurationSamples! >= 50400) break;
+    }
+    expect(events.first.sourceStartSample, 4800);
+    expect(events.every((e) => e.stretch == 1), isTrue);
+    for (var i = 1; i < events.length; i++) {
+      expect(events[i].sourceStartSample, greaterThanOrEqualTo(events[i - 1].sourceStartSample));
+      expect(events[i].sourceStartSample,
+          lessThanOrEqualTo(events[i - 1].sourceStartSample + events[i - 1].sourceDurationSamples!));
+    }
+    expect(events.last.sourceStartSample + events.last.sourceDurationSamples!,
+        greaterThanOrEqualTo(50400));
+    expect(events.any((e) => e.sourceStartSample <= 26400 &&
+        e.sourceStartSample + e.sourceDurationSamples! > 26400), isTrue);
+  });
+
+  test('long notes hold only the voiced centre, after onset and before ending', () {
+    final events = WordedSinger(_speaker(0)).sing(0, 30000, 60, gain: .5);
+    expect(events, hasLength(3));
+    expect(events.first.sourceStartSample, 4800);
+    expect(events.first.stretch, 1);
+    expect(events[1].stretch, lessThan(1));
+    expect(events.last.stretch, 1);
+    expect(events.last.sourceStartSample + events.last.sourceDurationSamples!,
+        greaterThanOrEqualTo(14400));
+    for (var i = 1; i < events.length; i++) {
+      expect(events[i].sourceStartSample, greaterThan(events[i - 1].sourceStartSample));
+      expect(events[i].destinationStartSample,
+          events[i - 1].destinationStartSample + events[i - 1].durationSamples);
+    }
+  });
+
   test('原声を楽しむ sings speech word by word; other modes keep their line', () {
     final clips = [for (var i = 0; i < 3; i++) _speaker(i)];
     for (final template in [MelodyTemplate.hop, MelodyTemplate.midiScore]) {

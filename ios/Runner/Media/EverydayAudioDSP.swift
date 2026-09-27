@@ -228,10 +228,7 @@ enum EverydayAudioDSP {
       source.allSatisfy(\.isFinite), stretch.isFinite, (0.05...2).contains(stretch),
       targetMidiNote.isFinite, (24...100).contains(targetMidiNote)
     else { throw Failure.invalidInput }
-    var dry = [Float](repeating: 0, count: count)
-    for i in 0..<count {
-      dry[i] = read(source, at: min(Double(source.count - 1), Double(i) * stretch))
-    }
+    let dry = timeStretchedDry(source, count: count, stretch: stretch)
     let frames = track(source)
     let marks = pitchMarks(source, frames: frames)
     guard !marks.isEmpty, frames.contains(where: { $0.pitch != nil }) else { return dry }
@@ -254,8 +251,13 @@ enum EverydayAudioDSP {
           let moved = pitch.midiNote + max(-12, min(12, targetMidiNote - refMidi))
           note = moved + 0.8 * (targetMidiNote - moved)
         }
+        // Speech loses its identity when a distant score note overrides the
+        // singer's register, including when no reliable reference was supplied.
+        note = max(pitch.midiNote - 12, min(pitch.midiNote + 12, note))
         let targetPeriod = Double(sampleRate) / (440 * pow(2, (note - 69) / 12))
         period = targetPeriod
+        // Limit the support of repeated grains on upward shifts; a full
+        // source period here cancels an octave-up sine almost completely.
         let half = min(1200, max(24, Int(min(Double(sampleRate) / pitch.hertz, targetPeriod).rounded())))
         let grainLo = max(0, mark - half), grainHi = min(source.count, mark + half + 1)
         let mean = source[grainLo..<grainHi].reduce(0, +) / Float(max(1, grainHi - grainLo))
@@ -285,6 +287,48 @@ enum EverydayAudioDSP {
         output[i] = dry[i] * (1 - blend) + (wet[i] / weights[i]) * blend
       }
     }
+    return output
+  }
+
+  /// Overlap speech grains at a new pace while matching each grain to the
+  /// preceding waveform. This supplies the unvoiced/undetected portions of
+  /// renderStretched without changing their pitch by resampling them.
+  private static func timeStretchedDry(_ source: [Float], count: Int, stretch: Double) -> [Float] {
+    if stretch == 1 {
+      return (0..<count).map { $0 < source.count ? source[$0] : 0 }
+    }
+    let half = 480, hop = 480 // 20 ms Hann grains, placed every 10 ms.
+    var output = [Float](repeating: 0, count: count)
+    var weights = [Float](repeating: 0, count: count)
+    for centre in stride(from: 0, to: count + half, by: hop) {
+      let expected = Int((Double(centre) * stretch).rounded())
+      var selected = expected
+      if centre > 0 {
+        var best = -Double.infinity
+        for candidate in stride(from: max(0, expected - 240),
+                                through: min(source.count - 1, expected + 240), by: 8) {
+          var ab = 0.0, aa = 0.0, bb = 0.0
+          for offset in stride(from: -half, to: half, by: 8) {
+            let i = centre + offset, s = candidate + offset
+            guard i >= 0, i < count, s >= 0, s < source.count, weights[i] > 0.2 else { continue }
+            let a = Double(output[i] / weights[i]), b = Double(source[s])
+            ab += a * b; aa += a * a; bb += b * b
+          }
+          if aa > 1e-8, bb > 1e-8 {
+            let score = ab / sqrt(aa * bb)
+            if score > best { best = score; selected = candidate }
+          }
+        }
+      }
+      for offset in -half..<half {
+        let i = centre + offset, s = selected + offset
+        guard i >= 0, i < count, s >= 0, s < source.count else { continue }
+        let weight = Float(0.5 + 0.5 * cos(Double.pi * Double(offset) / Double(half)))
+        output[i] += source[s] * weight
+        weights[i] += weight
+      }
+    }
+    for i in output.indices where weights[i] > 0.000_1 { output[i] /= weights[i] }
     return output
   }
 

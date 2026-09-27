@@ -3,6 +3,35 @@ import XCTest
 @testable import Runner
 
 final class AudioRendererTests: XCTestCase {
+  func testStretchedSpeechLimitsPitchShiftWithoutReferenceNote() throws {
+    let source = (0..<24_000).map { frame in
+      Float(0.3 * sin(2 * Double.pi * 220 * Double(frame) / 48_000))
+    }
+    let output = try EverydayAudioDSP.renderStretched(source, count: 24_000,
+      targetMidiNote: 84, stretch: 1, refMidi: nil)
+    let pitch = try XCTUnwrap(EverydayAudioDSP.estimate(output, start: 8_000))
+    XCTAssertEqual(pitch.midiNote, 69, accuracy: 0.5)
+  }
+
+  func testShortUntrackedVoiceKeepsPitchWhenStretched() throws {
+    // Under 1024 samples, the pitch tracker cannot find a voiced frame.
+    let source = (0..<900).map { frame in
+      Float(0.3 * sin(2 * Double.pi * 220 * Double(frame) / 48_000))
+    }
+    let output = try EverydayAudioDSP.renderStretched(source, count: 1_800,
+      targetMidiNote: 57, stretch: 0.5, refMidi: nil)
+    func energy(_ hz: Double) -> Double {
+      var real = 0.0, imaginary = 0.0
+      for i in 200..<1_600 {
+        let phase = 2 * Double.pi * hz * Double(i) / 48_000
+        real += Double(output[i]) * cos(phase)
+        imaginary += Double(output[i]) * sin(phase)
+      }
+      return hypot(real, imaginary)
+    }
+    XCTAssertGreaterThan(energy(220), energy(110) * 1.5)
+  }
+
   func testEverydayNoiseRetainsIdentityAndMovingVoiceIsRetuned() throws {
     var state: UInt32 = 91
     let noise = (0..<24_000).map { _ -> Float in

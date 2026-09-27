@@ -2,84 +2,109 @@ import 'dart:math' as math;
 
 import 'arrangement.dart';
 
-/// Speech sings its words: one syllable per note, in order. Each note opens
-/// with the syllable as said (consonant and the start of its vowel, up to
-/// 90 ms, at most 1.4x faster), so the word is heard; the rest of the note
-/// holds the middle of that syllable's own voiced part, stretched and tuned
-/// onto the note, so the tune is heard. Mostly-breath syllables are skipped.
+/// Sings speech in source order. A short note may contain only part of a
+/// syllable; the following note continues where it left off. Long notes hold
+/// the voiced centre while the onset and ending are spoken at natural speed.
 final class WordedSinger {
-  WordedSinger(this.clip) : _syllables = _voiced(clip);
+  WordedSinger(this.clip)
+    : _syllables = clip.syllables.toList()
+        ..sort((a, b) => a.startSample.compareTo(b.startSample));
 
   final AnalyzedClip clip;
   final List<AudibleRegion> _syllables;
   int _next = 0;
+  int _offset = 0;
 
-  /// Several syllables and not a tone (a crow or a whistle stays tonal).
   static bool isSpeech(AnalyzedClip clip) =>
       clip.syllables.length >= 4 && (clip.purity ?? 0) < .8;
 
-  static List<AudibleRegion> _voiced(AnalyzedClip clip) {
-    final all = clip.syllables.toList()
-      ..sort((a, b) => a.startSample.compareTo(b.startSample));
-    final voiced = all
-        .where((s) => _overlap(clip, s).$2 * 10 >= s.durationSamples * 6)
-        .toList();
-    return voiced.isNotEmpty ? voiced : all;
-  }
-
-  /// The longest stretch of `s` inside one voiced run: (start, length).
-  static (int, int) _overlap(AnalyzedClip clip, AudibleRegion s) {
-    var best = (s.startSample, 0);
-    final end = s.startSample + s.durationSamples;
-    for (final r in clip.voicedRuns) {
-      final from = math.max(s.startSample, r.startSample);
-      final to = math.min(end, r.startSample + r.durationSamples);
-      if (to - from > best.$2) best = (from, to - from);
+  /// The longest voiced run inside this syllable, trimmed at both edges so
+  /// consonants and transitions are not stretched along with the vowel.
+  (int, int)? _vowel(AudibleRegion syllable) {
+    final end = syllable.startSample + syllable.durationSamples;
+    var bestStart = 0;
+    var bestLength = 0;
+    for (final run in clip.voicedRuns) {
+      final from = math.max(syllable.startSample, run.startSample);
+      final to = math.min(end, run.startSample + run.durationSamples);
+      if (to - from > bestLength) {
+        bestStart = from;
+        bestLength = to - from;
+      }
     }
-    return best;
+    if (bestLength < 2400) return null;
+    final margin = math.min(480, bestLength ~/ 8);
+    return (bestStart + margin, bestLength - 2 * margin);
   }
 
-  /// The events that sing one note of `duration` samples at `start`.
-  List<SoundEvent> sing(int start, int duration, double midi, {required double gain}) {
+  List<SoundEvent> sing(
+    int start,
+    int duration,
+    double midi, {
+    required double gain,
+    String? role,
+    int partIndex = 0,
+  }) {
     if (_syllables.isEmpty || duration < 48) return const <SoundEvent>[];
-    final syllable = _syllables[_next++ % _syllables.length];
-    final said = math.min(
-      math.min(syllable.durationSamples, 4320),
-      (duration / .7).round(),
-    );
-    final head = math.max(1, math.min(duration, said));
-    final events = [
-      _event(syllable.startSample, start, head, said / head, midi, gain),
-    ];
-    final hold = duration - head;
-    if (hold > 1440) {
-      final (voicedStart, voicedLength) = _overlap(clip, syllable);
-      final length = voicedLength > 0 ? voicedLength : syllable.durationSamples;
-      final from = voicedLength > 0 ? voicedStart : syllable.startSample;
-      final core = math.max(1, math.min(3840, length));
-      events.add(
-        _event(
-          from + (length - core) ~/ 2,
-          start + head,
-          hold,
-          (core / hold).clamp(.12, 1.0).toDouble(),
-          midi,
-          gain,
-        ),
-      );
+    final syllable = _syllables[_next];
+    final source = syllable.startSample + _offset;
+    final remaining = syllable.durationSamples - _offset;
+    final events = <SoundEvent>[];
+
+    void add(int from, int at, int output, int input) {
+      if (output > 0 && input > 0) {
+        events.add(
+          _event(from, at, output, input, midi, gain, role, partIndex),
+        );
+      }
+    }
+
+    if (_offset != 0 || remaining > duration) {
+      // Preserve consonants at their original speed. Later notes take over
+      // when the syllable is longer than this one.
+      final input = math.min(remaining, duration);
+      add(source, start, input, input);
+      _offset += input;
+    } else {
+      final vowel = _vowel(syllable);
+      if (vowel == null || duration == remaining) {
+        add(source, start, remaining, remaining);
+      } else {
+        final (vowelStart, vowelLength) = vowel;
+        final onset = vowelStart - source;
+        final tail = remaining - onset - vowelLength;
+        // The renderer supports down to 0.1x. If a note is still longer,
+        // leave its final space silent rather than repeating earlier speech.
+        final held = math.min(duration - onset - tail, vowelLength * 10);
+        add(source, start, onset, onset);
+        add(vowelStart, start + onset, held, vowelLength);
+        add(vowelStart + vowelLength, start + onset + held, tail, tail);
+      }
+      _offset = remaining;
+    }
+
+    if (_offset >= syllable.durationSamples) {
+      _next = (_next + 1) % _syllables.length;
+      _offset = 0;
     }
     return events;
   }
 
-  SoundEvent _event(int source, int start, int duration, double stretch, double midi, double gain) {
-    final clipStart = clip.sourceStartSample;
-    final clipEnd = clipStart + clip.durationSamples;
-    final rounded = ((stretch * 10000).roundToDouble() / 10000).clamp(.1, 2.0).toDouble();
-    final read = math.max(1, math.min((duration * rounded).ceil() + 2, clipEnd - clipStart));
-    final from = math.max(clipStart, math.min(source, clipEnd - read));
+  SoundEvent _event(
+    int source,
+    int start,
+    int duration,
+    int input,
+    double midi,
+    double gain,
+    String? role,
+    int partIndex,
+  ) {
+    final clipEnd = clip.sourceStartSample + clip.durationSamples;
+    final read = math.min(input + 2, clipEnd - source);
     return SoundEvent(
       assetId: clip.assetId,
-      sourceStartSample: from,
+      sourceStartSample: source,
       sourceDurationSamples: read,
       destinationStartSample: start,
       durationSamples: duration,
@@ -88,9 +113,13 @@ final class WordedSinger {
         fadeInSamples: math.min(96, duration ~/ 4),
         fadeOutSamples: math.min(480, duration ~/ 4),
       ),
+      partIndex: partIndex,
       targetMidiNote: midi.clamp(24.0, 100.0).toDouble(),
       treatment: SoundTreatment.tuned,
-      stretch: rounded,
+      role: role,
+      stretch: ((input / duration * 10000).roundToDouble() / 10000)
+          .clamp(.1, 2.0)
+          .toDouble(),
     );
   }
 }
