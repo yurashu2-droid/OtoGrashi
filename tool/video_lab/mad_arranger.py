@@ -307,6 +307,54 @@ class Arrangement:
                          0.35 * gain, rate=1.6)
 
 
+FORM = __import__("os").environ.get("OTO_FORM", "mad")
+
+
+def write_collect(arr, out, score, voices, usable, singers, lead, bass, sampled_bass, bass_mid,
+                  sung, bass_notes, kit, longest):
+    """あつめる: the sounds are collected one at a time, then stacked into a beat
+    one layer per bar (kick, snare, hats and bass), then the tune rides on top.
+
+      collect  each clip alone: a bar each (up to three clips) or half a bar
+      build    kick alone -> + snare -> + hats and bass, a bar each
+      song     the melody over the full kit; everyone stutters out at the end
+    """
+    order = [lead] + [i for i in usable if i != lead]
+    per = BAR if len(order) <= 3 else BAR // 2
+    for k, i in enumerate(order):
+        arr.phrase(i, k * per, longest[i], gain=1.0, limit=(per - 600) / SR)
+    collect_end = -(-len(order) * per // BAR)  # bars, rounded up
+    build = collect_end
+    arr.drums(kit, build, build + 1, snare=False, hats=False)
+    arr.drums(kit, build + 1, build + 2, hats=False)
+    arr.drums(kit, build + 2, BARS)
+    song = build + 3
+
+    def bass_part(cursor, notes, bar_offset, gain):
+        if sampled_bass:
+            return arr.sampled_line(bass, cursor, notes, bar_offset, gain, "bass", bass_mid)
+        return arr.sung_line(bass, cursor, notes, bar_offset, gain, "bass")
+
+    cursor = (0, sorted(voices[bass].regions)[0][0])
+    cursor = bass_part(cursor, [n for n in bass_notes if n[0] < 4], build + 2, 0.6)
+    beats = (BARS - 1 - song) * 4
+    cursor = bass_part(cursor, [n for n in bass_notes if n[0] < beats], song, 0.55)
+    singer = singers[0]
+    arr.syllable_line(singer, (0, None), [n for n in sung[singer] if n[0] < beats], song, 0.95, "melody")
+    # the last bar: everyone says their first syllable, in the order collected
+    for k, i in enumerate(order):
+        arr.stutter_head(i, (BARS - 1) * BAR + k * (BAR // max(1, len(order))), longest[i], times=2,
+                         step=SIXTEENTH, gain=0.8)
+    arr.events.sort(key=lambda e: e["destinationStartSample"])
+    recipe = {"arrangement": {"totalSamples": BARS * BAR, "sourceAssetIds": [f"clip-{i}" for i in range(len(voices))],
+                              "events": arr.events, "title": score["title"], "fx": [],
+                              "form": "collect", "order": [f"clip-{i}" for i in order],
+                              "phases": {"collect": 0, "build": build, "song": song},
+                              "sections": [[0, build, "calm"], [build, song, "mid"], [song, BARS, "high"]]}}
+    out.write_text(json.dumps(recipe, ensure_ascii=False), encoding="utf-8")
+    print("collect: order", order, "build bar", build, "song bar", song)
+
+
 def main():
     song, src_dir, out = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
     score = bundled_score() if song == "lilac" else SCORES[song]
@@ -387,6 +435,11 @@ def main():
         taken.add(choice[1])
 
     longest = {i: voices[i].regions[0] for i in range(n)}  # longest region per clip
+
+    if FORM == "collect":
+        write_collect(arr, out, score, voices, usable, singers, lead, bass, sampled_bass, bass_mid,
+                      sung, bass_notes, kit, longest)
+        return
 
     # bars 1-2: every clip introduces itself, quick-fire, the first one stuttered in
     t = 0

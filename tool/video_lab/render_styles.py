@@ -1358,7 +1358,7 @@ def face_disc(ctx, c, size):
     return disc
 
 
-def cover_title(ctx, canvas):
+def cover_title(ctx, canvas, faces=True):
     """The first frame is the cover a friend (and a feed thumbnail) sees before
     pressing play: whose everyday this is, and that オトグラシ made it. Complete
     from frame 0, kept clear of the app's own buttons at the bottom and right."""
@@ -1378,6 +1378,8 @@ def cover_title(ctx, canvas):
     shadow.putalpha(card.getchannel("A").point(lambda v: v * 0.4))
     canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(14)), (46, 172))
     canvas.alpha_composite(card, (40, 160))
+    if not faces:
+        return canvas
     # the cast as round face stickers, overlapping a little like a group photo
     cast = ctx.heard
     n = len(cast)
@@ -1514,7 +1516,225 @@ def feed_frame(ctx, t, posts, intro_end):
     return canvas
 
 
+# ---------------------------------------------------------------- あつめる (collect)
+
+PASTELS = [(248, 214, 200), (212, 234, 214), (226, 216, 244), (250, 236, 196), (206, 226, 244), (246, 212, 228)]
+
+
+def note_of(e):
+    """The note an event sings, whichever way the recipe spells it."""
+    return e.midi or (e.notes[0][1] if e.notes else None)
+
+
+def darker(c, k=0.55):
+    return tuple(int(v * k) for v in c)
+
+
+def collect_entries(ctx):
+    """(clip, start_t, end_t) for each clip's turn in the collecting part."""
+    build_t = ctx.phases["build"] * BAR
+    firsts = []
+    for c in ctx.order:
+        first = next((e for e in ctx.events if e.c == c and e.role == "phrase" and e.t < build_t), None)
+        if first is not None:
+            firsts.append((c, first.t))
+    return [(c, t0, firsts[k + 1][1] if k + 1 < len(firsts) else build_t) for k, (c, t0) in enumerate(firsts)]
+
+
+def clip_sticker(ctx, e, t, height):
+    """The clip at t as a sticker: its cut-out subject, else a white-edged photo."""
+    piece = cutout(ctx, e, t, height, outline=10, max_width=W * 0.7, largest=True)
+    if piece is None:
+        photo = cover(ctx.frame(e, t), int(height * 0.78), int(height)).convert("RGBA")
+        edge = 12
+        piece = Image.new("RGBA", (photo.width + 2 * edge, photo.height + 2 * edge), (255, 255, 255, 255))
+        piece.alpha_composite(photo, (edge, edge))
+    return piece
+
+
+def tray_slots(n):
+    size = 84 if n <= 4 else 70
+    gap = 18
+    x0 = (W - (n * size + (n - 1) * gap)) // 2
+    return [(x0 + k * (size + gap) + size // 2, 96) for k in range(n)], size
+
+
+def collect_scene(ctx, t):
+    """One clip at a time on its own colour: it bounces in under its name, and
+    as its turn ends its face flies up into the tray of collected sounds."""
+    entries = collect_entries(ctx)
+    k = max((i for i, (_, t0, _) in enumerate(entries) if t0 <= t), default=0)
+    c, t0, t1 = entries[k]
+    e = next(x for x in ctx.events if x.c == c and x.role == "phrase" and abs(x.t - t0) < 1e-6)
+    canvas = Image.new("RGBA", (W, H), (*PASTELS[k % len(PASTELS)], 255))
+    age = t - t0
+    # the sticker bounces in, then breathes with its own level
+    level = ctx.norm_level(e, t) if e.active(t) else 0.0
+    scale = overshoot(age / 0.3) * (1 + 0.05 * level)
+    piece = clip_sticker(ctx, e, min(t, e.end_t - 1 / FPS), H * 0.44)
+    piece = piece.resize((max(1, int(piece.width * scale)), max(1, int(piece.height * scale))), Image.BILINEAR)
+    piece = piece.rotate(-4 + 3 * np.sin(age * 7) * level, expand=True, resample=Image.BICUBIC)
+    shadow = Image.new("RGBA", piece.size, (0, 0, 0, 0))
+    shadow.putalpha(piece.getchannel("A").point(lambda v: v * 0.3))
+    cx, cy = W // 2, int(H * 0.6)
+    canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(14)), (cx - piece.width // 2 + 10, cy - piece.height // 2 + 16))
+    canvas.alpha_composite(piece, (cx - piece.width // 2, cy - piece.height // 2))
+    # its name, big, popping in just after it
+    name = ctx.names[c]
+    pop = overshoot((age - 0.05) / 0.3)
+    if pop > 0.02:
+        size = 120
+        f = font(FONT_BOLD, size)
+        while size > 60 and ImageDraw.Draw(canvas).textlength(name, font=f) > W - 120:
+            size -= 6
+            f = font(FONT_BOLD, size)
+        layer = Image.new("RGBA", (W, 240), (0, 0, 0, 0))
+        ImageDraw.Draw(layer).text((W / 2, 120), name, font=f, fill=(*darker(PASTELS[k % len(PASTELS)], 0.42), 255),
+                                   anchor="mm")
+        layer = layer.resize((max(1, int(W * pop)), max(1, int(240 * pop))), Image.BILINEAR).rotate(4, resample=Image.BICUBIC)
+        canvas.alpha_composite(layer, ((W - layer.width) // 2, int(H * 0.27) - layer.height // 2))
+    draw_tray(ctx, canvas, entries, t)
+    return canvas.convert("RGB")
+
+
+def draw_tray(ctx, canvas, entries, t, alpha=1.0):
+    """Empty rings for the sounds still to come; a face in each one collected."""
+    slots, size = tray_slots(len(entries))
+    d = ImageDraw.Draw(canvas)
+    for (x, y) in slots:
+        d.ellipse((x - size / 2, y - size / 2, x + size / 2, y + size / 2), outline=(255, 255, 255, int(230 * alpha)),
+                  width=5, fill=(255, 255, 255, int(70 * alpha)))
+    for k, (c, t0, t1) in enumerate(entries):
+        fly = t1 - 0.28
+        u = (t - fly) / 0.28
+        if u < 0:
+            continue
+        x, y = slots[k]
+        if u < 1:
+            v = ease_in_out(u)
+            sx, sy = W / 2, H * 0.6
+            x, y = sx + (x - sx) * v, sy + (y - sy) * v
+            d_size = int(size * (2.2 - 1.2 * v))
+        else:
+            d_size = int(size * (1 + 0.15 * max(0.0, 1 - (u - 1) * 4)))  # lands with a pop
+        disc = face_disc(ctx, c, max(8, d_size - 12))
+        if alpha < 1:
+            disc.putalpha(disc.getchannel("A").point(lambda a: int(a * alpha)))
+        canvas.alpha_composite(disc, (int(x - disc.width / 2), int(y - disc.height / 2)))
+
+
+def lanes_scene(ctx, t):
+    """The collected sounds as lanes: every hit leaves a sticker at the
+    playhead that drifts left, so the rhythm draws itself; once the tune
+    starts, the singer's lane grows and carries its live picture."""
+    canvas = Image.new("RGBA", (W, H), (*PAPER, 255))
+    build_t, song_t = ctx.phases["build"] * BAR, ctx.phases["song"] * BAR
+    lanes = ctx.order
+    singer = ctx.singer
+    grow = ease_in_out((t - song_t) / 0.4) if t >= song_t else 0.0
+    weights = [1 + 1.6 * grow if c == singer else 1 for c in lanes]
+    top, bottom = 170, H - 120
+    heights = [(bottom - top) * w / sum(weights) for w in weights]
+    slide = ease_out((t - build_t) / 0.35)  # lanes rise in as the beat starts
+    offset = (1 - slide) * H * 0.4
+    playhead, speed = W * 0.8, 420.0
+    y = top + offset
+    cache = ctx.__dict__.setdefault("_stickers", {})
+    d = ImageDraw.Draw(canvas)
+    for k, (c, h) in enumerate(zip(lanes, heights)):
+        colour = PASTELS[k % len(PASTELS)]
+        band = (0, int(y + 4), W, int(y + h - 4))
+        d.rounded_rectangle(band, 22, fill=(*colour, 200))
+        if c == singer and grow > 0:
+            # the singer's own picture fills its lane
+            live = ctx.last_onset(t, lambda x: x.c == c and x.role == "melody")
+            if live is not None:
+                pic = cover(ctx.frame(live, t), W, max(1, int(h - 8))).convert("RGBA")
+                pic = ImageEnhance.Brightness(pic).enhance(0.8)
+                mask = Image.new("L", pic.size, 0)
+                ImageDraw.Draw(mask).rounded_rectangle((0, 0, pic.width - 1, pic.height - 1), 22,
+                                                       fill=int(170 * grow))
+                canvas.paste(pic, (0, int(y + 4)), mask)
+        live_level = 0.0
+        if c == singer and t >= song_t:
+            # the tune as a roll of notes: length and height, drifting left
+            notes = []
+            for e in ctx.events:
+                if e.c == c and e.role == "melody" and song_t <= e.t <= t and note_of(e):
+                    if notes and e.t - notes[-1][1] < 0.1:
+                        notes[-1][2] = max(notes[-1][2], e.end_t)  # the held vowel joins its note
+                    else:
+                        notes.append([e, e.t, e.end_t])
+            ink = darker(colour, 0.45)
+            for e, t_on, t_off in notes:
+                x0 = playhead - (t - t_on) * speed
+                x1 = min(playhead, playhead - (t - t_off) * speed)
+                if x1 < 150:
+                    continue
+                cy = y + h / 2 - (note_of(e) - ctx.singer_mid) / 12 * h * 0.3
+                on = t_on <= t < t_off
+                if on:
+                    live_level = max(live_level, ctx.norm_level(e, t) if e.active(t) else 0.5)
+                bar_h = 34 if on else 26
+                d.rounded_rectangle((max(150, x0), cy - bar_h / 2, max(max(150, x0) + bar_h, x1), cy + bar_h / 2),
+                                    bar_h / 2, fill=(255, 255, 255, 255) if on else (*ink, 235),
+                                    outline=(255, 255, 255, 255), width=3)
+        # hits: a sticker per sound, spawned at the playhead, drifting left
+        last_t = -9.0
+        for e in ctx.events:
+            if c == singer and t >= song_t and e.role == "melody":
+                continue
+            if e.c != c or e.t < build_t or e.t > t:
+                continue
+            if e.t - last_t < 0.1:  # a note's held vowel or body is the same hit
+                continue
+            last_t = e.t
+            x = playhead - (t - e.t) * speed
+            if x < 150:
+                continue
+            if e.active(t):
+                live_level = max(live_level, ctx.norm_level(e, t))
+            size = int(min(h * 0.78, 150 if c == singer else 96))
+            if e.idx not in cache:
+                photo = cover(ctx.frame(e, e.t), size, size).convert("RGBA")
+                framed = Image.new("RGBA", (size + 10, size + 10), (255, 255, 255, 255))
+                framed.alpha_composite(photo, (5, 5))
+                cache[e.idx] = framed
+            piece = cache[e.idx]
+            age = t - e.t
+            pop = overshoot(age / 0.18)
+            if pop < 0.999:
+                piece = piece.resize((max(1, int(piece.width * pop)), max(1, int(piece.height * pop))), Image.BILINEAR)
+            cy = y + h / 2
+            if c == singer and note_of(e):
+                cy -= (note_of(e) - ctx.singer_mid) / 12 * h * 0.28  # the tune's shape
+            canvas.alpha_composite(piece, (int(x - piece.width / 2), int(cy - piece.height / 2)))
+        # the lane's head: its face, pulsing with what it plays now
+        disc_size = int(min(h * 0.62, 92) * (1 + 0.18 * live_level))
+        disc = face_disc(ctx, c, max(16, disc_size))
+        canvas.alpha_composite(disc, (70 - disc.width // 2, int(y + h / 2 - disc.height / 2)))
+        f = font(FONT_BOLD, 22)
+        d.text((70, y + h / 2 + disc.height / 2 + 4), ctx.names[c], font=f, fill=(*darker(colour, 0.4), 255),
+               anchor="mt")
+        y += h
+    d.line((playhead, top + offset, playhead, bottom + offset), fill=(*INK, 90), width=3)
+    if t - build_t < 0.35:
+        draw_tray(ctx, canvas, collect_entries(ctx), t, alpha=1 - slide)
+    return canvas.convert("RGB")
+
+
+def collect_frame(ctx, t):
+    if t < ctx.phases["build"] * BAR:
+        canvas = collect_scene(ctx, t)
+        if t < 0.9:  # the cover rests on the first scene
+            canvas = cover_title(ctx, canvas.convert("RGBA"), faces=False).convert("RGB")
+        return canvas
+    return lanes_scene(ctx, t)
+
+
 def director_frame(ctx, t, plan, hud):
+    if getattr(ctx, "form", None) == "collect":
+        return collect_frame(ctx, t)
     intro_end = (2 if ctx.total_t > 20 else 1) * BAR
     posts = feed_posts(ctx, intro_end)
     if posts and t < intro_end:
@@ -1576,7 +1796,15 @@ def main():
     frames = total // SPF
     for seed in seeds:
         ctx.seed = seed
-        ctx.feed = bool(feed_posts(ctx, (2 if ctx.total_t > 20 else 1) * BAR))
+        ctx.form = arrangement.get("form")
+        if ctx.form == "collect":
+            ctx.order = [order.index(a) for a in arrangement["order"]]
+            ctx.phases = arrangement["phases"]
+            sung = [e for e in ctx.events if e.role == "melody"]
+            ctx.singer = sung[0].c if sung else ctx.order[0]
+            mids = [note_of(e) for e in sung if note_of(e)]
+            ctx.singer_mid = float(np.median(mids)) if mids else 60.0
+        ctx.feed = ctx.form == "collect" or bool(feed_posts(ctx, (2 if ctx.total_t > 20 else 1) * BAR))
         solo = {int(e.t / BAR + 1e-6) for e in ctx.backing}
         plan = plan_shots(total / SR, seed, arrangement.get("sections"), solo)
         forced = __import__("os").environ.get("OTO_SHOTS")  # e.g. "cutout,sticker" to audition shots
