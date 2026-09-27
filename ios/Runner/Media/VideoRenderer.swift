@@ -255,7 +255,8 @@ struct VideoRenderer {
       cancellation: cancellation
     )
     videoRenderDiagnostic("VIDEO_STAGE providers_ready count=\(providers.count)")
-    let mad = request.arrangement.performanceMode == "mad"
+    // 原声を楽しむ keeps its own music and borrows the MAD picture
+    let mad = ["mad", "natural"].contains(request.arrangement.performanceMode)
       ? MadDirector(request: request, peaks: audioReport.eventPeaks) : nil
     if FileManager.default.fileExists(atPath: outputURL.path) {
       try FileManager.default.removeItem(at: outputURL)
@@ -1865,7 +1866,8 @@ final class MadDirector {
       built.append(MadVideoEvent(index: index, assetId: event.assetId,
         clip: arrangement.sourceAssetIds.firstIndex(of: event.assetId) ?? 0,
         start: event.destinationStartSample, end: event.destinationStartSample + event.durationSamples,
-        role: event.role ?? "phrase", pitched: event.targetMidiNote != nil,
+        role: event.role ?? Self.inferredRole(event),
+        pitched: event.targetMidiNote != nil || !(event.pitchSteps ?? []).isEmpty,
         sourceStart: event.sourceStartSample, sourceSpan: event.effectiveSourceDurationSamples,
         reverse: event.isReversed, rate: event.rate, glide: event.glide, scratch: event.scratch,
         scratchPeriod: event.scratchPeriod, peaks: eventPeaks, peakMax: eventPeaks.max() ?? 0,
@@ -1894,6 +1896,16 @@ final class MadDirector {
   static func runUntil(_ run: [MadVideoEvent]) -> Int {
     guard let last = run.last else { return 0 }
     return min(last.end, last.start + beat) + 14_400
+  }
+
+  /// Arrangements made without MAD roles (原声を楽しむ): a tuned sound is a
+  /// melody, a rhythmic cut a chop, anything else a spoken phrase, so the
+  /// picture treats them as it treats a MAD.
+  static func inferredRole(_ event: SoundEventPayload) -> String {
+    if event.targetMidiNote != nil || !(event.pitchSteps ?? []).isEmpty || event.treatment == "tuned" {
+      return "melody"
+    }
+    return event.treatment == "rhythm" ? "chop" : "phrase"
   }
 
   static func repeatRuns(_ events: [MadVideoEvent]) -> [[MadVideoEvent]] {

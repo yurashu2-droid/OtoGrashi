@@ -189,7 +189,9 @@ void main() {
     final melody = a.events.where((e) => e.role == 'melody').toList();
     expect(melody, isNotEmpty);
     expect(melody.every((e) => e.targetMidiNote != null && e.stretch != null), isTrue);
-    final starts = clip.syllables.map((s) => s.startSample).toList();
+    expect(melody.any((e) => e.sourceStartSample == 31200), isFalse);
+    // the third syllable has no voice in it (breath): it is skipped
+    final starts = [9600, 19200, 72000];
     final said = melody.where((e) => starts.contains(e.sourceStartSample)).toList();
     // successive notes walk through the syllables in order
     for (var i = 1; i < said.length && i < 4; i++) {
