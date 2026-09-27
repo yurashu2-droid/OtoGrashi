@@ -39,6 +39,10 @@ struct SoundEventPayload: Codable, Equatable {
   var scratch: Double? = nil
   var scratchPeriod: Int? = nil
   var gate: Int? = nil
+  /// Tuned sound read faster (>1) or slower (<1) at the same pitch.
+  var stretch: Double? = nil
+  /// The syllable's own pitch, so it keeps a little of its contour.
+  var refMidi: Double? = nil
 
   static let roles: Set<String> = [
     "melody", "bass", "kick", "snare", "hat", "chop", "phrase", "fx", "echo", "stab", "backing",
@@ -54,7 +58,7 @@ struct SoundEventPayload: Codable, Equatable {
     let automation = (pitchSteps ?? []).map {
       "\($0.offsetSamples):\($0.durationSamples):\($0.midiNote)"
     }.joined(separator: ",")
-    return "\(automation)|\(assetId)|\(sourceStartSample)|\(effectiveSourceDurationSamples)|\(durationSamples)|\(targetMidiNote.map(String.init(describing:)) ?? "dry")|\(isReversed)|\(effectivePitchSemitones)|\(role ?? "")|\(rate ?? 0)|\(glide ?? 0)|\(scratch ?? 0)|\(scratchPeriod ?? 0)|\(gate ?? 0)"
+    return "\(automation)|\(assetId)|\(sourceStartSample)|\(effectiveSourceDurationSamples)|\(durationSamples)|\(targetMidiNote.map(String.init(describing:)) ?? "dry")|\(isReversed)|\(effectivePitchSemitones)|\(role ?? "")|\(rate ?? 0)|\(glide ?? 0)|\(scratch ?? 0)|\(scratchPeriod ?? 0)|\(gate ?? 0)|\(stretch ?? 0)|\(refMidi ?? 0)"
   }
 
   /// Source read offset at one output sample, in closed form (the picture
@@ -297,6 +301,9 @@ struct ArrangementPayload: Decodable, Equatable {
         event.scratch == nil || (event.scratch!.isFinite && (0...0.5).contains(event.scratch!)),
         event.scratchPeriod == nil || (1_200...90_000).contains(event.scratchPeriod!),
         event.gate == nil || (1...8).contains(event.gate!),
+        event.stretch == nil || (event.stretch!.isFinite && (0.1...2).contains(event.stretch!) &&
+          event.targetMidiNote != nil && event.sourceDurationSamples != nil),
+        event.refMidi == nil || (event.refMidi!.isFinite && (24...110).contains(event.refMidi!)),
         ["original", "phrase", "rhythm", "tuned"].contains(event.treatment ?? "original"),
         event.destinationStartSample >= 0,
         destinationEnd <= totalSamples,
@@ -422,6 +429,18 @@ struct AudioRenderer {
         var processed: [Float]
         if let cached = musicalFragments[key] {
           processed = cached
+        } else if let stretch = event.stretch, let note = event.targetMidiNote {
+          let decoded = try reader.readTimeline(url: url,
+            startSample: event.sourceStartSample, durationSamples: sourceDuration,
+            cancellation: cancellation)
+          do {
+            processed = try EverydayAudioDSP.renderStretched(EverydayAudioDSP.matchLevel(decoded.samples),
+              count: event.durationSamples, targetMidiNote: note, stretch: stretch, refMidi: event.refMidi)
+          } catch { throw AudioRenderError.pitchProcessingFailed }
+          if cachedPitchSamples <= Self.maximumCachedPitchSamples - processed.count {
+            musicalFragments[key] = processed
+            cachedPitchSamples += processed.count
+          }
         } else if event.hasMotion {
           let decoded = try reader.readTimeline(url: url,
             startSample: event.sourceStartSample, durationSamples: sourceDuration,

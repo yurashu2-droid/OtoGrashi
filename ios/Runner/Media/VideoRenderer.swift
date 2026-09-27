@@ -1750,6 +1750,8 @@ struct MadVideoEvent {
   let scratchPeriod: Int?
   let peaks: [Float]
   let peakMax: Float
+  /// A stretched syllable: the picture reads its clip at the same pace.
+  var stretch: Double? = nil
 
   func active(_ sample: Int) -> Bool { sample >= start && sample < end }
 
@@ -1759,7 +1761,7 @@ struct MadVideoEvent {
     MadVideoEvent(index: index, assetId: assetId, clip: clip, start: start, end: end, role: role,
       pitched: pitched, sourceStart: sourceStart + samples, sourceSpan: sourceSpan, reverse: reverse,
       rate: rate, glide: glide, scratch: scratch, scratchPeriod: scratchPeriod, peaks: peaks,
-      peakMax: peakMax)
+      peakMax: peakMax, stretch: stretch)
   }
 
   /// Loudness of this event alone at `sample`, 0...1 of its own peak.
@@ -1779,7 +1781,8 @@ struct MadVideoEvent {
         glide: glide, scratch: scratch, scratchPeriod: scratchPeriod)
       if reverse { position = Double(sourceSpan - 1) - position }
     } else {
-      position = Double(EverydayAudioDSP.sourceOffset(outputOffset: offset,
+      let read = stretch.map { Int(Double(offset) * $0) } ?? offset
+      position = Double(EverydayAudioDSP.sourceOffset(outputOffset: read,
         sourceCount: max(1, sourceSpan), reverse: reverse))
     }
     return sourceStart + min(max(0, Int(position)), max(0, sourceSpan - 1))
@@ -1865,7 +1868,8 @@ final class MadDirector {
         role: event.role ?? "phrase", pitched: event.targetMidiNote != nil,
         sourceStart: event.sourceStartSample, sourceSpan: event.effectiveSourceDurationSamples,
         reverse: event.isReversed, rate: event.rate, glide: event.glide, scratch: event.scratch,
-        scratchPeriod: event.scratchPeriod, peaks: eventPeaks, peakMax: eventPeaks.max() ?? 0))
+        scratchPeriod: event.scratchPeriod, peaks: eventPeaks, peakMax: eventPeaks.max() ?? 0,
+        stretch: event.stretch))
     }
     events = built.filter { $0.role != "backing" }
     backing = built.filter { $0.role == "backing" }

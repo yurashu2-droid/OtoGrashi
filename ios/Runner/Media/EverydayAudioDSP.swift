@@ -217,6 +217,77 @@ enum EverydayAudioDSP {
     return gated(output, steps: steps)
   }
 
+  /// Pitch-synchronous overlap-add that also reads the source at `stretch`
+  /// (below 1 holds a vowel longer, above 1 says it faster) while every grain
+  /// lands on the note. With `refMidi` the syllable keeps a fifth of its own
+  /// rise and fall around the note, so speech still sounds like speech.
+  /// Consonants and breath are read at the same pace, untouched.
+  static func renderStretched(_ source: [Float], count: Int, targetMidiNote: Double, stretch: Double,
+                              refMidi: Double?) throws -> [Float] {
+    guard count > 0, count <= 1_440_000, !source.isEmpty, source.count <= 720_000,
+      source.allSatisfy(\.isFinite), stretch.isFinite, (0.05...2).contains(stretch),
+      targetMidiNote.isFinite, (24...100).contains(targetMidiNote)
+    else { throw Failure.invalidInput }
+    var dry = [Float](repeating: 0, count: count)
+    for i in 0..<count {
+      dry[i] = read(source, at: min(Double(source.count - 1), Double(i) * stretch))
+    }
+    let frames = track(source)
+    let marks = pitchMarks(source, frames: frames)
+    guard !marks.isEmpty, frames.contains(where: { $0.pitch != nil }) else { return dry }
+    var wet = [Float](repeating: 0, count: count)
+    var weights = [Float](repeating: 0, count: count)
+    var nearest = 0
+    var position = 0.0
+    while position < Double(count) {
+      let centre = position * stretch
+      while nearest + 1 < marks.count &&
+        abs(Double(marks[nearest + 1]) - centre) < abs(Double(marks[nearest]) - centre) {
+        nearest += 1
+      }
+      let mark = marks[nearest]
+      var period = Double(sampleRate) / 220
+      if let pitch = frames[min(frames.count - 1, mark / trackingHop)].pitch,
+        abs(Double(mark) - centre) < Double(sampleRate) / pitch.hertz * 1.6 {
+        var note = targetMidiNote
+        if let refMidi {
+          let moved = pitch.midiNote + max(-12, min(12, targetMidiNote - refMidi))
+          note = moved + 0.8 * (targetMidiNote - moved)
+        }
+        let targetPeriod = Double(sampleRate) / (440 * pow(2, (note - 69) / 12))
+        period = targetPeriod
+        let half = min(1200, max(24, Int(min(Double(sampleRate) / pitch.hertz, targetPeriod).rounded())))
+        let grainLo = max(0, mark - half), grainHi = min(source.count, mark + half + 1)
+        let mean = source[grainLo..<grainHi].reduce(0, +) / Float(max(1, grainHi - grainLo))
+        let lo = max(0, Int(ceil(position - Double(half))))
+        let hi = min(count - 1, Int(floor(position + Double(half))))
+        if lo <= hi {
+          for i in lo...hi {
+            let offset = Double(i) - position
+            let sourcePosition = Double(mark) + offset
+            guard sourcePosition >= 0, sourcePosition < Double(source.count - 1) else { continue }
+            let weight = Float(0.5 + 0.5 * cos(Double.pi * offset / Double(half)))
+            wet[i] += (read(source, at: sourcePosition) - mean) * weight
+            weights[i] += weight
+          }
+        }
+      }
+      position += period
+    }
+    var output = dry
+    var blend: Float = 0
+    for i in output.indices {
+      let at = min(source.count - 1, Int(Double(i) * stretch))
+      let voiced = frames[min(frames.count - 1, at / trackingHop)].pitch != nil
+      let desired: Float = voiced && weights[i] > 0.03 ? 1 : 0
+      blend += max(-1 / 240.0, min(1 / 240.0, desired - blend))
+      if weights[i] > 0.03 {
+        output[i] = dry[i] * (1 - blend) + (wet[i] / weights[i]) * blend
+      }
+    }
+    return output
+  }
+
   private static let trackingHop = 960 // 20 ms; beat targets change independently.
   private struct Frame {
     let pitch: Pitch?

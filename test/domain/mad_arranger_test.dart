@@ -3,7 +3,7 @@ import 'package:otogurashi/domain/arrangement.dart';
 import 'package:otogurashi/domain/arrangement_engine.dart';
 import 'package:otogurashi/domain/melody_template.dart';
 
-AnalyzedClip _clip(int i, {bool voiced = true, double? register}) => AnalyzedClip(
+AnalyzedClip _clip(int i, {bool voiced = true, double? register, double? purity}) => AnalyzedClip(
   assetId: 'clip-$i',
   sourceStartSample: 4800,
   durationSamples: 144000,
@@ -30,7 +30,7 @@ AnalyzedClip _clip(int i, {bool voiced = true, double? register}) => AnalyzedCli
         ]
       : const [],
   pitchSpread: voiced ? 2.0 + i : 30,
-  purity: i == 1 ? .9 : .1,
+  purity: purity ?? (i == 1 ? .9 : .1),
 );
 
 void main() {
@@ -75,9 +75,9 @@ void main() {
     }
   });
 
-  test('a melody note is a raw syllable attack followed by a tuned body', () {
+  test('a tonal clip plays each note as a raw attack and a tuned body', () {
     final a = arrange(
-      clips: [_clip(0), _clip(2)],
+      clips: [_clip(0, purity: .85), _clip(2, purity: .85)],
       style: ArrangementStyle.lively,
       seed: 3,
       melodyTemplate: MelodyTemplate.midiScore,
@@ -174,5 +174,32 @@ void main() {
         }
       }
     }
+  });
+
+  test('speech sings its syllables in order and holds vowels on long notes', () {
+    final clip = _clip(0);
+    final a = arrange(
+      clips: [clip],
+      style: ArrangementStyle.lively,
+      seed: 4,
+      melodyTemplate: MelodyTemplate.midiScore,
+      performanceMode: PerformanceMode.mad,
+      durationSeconds: 30,
+    );
+    final melody = a.events.where((e) => e.role == 'melody').toList();
+    expect(melody, isNotEmpty);
+    expect(melody.every((e) => e.targetMidiNote != null && e.stretch != null), isTrue);
+    final starts = clip.syllables.map((s) => s.startSample).toList();
+    final said = melody.where((e) => starts.contains(e.sourceStartSample)).toList();
+    // successive notes walk through the syllables in order
+    for (var i = 1; i < said.length && i < 4; i++) {
+      expect(
+        starts.indexOf(said[i].sourceStartSample),
+        (starts.indexOf(said[i - 1].sourceStartSample) + 1) % starts.length,
+      );
+    }
+    expect(said.every((e) => e.stretch! >= 1 && e.stretch! <= 1.45), isTrue);
+    expect(melody.any((e) => e.stretch! < 1), isTrue, reason: 'a long note holds its vowel');
+    expect(Arrangement.fromJson(a.toJson()).toJson(), a.toJson());
   });
 }

@@ -152,6 +152,9 @@ class _Voice {
   /// grains, even when it measures as nearly pure (a distant rooster, a call).
   bool get pure => (clip.purity ?? 0) > .6 && medianMidi >= 88;
 
+  /// Speech: several syllables and not a tone. It sings its words.
+  bool get speech => syllables.length >= 4 && (clip.purity ?? 0) < .8;
+
   /// The clearest sustained stretch: the body every sung note is read from.
   _Span get body => voicedRuns.isEmpty
       ? longest
@@ -348,13 +351,17 @@ class _MadBuilder {
     int? gate,
     int? fadeIn,
     int? fadeOut,
+    double? stretch,
+    double? refMidi,
   }) {
     if (start < 0 || start >= total) return 0;
     final clipLength = voice.end - voice.start;
     var length = math.min(duration, total - start);
     if (length < 48 || clipLength < 48) return 0;
     int read;
-    if (glide != null) {
+    if (stretch != null) {
+      read = (length * stretch).ceil() + 2;
+    } else if (glide != null) {
       read = _glideSpan(length, rate ?? 1, glide);
     } else if (rate != null) {
       read = (length * rate).ceil() + 2;
@@ -400,6 +407,8 @@ class _MadBuilder {
         scratch: scratch,
         scratchPeriod: scratchPeriod,
         gate: gate,
+        stretch: stretch == null ? null : _round(stretch.clamp(.1, 2.0).toDouble()),
+        refMidi: refMidi == null ? null : _round(refMidi.clamp(24.0, 110.0).toDouble()),
       ),
     );
     return read;
@@ -445,7 +454,35 @@ class _MadBuilder {
   /// One note = the raw attack of the next syllable + a sung body read
   /// forward from the clip's clearest stretch, stopping at 85% of the note.
   /// Pure tones (whistles) are retuned by speed instead of by grains.
+  /// Speech sings its words: one syllable per note, in order, consonant and
+  /// vowel intact, so what was said stays audible. A long note holds the
+  /// syllable's vowel (a 長音); a short one says it up to 1.4x faster. The
+  /// syllable keeps a little of its own rise and fall around the note.
+  (int, int?) wordedLine(_Voice v, (int, int?) cursor, List<(double, double, double)> notes, int barOffset, double gain) {
+    var (k, pos) = cursor;
+    for (final (b, length, midi) in notes) {
+      final start = ((b + barOffset * 4) * _beat).round();
+      final duration = (length * _beat * .95).round();
+      final syllable = v.syllables[k % v.syllables.length];
+      k++;
+      final said = math.min(syllable.length, (duration / .7).round());
+      final head = math.min(duration, said);
+      add(v, start, head, syllable.start, role: 'melody', gain: gain, note: midi,
+          stretch: said / head, refMidi: syllable.midi);
+      final hold = duration - head;
+      if (hold > (.03 * _sampleRate).round()) {
+        // the vowel: the voiced tail of the syllable, stretched to fill the note
+        final tail0 = syllable.start + (syllable.length * .55).round();
+        final tail = math.max(480, syllable.end - tail0);
+        add(v, start + head, hold, tail0, role: 'melody', gain: gain, note: midi,
+            stretch: math.max(.12, tail / hold), refMidi: syllable.midi);
+      }
+    }
+    return (k % v.syllables.length, pos);
+  }
+
   (int, int?) syllableLine(_Voice v, (int, int?) cursor, List<(double, double, double)> notes, int barOffset, double gain) {
+    if (v.speech) return wordedLine(v, cursor, notes, barOffset, gain);
     var (k, pos) = cursor;
     final body = v.body;
     var at = pos ?? body.start;

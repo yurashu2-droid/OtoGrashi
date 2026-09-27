@@ -97,6 +97,8 @@ final class SoundEvent {
     this.scratch,
     this.scratchPeriod,
     this.gate,
+    this.stretch,
+    this.refMidi,
   });
 
   /// What the event plays in a MAD arrangement; the renderer uses it to pick
@@ -162,6 +164,15 @@ final class SoundEvent {
   /// Chops a held sound into this many pieces per beat (a trance gate).
   final int? gate;
 
+  /// Reads a tuned sound this much faster (above 1) or slower (below 1)
+  /// without changing its pitch: a sung syllable said quicker, or its vowel
+  /// held through a long note. 0.1 to 2.
+  final double? stretch;
+
+  /// The syllable's own pitch: with it the sound keeps a little of its rise
+  /// and fall around the note instead of going flat.
+  final double? refMidi;
+
   /// Motion effects read the source at a changing position; the picture
   /// follows the same positions, and the source span must be declared.
   bool get hasMotion => rate != null || glide != null || scratch != null;
@@ -190,6 +201,8 @@ final class SoundEvent {
     if (scratch != null) 'scratch': scratch,
     if (scratchPeriod != null) 'scratchPeriod': scratchPeriod,
     if (gate != null) 'gate': gate,
+    if (stretch != null) 'stretch': stretch,
+    if (refMidi != null) 'refMidi': refMidi,
   };
 
   factory SoundEvent.fromJson(Map<String, Object?> json) => SoundEvent(
@@ -218,6 +231,8 @@ final class SoundEvent {
     scratch: (json['scratch'] as num?)?.toDouble(),
     scratchPeriod: json['scratchPeriod'] as int?,
     gate: json['gate'] as int?,
+    stretch: (json['stretch'] as num?)?.toDouble(),
+    refMidi: (json['refMidi'] as num?)?.toDouble(),
   );
 }
 
@@ -503,6 +518,16 @@ final class Arrangement {
                   (event.scratchPeriod! < 1200 ||
                       event.scratchPeriod! > 90000)) ||
               (event.gate != null && (event.gate! < 1 || event.gate! > 8)) ||
+              (event.stretch != null &&
+                  (!event.stretch!.isFinite ||
+                      event.stretch! < .1 ||
+                      event.stretch! > 2 ||
+                      event.targetMidiNote == null ||
+                      event.sourceDurationSamples == null)) ||
+              (event.refMidi != null &&
+                  (!event.refMidi!.isFinite ||
+                      event.refMidi! < 24 ||
+                      event.refMidi! > 110)) ||
               event.sourceStartSample >
                   9223372036854775807 - event.effectiveSourceDurationSamples ||
               event.destinationStartSample < 0 ||
