@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'arrangement.dart';
 import 'melody_template.dart';
 import 'midi_score_data.dart';
+import 'worded_singing.dart';
 
 /// Turn recordings into instruments AND keep the people behind those sounds.
 /// SuggestedRole/pitch are hints, never gates that discard voices or noises.
@@ -11,6 +12,10 @@ Arrangement arrangeEveryday({
   required ArrangementStyle style,
   required int seed,
   required MelodyTemplate melodyTemplate,
+
+  /// 原声を楽しむ: a speaking melody clip sings its words one syllable per
+  /// note (see [WordedSinger]) instead of one flowing, pitch-bent phrase.
+  bool wordedSpeech = false,
 }) {
   if (clips.isEmpty) {
     throw const ArrangementRejected(
@@ -128,6 +133,19 @@ Arrangement arrangeEveryday({
     serial++;
   }
 
+  final singers = <String, WordedSinger>{};
+  WordedSinger? wordedFor(AnalyzedClip clip) => wordedSpeech && WordedSinger.isSpeech(clip)
+      ? singers.putIfAbsent(clip.assetId, () => WordedSinger(clip))
+      : null;
+  void sing(WordedSinger singer, int start, int duration, double note, double gain) {
+    if (start >= 720000) return;
+    for (final event in singer.sing(start, math.min(duration, 720000 - start), note, gain: gain)) {
+      events.add(event);
+      mirror[event] = serial.isOdd;
+      serial++;
+    }
+  }
+
   final midi = melodyTemplate == MelodyTemplate.midiScore;
   // Acoustic phrase spotlights, not speech recognition. Give EVERY recording
   // an identifiable, natural-speed moment even when it has no measurable F0.
@@ -170,7 +188,14 @@ Arrangement arrangeEveryday({
         minimum: pitches.first,
         maximum: pitches.last,
       );
-      if (lane == 0) {
+      final worded = lane == 0 ? wordedFor(melody) : null;
+      if (worded != null) {
+        for (final n in notes) {
+          final start = (n[0] * 720000 / 15360).round();
+          final end = ((n[0] + n[1]) * 720000 / 15360).round();
+          sing(worded, start, ((end - start) * .95).round(), (n[2] + octave).toDouble(), .55);
+        }
+      } else if (lane == 0) {
         final group = <List<int>>[];
         void flush() {
           if (group.isEmpty) return;
@@ -320,7 +345,13 @@ Arrangement arrangeEveryday({
               ),
             );
           }
-          if (steps.isNotEmpty) {
+          final worded = wordedFor(lead);
+          if (worded != null) {
+            for (final step in steps) {
+              sing(worded, start + part * 45000 + step.offsetSamples,
+                  (step.durationSamples * .95).round(), step.midiNote, .51);
+            }
+          } else if (steps.isNotEmpty) {
             add(
               lead,
               start + part * 45000,
@@ -399,6 +430,7 @@ Arrangement arrangeEveryday({
         pitchSteps: e.pitchSteps,
         reverse: e.reverse,
         treatment: e.treatment,
+        stretch: e.stretch,
       ),
     );
     video.add(
@@ -409,7 +441,8 @@ Arrangement arrangeEveryday({
         sourceDurationSamples: e.sourceDurationSamples,
         sourceVideoStartTime: RationalTime(e.sourceStartSample, 48000),
         crop: NormalizedCrop.fullFrame,
-        loopMode: e.durationSamples > e.effectiveSourceDurationSamples
+        // a held vowel stays on its own frames instead of looping them
+        loopMode: e.durationSamples > e.effectiveSourceDurationSamples && e.stretch == null
             ? VideoLoopMode.loop
             : VideoLoopMode.once,
         reverse: e.reverse,

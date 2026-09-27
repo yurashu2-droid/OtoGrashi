@@ -255,8 +255,7 @@ struct VideoRenderer {
       cancellation: cancellation
     )
     videoRenderDiagnostic("VIDEO_STAGE providers_ready count=\(providers.count)")
-    // 原声を楽しむ keeps its own music and borrows the MAD picture
-    let mad = ["mad", "natural"].contains(request.arrangement.performanceMode)
+    let mad = request.arrangement.performanceMode == "mad"
       ? MadDirector(request: request, peaks: audioReport.eventPeaks) : nil
     if FileManager.default.fileExists(atPath: outputURL.path) {
       try FileManager.default.removeItem(at: outputURL)

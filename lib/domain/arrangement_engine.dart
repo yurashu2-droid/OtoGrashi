@@ -40,6 +40,7 @@ Arrangement arrange({
       style: style,
       seed: seed,
       melodyTemplate: melodyTemplate,
+      wordedSpeech: true,
     );
   }
   if (clips.isEmpty) {

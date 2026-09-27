@@ -25,6 +25,7 @@ Arrangement arrangePerformance({
     style: style,
     seed: seed,
     melodyTemplate: melodyTemplate,
+    wordedSpeech: mode == PerformanceMode.natural,
   );
   final roles = base.songRoles!;
   final events = <SoundEvent>[];
@@ -387,6 +388,7 @@ Arrangement arrangePerformance({
         'targetMidiNote': null,
         'pitchSteps': <Object?>[],
         'pitchSemitones': 0.0,
+        'stretch': null,
       });
     }
     if (animated &&
