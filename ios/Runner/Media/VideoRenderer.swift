@@ -1804,27 +1804,20 @@ enum MadShot: String {
 /// clips only, and adds the moments (a strip of stills for repeats, opening
 /// and ending cards, the picture side of master effects).
 final class MadDirector {
-  /// PIL multiplies display-encoded RGB. The writer outputs BT.709, while Core
-  /// Image works in linear light, so convert around PIL's multiplication.
+  /// PIL multiplies output-encoded RGB. Use Core Image's color matching to the
+  /// writer's actual BT.709 profile around that operation; its ICC transfer
+  /// curve is not the simple textbook BT.709 power law.
+  private static let videoColorSpace = CGColorSpace(name: CGColorSpace.itur_709)!
   private static let encodedBrightnessKernel: CIColorKernel = {
     guard let kernel = CIColorKernel(source: """
-    float encodeChannel(float x) {
-      return x < 0.018 ? 4.5 * x : 1.099 * pow(x, 0.45) - 0.099;
-    }
-    float decodeChannel(float x) {
-      return x < 0.081 ? x / 4.5 : pow((x + 0.099) / 1.099, 1.0 / 0.45);
-    }
     kernel vec4 encodedBrightness(__sample pixel, float factor, float desaturate, float whiteMix) {
       vec4 straight = unpremultiply(pixel);
-      vec3 encoded = vec3(encodeChannel(max(straight.r, 0.0)),
-                          encodeChannel(max(straight.g, 0.0)),
-                          encodeChannel(max(straight.b, 0.0)));
+      vec3 encoded = clamp(straight.rgb, 0.0, 1.0);
       float grey = dot(encoded, vec3(0.299, 0.587, 0.114));
       encoded = mix(encoded, vec3(grey), desaturate);
       encoded = clamp(encoded * factor, 0.0, 1.0);
       encoded = mix(encoded, vec3(1.0), whiteMix);
-      return premultiply(vec4(decodeChannel(encoded.r), decodeChannel(encoded.g),
-                              decodeChannel(encoded.b), straight.a));
+      return premultiply(vec4(encoded, straight.a));
     }
     """) else { fatalError("MAD encoded brightness kernel failed to compile") }
     return kernel
@@ -2147,9 +2140,11 @@ final class MadDirector {
   static func encodedBrightness(_ image: CIImage, factor: CGFloat,
                                 desaturate: CGFloat = 0, whiteMix: CGFloat = 0) -> CIImage {
     guard factor != 1 || desaturate != 0 || whiteMix != 0 else { return image }
-    guard let output = encodedBrightnessKernel.apply(extent: image.extent,
-      arguments: [image, factor, desaturate, whiteMix]) else {
-      fatalError("MAD encoded brightness kernel failed to apply")
+    guard let encoded = image.matchedFromWorkingSpace(to: videoColorSpace),
+      let adjusted = encodedBrightnessKernel.apply(extent: encoded.extent,
+        arguments: [encoded, factor, desaturate, whiteMix]),
+      let output = adjusted.matchedToWorkingSpace(from: videoColorSpace) else {
+      fatalError("MAD encoded brightness color matching failed")
     }
     return output
   }

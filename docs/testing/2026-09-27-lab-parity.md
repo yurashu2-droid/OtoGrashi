@@ -25,3 +25,9 @@ Run focused Dart arrangement tests after the grouped change. Native Swift and Co
 - Added native checks for steady voiced level, consonant continuity and brightness/alpha behavior. Native execution pending the grouped macOS CI run.
 
 Remaining differences: source analysis and seed generators are not shared across Python/Dart; the vowel core uses app voiced-run metadata rather than lab per-frame stability scoring. Decoder/range differences can affect exact color matching. These changes do not claim byte-identical reproduction of seed3.mp4.
+
+## Grouped native check and focused follow-up
+
+The first grouped check (36319689187) passed Dart analysis/tests and iOS compilation. Native tests exposed two issues: the moving-voice pitch regression and exact encoded brightness values. The new sustained-level/consonant tests, existing high-note contour test, and production video renders passed.
+
+Follow-up fixes use Apple's actual working/output color-space matching rather than a hand-written transfer curve, and restore voiced-grain mean subtraction needed by the retained narrow-grain safeguard. The follow-up CI selects six affected native tests with `[media-parity]`; it does not repeat passed Dart tests or unrelated video renders.

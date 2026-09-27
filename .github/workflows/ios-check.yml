@@ -33,6 +33,8 @@ jobs:
       # sources. Ordinary branch pushes render a representative subset; add
       # [full-ci] to a commit message to run everything on a branch.
       OTO_FULL_CHECKS: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '[full-ci]')) && '1' || '0' }}
+      # Focused follow-up after the full grouped check has isolated media failures.
+      OTO_MEDIA_PARITY: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[media-parity]') && '1' || '0' }}
 
     steps:
       - name: Check out source
@@ -83,12 +85,14 @@ jobs:
           flutter pub get 2>&1 | tee ci-logs/pub-get.txt
 
       - name: Analyze
+        if: env.OTO_MEDIA_PARITY != '1'
         shell: bash
         run: |
           set -o pipefail
           flutter analyze --fatal-infos 2>&1 | tee ci-logs/analyze.txt
 
       - name: Test
+        if: env.OTO_MEDIA_PARITY != '1'
         shell: bash
         run: |
           set -o pipefail
@@ -118,6 +122,17 @@ jobs:
           xcrun simctl boot "$SIMULATOR_UDID" 2>/dev/null || true
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b 2>&1 | tee -a ci-logs/simulator.txt
           echo "full_checks=$OTO_FULL_CHECKS" | tee -a ci-logs/simulator.txt
+          TEST_SELECTION=()
+          if [[ "$OTO_MEDIA_PARITY" == 1 ]]; then
+            TEST_SELECTION=(
+              -only-testing:RunnerTests/AudioRendererTests/testEverydayNoiseRetainsIdentityAndMovingVoiceIsRetuned
+              -only-testing:RunnerTests/AudioRendererTests/testStretchedVoicedToneHasSteadyLevelAcrossAnalysisFrames
+              -only-testing:RunnerTests/AudioRendererTests/testStretchedSpeechKeepsUnvoicedSoundBetweenVoicedPassages
+              -only-testing:RunnerTests/AudioRendererTests/testStretchedSpeechPreservesDistinctHighMelodyNotes
+              -only-testing:RunnerTests/AudioRendererTests/testShortUntrackedVoiceKeepsPitchWhenStretched
+              -only-testing:RunnerTests/VideoRendererTests/testMadBrightnessMatchesEncodedRGBAndPreservesAlpha
+            )
+          fi
           TEST_RUNNER_OTO_FULL_CHECKS="$OTO_FULL_CHECKS" xcodebuild test \
             -workspace ios/Runner.xcworkspace \
             -scheme Runner \
@@ -126,6 +141,7 @@ jobs:
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             -parallel-testing-enabled NO \
             -resultBundlePath ci-artifacts/RunnerTests.xcresult \
+            "${TEST_SELECTION[@]}" \
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee ci-logs/xctest.txt
 
@@ -145,14 +161,14 @@ jobs:
           fi
 
       - name: Verify rendered audio evidence
-        if: always()
+        if: always() && env.OTO_MEDIA_PARITY != '1'
         shell: bash
         run: |
           test -f ci-artifacts/audio-render-fixture.wav
           test -f ci-artifacts/audio-render-report.json
 
       - name: Verify rendered video evidence
-        if: always()
+        if: always() && env.OTO_MEDIA_PARITY != '1'
         shell: bash
         run: |
           test -f ci-artifacts/video-render-preview.mp4

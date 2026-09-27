@@ -186,7 +186,7 @@ enum EverydayAudioDSP {
         mark = crest(dry, prediction: mark, sourcePosition: position, period: sourcePeriod)
         let half = min(1200, max(24, Int(min(sourcePeriod, targetPeriod).rounded())))
         layGrain(dry, centre: mark!, at: position, half: half,
-                 output: &output, norm: &norm)
+                 removeDC: true, output: &output, norm: &norm)
         position += targetPeriod
       } else {
         mark = nil
@@ -239,7 +239,7 @@ enum EverydayAudioDSP {
         // that support cancels a pure tone; retain the existing shorter grain.
         let half = min(1200, max(24, Int(min(sourcePeriod, targetPeriod).rounded())))
         layGrain(source, centre: pulse, at: position, half: half,
-                 output: &output, norm: &norm)
+                 removeDC: true, output: &output, norm: &norm)
         position += targetPeriod
       } else {
         mark = nil
@@ -271,8 +271,15 @@ enum EverydayAudioDSP {
   }
 
   private static func layGrain(_ source: [Float], centre: Double, at: Double, half: Int,
-                               output: inout [Float], norm: inout [Float]) {
+                               removeDC: Bool = false, output: inout [Float], norm: inout [Float]) {
     guard half >= 8 else { return }
+    // A short crest-centred grain can contain mostly the positive half of a
+    // high upward shift. Remove its local DC so it cannot become a pulsing
+    // offset; leave unvoiced grains untouched for consonant identity.
+    let grainLo = max(0, Int(ceil(centre - Double(half))))
+    let grainHi = min(source.count, Int(floor(centre + Double(half))) + 1)
+    let mean: Float = removeDC && grainHi > grainLo
+      ? source[grainLo..<grainHi].reduce(0, +) / Float(grainHi - grainLo) : 0
     let base = Int(floor(at))
     let fraction = at - Double(base)
     for k in -half..<half {
@@ -281,7 +288,7 @@ enum EverydayAudioDSP {
       let sourcePosition = centre + Double(k) - fraction
       guard sourcePosition >= 0, sourcePosition <= Double(source.count - 1) else { continue }
       let weight = Float(0.5 + 0.5 * cos(Double.pi * Double(k) / Double(half)))
-      output[i] += read(source, at: sourcePosition) * weight
+      output[i] += (read(source, at: sourcePosition) - mean) * weight
       norm[i] += weight
     }
   }
