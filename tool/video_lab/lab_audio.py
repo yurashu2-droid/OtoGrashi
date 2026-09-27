@@ -150,6 +150,38 @@ class Voice:
                 out.append((s0 * HOP, s1 * HOP, float(np.median(v)) if len(v) >= 3 else None))
         return out
 
+    def vowel_core(self, a0, a1, length=0.08):
+        if __import__("os").environ.get("OTO_CORE") == "runs":
+            # what the app can compute from its analysis: the middle of the
+            # voiced run that overlaps the syllable most
+            n = int(length * SR)
+            best, overlap = None, 0
+            for r0, r1 in self.voiced_runs():
+                o0, o1 = max(a0, r0), min(a1, r1)
+                if o1 - o0 > overlap:
+                    best, overlap = (o0, o1), o1 - o0
+            if best is None:
+                return a0 + (a1 - a0) // 2, a1
+            mid = (best[0] + best[1]) // 2
+            return max(best[0], mid - n // 2), min(best[1], mid + n // 2)
+        return self._steadiest_core(a0, a1, length)
+
+    def _steadiest_core(self, a0, a1, length=0.08):
+        """The steadiest voiced stretch inside [a0, a1): where the syllable's
+        vowel sits still, to hold through a long note."""
+        f0, f1 = a0 // HOP, max(a0 // HOP + 1, a1 // HOP)
+        n = max(1, int(length * SR / HOP))
+        best, best_cost = (a0 + (a1 - a0) // 2, a1), float("inf")
+        for f in range(f0, max(f0 + 1, f1 - n + 1)):
+            window = slice(f, min(f1, f + n))
+            voiced = self.voiced[window]
+            if len(voiced) == 0 or voiced.mean() < 0.99:
+                continue
+            cost = float(np.std(self.midi[window]))
+            if cost < best_cost:
+                best, best_cost = (f * HOP, min(a1, (f + n) * HOP)), cost
+        return best
+
     def purity(self):
         """Share of a steady window's energy that sits on the fundamental.
         Near 1 for whistles and pure sung tones. Pitch-synchronous grains

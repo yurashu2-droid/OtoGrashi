@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from arrange_score import SCORES, bundled_score, load
-from lab_audio import SR, Voice
+from lab_audio import HOP as HOP_A, SR, Voice
 
 BEAT = 22_500
 BAR = BEAT * 4
@@ -123,12 +123,18 @@ class Arrangement:
         return ri, pos
 
     def worded_line(self, clip, cursor, notes, bar_offset, gain, role):
-        """Speech sings its words: one syllable per note, in order, consonant
-        and vowel intact, so what was said stays audible. A long note holds
-        the syllable's vowel (a 長音); a short one says it a little faster.
-        The syllable keeps some of its own rise and fall around the note."""
+        """Speech sings its words: one syllable per note, in order.
+
+        Each note opens with the syllable as said (consonant and the start of
+        its vowel, up to 90 ms, at most 1.4x faster), so the word is heard;
+        the rest of the note holds the steadiest stretch of that syllable's
+        own vowel, stretched and tuned onto the note, so the tune is heard.
+        Syllables that are mostly breath are skipped."""
         voice = self.voices[clip]
-        syl = voice.syllables()
+        syl = [x for x in voice.syllables()
+               if np.mean(voice.voiced[x[0] // HOP_A:max(x[0] // HOP_A + 1, x[1] // HOP_A)]) >= 0.6]             or voice.syllables()
+        tune = float(__import__("os").environ.get("OTO_WORD_TUNE", "1.0"))
+        head_max = int(float(__import__("os").environ.get("OTO_WORD_HEAD", "0.09")) * SR)
         k, pos = cursor
         for b, length, midi in notes:
             start = int((b + bar_offset * 4) * BEAT)
@@ -136,19 +142,16 @@ class Arrangement:
             a0, a1, ref = syl[k % len(syl)]
             k += 1
             span = a1 - a0
-            said = min(span, int(dur / 0.7))  # at most 1.4x faster than spoken
+            said = min(span, head_max, int(dur / 0.7))
             head = min(dur, said)
-            rate = said / head
-            extra = {"refMidi": round(float(ref), 2), "tune": 0.8} if ref else {}
+            extra = {"refMidi": round(float(ref), 2), "tune": tune} if ref else {}
             self.add(clip, start, head, a0, "sung", role, gain, notes=[[0, float(midi)]],
-                     rate=round(rate, 4), **extra)
+                     rate=round(said / head, 4), **extra)
             hold = dur - head
             if hold > int(0.03 * SR):
-                # the vowel: the voiced tail of the syllable, stretched to fill the note
-                tail0 = a0 + int(span * 0.55)
-                tail = max(480, a1 - tail0)
-                self.add(clip, start + head, hold, tail0, "sung", role, gain, notes=[[0, float(midi)]],
-                         rate=round(max(0.12, tail / hold), 4), **extra)
+                c0, c1 = voice.vowel_core(a0, a1)
+                self.add(clip, start + head, hold, c0, "sung", role, gain, notes=[[0, float(midi)]],
+                         rate=round(max(0.12, min(1.0, (c1 - c0) / hold)), 4), **extra)
         return (k % len(syl), pos)
 
     def syllable_line(self, clip, cursor, notes, bar_offset, gain, role):
