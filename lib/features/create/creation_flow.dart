@@ -59,7 +59,7 @@ final class _SongRoleSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isMidiScore = state.melody == MelodyTemplate.midiScore;
+    final isMidiScore = state.melody.isMidiScore;
     final arrangement = state.project?.arrangement;
     final roles =
         arrangement != null &&
@@ -1122,6 +1122,12 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               builder: (context, constraints) {
                 const melodies = <MelodyTemplate>[
                   MelodyTemplate.midiScore,
+                  MelodyTemplate.odeToJoy,
+                  MelodyTemplate.twinkle,
+                  MelodyTemplate.furElise,
+                  MelodyTemplate.jingleBells,
+                  MelodyTemplate.fate,
+                  MelodyTemplate.canon,
                   MelodyTemplate.hop,
                   MelodyTemplate.wink,
                   MelodyTemplate.answer,
@@ -1172,7 +1178,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               onMode: widget.controller.selectPerformance,
               onDuration: widget.controller.selectDuration,
             ),
-            if (state.melody == MelodyTemplate.midiScore) ...[
+            if (state.melody.isMidiScore) ...[
               const SizedBox(height: 8),
               Text(
                 'この楽譜を撮った音で。${state.durationSeconds}秒で再生。',

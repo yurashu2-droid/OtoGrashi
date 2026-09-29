@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'arrangement.dart';
 import 'melody_template.dart';
-import 'midi_score_data.dart';
 import 'worded_singing.dart';
 
 /// A MAD made of the clips themselves: the melody is sung by the most tuneful
@@ -54,6 +53,9 @@ Arrangement arrangeMad({
     audible: audible,
     seed: seed,
     melodic: melodyTemplate != MelodyTemplate.none,
+    // any chosen song plays its own score; the other patterns keep the
+    // bundled three-part score as the MAD tune
+    scoreNotes: melodyTemplate.scoreNotes,
     total: seconds * _sampleRate,
   );
   if (seconds == 30) {
@@ -180,6 +182,7 @@ class _MadBuilder {
     required List<AnalyzedClip> audible,
     required this.seed,
     required this.melodic,
+    required this.scoreNotes,
     required this.total,
   }) : random = math.Random(seed),
        voices = [for (final clip in clips) _Voice(clip)] {
@@ -196,6 +199,7 @@ class _MadBuilder {
   final int seed;
   final List<_Voice> voices;
   final bool melodic;
+  final List<List<List<int>>> scoreNotes;
   final int total;
   final math.Random random;
   late final List<_Voice> usable;
@@ -267,7 +271,7 @@ class _MadBuilder {
     kit = drums;
 
     // The whole song moves to the lead voice's own register (a key change).
-    final score = _score();
+    final score = _score(scoreNotes);
     melody = score.$1;
     final centre = _median(melody.map((n) => n.$3).toList());
     final shift = (lead.medianMidi - centre).round();
@@ -301,9 +305,11 @@ class _MadBuilder {
   }
 
   /// Beats, lengths in beats and MIDI notes of the bundled three-part score.
-  static (List<(double, double, double)>, List<(double, double, double)>) _score() {
+  static (List<(double, double, double)>, List<(double, double, double)>) _score(
+    List<List<List<int>>> notes,
+  ) {
     List<(double, double, double)> lane(int index) => [
-      for (final note in midiScoreNotes[index])
+      for (final note in notes[index])
         (note[0] / 480, note[1] / 480, note[2].toDouble()),
     ];
     return (lane(0), lane(1));

@@ -107,7 +107,7 @@ void main() {
       for (final style in ArrangementStyle.values) {
         for (final melody in MelodyTemplate.values.where(
           (value) =>
-              value != MelodyTemplate.none && value != MelodyTemplate.midiScore,
+              value != MelodyTemplate.none && !value.isMidiScore,
         )) {
           final arrangement = arrange(
             clips: measuredFixtures,
@@ -168,8 +168,7 @@ void main() {
       final patterns = MelodyTemplate.values
           .where(
             (value) =>
-                value != MelodyTemplate.none &&
-                value != MelodyTemplate.midiScore,
+                value != MelodyTemplate.none && !value.isMidiScore,
           )
           .map((melody) {
             final arranged = arrange(

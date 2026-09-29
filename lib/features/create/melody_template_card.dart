@@ -22,6 +22,7 @@ class MelodyTemplateCard extends StatelessWidget {
     MelodyTemplate.wink => Icons.music_note_rounded,
     MelodyTemplate.answer => Icons.question_answer_rounded,
     MelodyTemplate.midiScore => Icons.piano_rounded,
+    _ => Icons.library_music_rounded,
   };
 
   @override
@@ -100,7 +101,7 @@ class MelodyTemplateCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const Spacer(),
-                if (melody == MelodyTemplate.midiScore)
+                if (melody.isMidiScore)
                   const SizedBox(
                     height: 26,
                     child: Row(

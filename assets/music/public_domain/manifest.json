@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "id": "ode_to_joy",
+      "title": "歓喜の歌",
+      "source": "Symphony No. 9, fourth movement theme",
+      "composer": "Ludwig van Beethoven (1770–1827)",
+      "bpm": 128,
+      "durationSeconds": 15.0,
+      "tracks": [
+        "Melody",
+        "Chords",
+        "Bass",
+        "Rhythm"
+      ],
+      "sha256": "dc3d7978e4c0006977537241dc1cd3539aeaf9b7c8070c1b766c8d08df9072b5",
+      "file": "ode_to_joy.mid"
+    },
+    {
+      "id": "twinkle_twinkle",
+      "title": "きらきら星",
+      "source": "Ah! vous dirai-je, maman",
+      "composer": "Traditional French melody (18th century)",
+      "bpm": 120,
+      "durationSeconds": 16.0,
+      "tracks": [
+        "Melody",
+        "Chords",
+        "Bass",
+        "Rhythm"
+      ],
+      "sha256": "9d5dcdf738300c171eafd7166ea3cf97248166fa6f4261039b31e9aadfe5da6b",
+      "file": "twinkle_twinkle.mid"
+    },
+    {
+      "id": "fur_elise",
+      "title": "エリーゼのために",
+      "source": "Bagatelle No. 25 in A minor, WoO 59",
+      "composer": "Ludwig van Beethoven (1770–1827)",
+      "bpm": 128,
+      "durationSeconds": 15.0,
+      "tracks": [
+        "Melody",
+        "Chords",
+        "Bass",
+        "Rhythm"
+      ],
+      "sha256": "6a778b788a5ef222e8958e38dd4b61805a7f94b6a875c1605bbf89217ef56964",
+      "file": "fur_elise.mid"
+    },
+    {
+      "id": "jingle_bells",
+      "title": "ジングルベル",
+      "source": "Jingle Bells chorus",
+      "composer": "James Lord Pierpont (1822–1893)",
+      "bpm": 132,
+      "durationSeconds": 14.55,
+      "tracks": [
+        "Melody",
+        "Chords",
+        "Bass",
+        "Rhythm"
+      ],
+      "sha256": "42d7c4818ec6739b6ab2c17ac1a71fd49727ab4d26d605ad30fd9a4c625df797",
+      "file": "jingle_bells.mid"
+    },
+    {
+      "id": "beethoven_fifth_motif",
+      "title": "運命の動機",
+      "source": "Symphony No. 5 opening-motif study",
+      "composer": "Ludwig van Beethoven (1770–1827)",
+      "bpm": 116,
+      "durationSeconds": 16.55,
+      "tracks": [
+        "Melody",
+        "Chords",
+        "Bass",
+        "Rhythm"
+      ],
+      "sha256": "31e0f8b028c8519973e2ec44376d8f9c968c0a2c58a2fada13d994d9776e84c0",
+      "file": "beethoven_fifth_motif.mid"
+    },
+    {
+      "id": "canon_in_d",
+      "title": "パッヘルベルのカノン",
+      "source": "Canon and Gigue in D major ground-bass study",
+      "composer": "Johann Pachelbel (1653–1706)",
+      "bpm": 128,
+      "durationSeconds": 15.0,
+      "tracks": [
+        "Melody",
+        "Chords",
+        "Bass",
+        "Rhythm"
+      ],
+      "sha256": "f9515e844156edf3f6695394f47e7c518ffa91b19a9f3f3379e449bd1fd0f81b",
+      "file": "canon_in_d.mid"
+    }
+  ]
+}

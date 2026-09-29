@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'arrangement.dart';
 import 'melody_template.dart';
-import 'midi_score_data.dart';
 import 'worded_singing.dart';
 
 /// Turn recordings into instruments AND keep the people behind those sounds.
@@ -146,7 +145,7 @@ Arrangement arrangeEveryday({
     }
   }
 
-  final midi = melodyTemplate == MelodyTemplate.midiScore;
+  final midi = melodyTemplate.isMidiScore;
   // Acoustic phrase spotlights, not speech recognition. Give EVERY recording
   // an identifiable, natural-speed moment even when it has no measurable F0.
   final slot = 720000 ~/ usable.length;
@@ -177,7 +176,7 @@ Arrangement arrangeEveryday({
       lanes[lane].add(clip);
     }
     for (var lane = 0; lane < 3; lane++) {
-      final notes = midiScoreNotes[lane];
+      final notes = melodyTemplate.scoreNotes[lane];
       final pitches = notes.map((n) => n[2]).toList()..sort();
       final nativeNote = _register(leads[lane]) ?? (lane == 1 ? 50 : 57);
       // ONE octave for a whole part, never independently wrap each note. This
@@ -452,7 +451,7 @@ Arrangement arrangeEveryday({
   }
   return Arrangement(
     templateId: midi
-        ? 'score-image-3part-128bpm-8bar'
+        ? 'score-${melodyTemplate.scoreId ?? 'image-3part'}-128bpm-8bar'
         : 'everyday-${style.name}-${melodyTemplate.name}-v3',
     templateVersion: 1,
     analysisVersion: 1,
