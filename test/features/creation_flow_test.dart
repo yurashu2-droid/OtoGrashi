@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:otogurashi/design/rolling_tab_bar.dart';
 import 'package:otogurashi/design/tokens.dart';
 import 'package:otogurashi/domain/arrangement.dart';
 import 'package:otogurashi/domain/clip_asset.dart';
@@ -1358,7 +1359,7 @@ void main() {
     expect(find.text('STEP 1  /  音の採集ノート'), findsNothing);
     expect(find.text('3/6'), findsOneWidget);
     expect(find.text('作成OK · あと3つ追加できます'), findsOneWidget);
-    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byType(RollingTabBar), findsOneWidget);
     final createButton = find.ancestor(
       of: find.text('この音で15秒をつくる  ↗'),
       matching: find.byType(FilledButton),

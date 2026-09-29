@@ -26,6 +26,7 @@ final class LibraryScreen extends StatefulWidget {
     this.onAssetSelected,
     this.initialTabIndex = 0,
     this.onSettings,
+    this.embedded = false,
     super.key,
   });
 
@@ -38,6 +39,9 @@ final class LibraryScreen extends StatefulWidget {
   final ValueChanged<ClipAsset>? onAssetSelected;
   final int initialTabIndex;
   final VoidCallback? onSettings;
+
+  /// Shown inside the 曲 tab, which supplies its own header.
+  final bool embedded;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -100,7 +104,9 @@ class _LibraryScreenState extends State<LibraryScreen>
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('音の記録'),
+      title: widget.embedded ? null : const Text('音の記録'),
+      toolbarHeight: widget.embedded ? 0 : null,
+      automaticallyImplyLeading: !widget.embedded,
       centerTitle: true,
       bottom: TabBar(
         controller: _tabs,
@@ -110,17 +116,19 @@ class _LibraryScreenState extends State<LibraryScreen>
         ],
       ),
       actions: [
-        if (widget.onSettings != null)
+        if (!widget.embedded) ...[
+          if (widget.onSettings != null)
+            IconButton(
+              onPressed: widget.onSettings,
+              tooltip: '設定',
+              icon: const Icon(Icons.settings_outlined),
+            ),
           IconButton(
-            onPressed: widget.onSettings,
-            tooltip: '設定',
-            icon: const Icon(Icons.settings_outlined),
+            onPressed: _reload,
+            tooltip: '更新',
+            icon: const Icon(Icons.refresh),
           ),
-        IconButton(
-          onPressed: _reload,
-          tooltip: '更新',
-          icon: const Icon(Icons.refresh),
-        ),
+        ],
       ],
     ),
     body: _loading

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../design/playback_chrome.dart';
+import '../../design/rolling_tab_bar.dart';
 import '../../design/tokens.dart';
 import '../../domain/arrangement.dart';
 import '../../domain/clip_asset.dart';
@@ -11,8 +12,10 @@ import '../../domain/melody_template.dart';
 import '../../domain/project.dart';
 import '../../domain/video_recipe.dart';
 import '../arrange/adjustments_sheet.dart';
+import '../home/home_screen.dart';
 import '../library/library_screen.dart';
 import '../settings/settings_screen.dart';
+import '../songs/songs_screen.dart';
 import '../../storage/project_repository.dart';
 import '../../features/capture/capture_controller.dart';
 import '../../features/capture/capture_screen.dart';
@@ -118,6 +121,9 @@ final class _SongRoleSummary extends StatelessWidget {
 class _CreationFlowState extends State<CreationFlow> {
   var _captureOpened = false;
   late int _tabIndex = widget.startInLibrary ? 1 : 0;
+  // Home shows the folder list; the current folder opens on top of it.
+  var _folderOpen = true;
+  var _capturing = false;
 
   @override
   void didChangeDependencies() {
@@ -227,11 +233,49 @@ class _CreationFlowState extends State<CreationFlow> {
 
   Future<void> _openProject(Project project) async {
     await widget.controller.openProject(project);
-    if (mounted) setState(() => _tabIndex = 0);
+    if (mounted) {
+      setState(() {
+        _tabIndex = 0;
+        _folderOpen = true;
+      });
+    }
+  }
+
+  /// The centre mic: the ball rolls onto it, then the camera opens; after
+  /// capture the new sound lands in the current folder on Home.
+  Future<void> _captureFromBar() async {
+    if (_capturing) return;
+    setState(() => _capturing = true);
+    await Future<void>.delayed(const Duration(milliseconds: 380));
+    if (!mounted) return;
+    try {
+      await _startCaptureFromLibrary();
+    } finally {
+      if (mounted) setState(() => _capturing = false);
+    }
+  }
+
+  void _selectTab(RollingTab tab) {
+    switch (tab) {
+      case RollingTab.home:
+        setState(() {
+          if (_tabIndex == 0) _folderOpen = false;
+          _tabIndex = 0;
+        });
+      case RollingTab.capture:
+        unawaited(_captureFromBar());
+      case RollingTab.songs:
+        setState(() => _tabIndex = 1);
+    }
   }
 
   Future<void> _startCaptureFromLibrary() async {
-    if (mounted) setState(() => _tabIndex = 0);
+    if (mounted) {
+      setState(() {
+        _tabIndex = 0;
+        _folderOpen = true;
+      });
+    }
     if (widget.controller.state.phase == CreationPhase.completed) {
       widget.controller.startNew();
     }
@@ -242,7 +286,10 @@ class _CreationFlowState extends State<CreationFlow> {
     final before = widget.controller.state.clips.map((clip) => clip.id).toSet();
     await widget.controller.addExisting(asset);
     if (mounted) {
-      setState(() => _tabIndex = 0);
+      setState(() {
+        _tabIndex = 0;
+        _folderOpen = true;
+      });
       await _nameNewRelayClip(before);
     }
   }
@@ -264,43 +311,47 @@ class _CreationFlowState extends State<CreationFlow> {
     builder: (context, _) {
       final state = widget.controller.state;
       final content = switch (_tabIndex) {
-        1 => LibraryScreen(
-          projects: widget.controller.projects,
-          assets: widget.controller.assets,
-          presentation: widget.controller.presentation,
-          delivery: widget.delivery ?? PlatformMediaDeliveryGateway(),
-          initialTabIndex: 0,
-          onCreate: _startCaptureFromLibrary,
-          onProjectSelected: _openProject,
-          onAssetSelected: _reuseAsset,
-          onSettings: () =>
-              Navigator.of(context)
-                  .push(MaterialPageRoute(builder: (_) => _settings())),
+        1 => SongsScreen(
+          onSettings: _openSettings,
+          onMakeWithTemplate: () => unawaited(_captureFromBar()),
+          mine: LibraryScreen(
+            projects: widget.controller.projects,
+            assets: widget.controller.assets,
+            presentation: widget.controller.presentation,
+            delivery: widget.delivery ?? PlatformMediaDeliveryGateway(),
+            initialTabIndex: 0,
+            embedded: true,
+            onCreate: _startCaptureFromLibrary,
+            onProjectSelected: _openProject,
+            onAssetSelected: _reuseAsset,
+          ),
         ),
         _ => _creationContent(state),
       };
+      final showBar =
+          content is HomeScreen || content is _CollectScreen || _tabIndex == 1;
       return Scaffold(
         body: content,
-        bottomNavigationBar: content is _CollectScreen || _tabIndex == 1
-            ? NavigationBar(
-                selectedIndex: _tabIndex,
-                onDestinationSelected: (value) =>
-                    setState(() => _tabIndex = value),
-                destinations: const [
-                  NavigationDestination(
-                    icon: Icon(Icons.add_circle_outline),
-                    label: 'つくる',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.video_library_outlined),
-                    label: 'ライブラリ',
-                  ),
-                ],
+        bottomNavigationBar: showBar
+            ? SafeArea(
+                top: false,
+                child: RollingTabBar(
+                  selected: _capturing
+                      ? RollingTab.capture
+                      : _tabIndex == 1
+                      ? RollingTab.songs
+                      : RollingTab.home,
+                  onSelected: _selectTab,
+                ),
               )
             : null,
       );
     },
   );
+
+  void _openSettings() => Navigator.of(
+    context,
+  ).push(MaterialPageRoute<void>(builder: (_) => _settings()));
 
   Widget _creationContent(CreationState state) {
     if (state.phase == CreationPhase.completed) {
@@ -315,8 +366,21 @@ class _CreationFlowState extends State<CreationFlow> {
         (state.phase == CreationPhase.failed && state.project != null)) {
       return _ArrangeScreen(controller: widget.controller);
     }
+    if (!_folderOpen) {
+      return HomeScreen(
+        currentClips: state.clips,
+        thumbnails: state.thumbnails,
+        assets: widget.controller.assets,
+        presentation: widget.controller.presentation,
+        ownerName: widget.controller.ownerName,
+        onOpenCurrent: () => setState(() => _folderOpen = true),
+        onAssetSelected: (asset) => unawaited(_reuseAsset(asset)),
+        onSettings: _openSettings,
+      );
+    }
     return _CollectScreen(
       controller: widget.controller,
+      onBack: () => setState(() => _folderOpen = false),
       onCapture: _openCapture,
       onPhotos: () => _openCapture(fromPhotos: true),
     );
@@ -326,10 +390,12 @@ class _CreationFlowState extends State<CreationFlow> {
 class _CollectScreen extends StatelessWidget {
   const _CollectScreen({
     required this.controller,
+    required this.onBack,
     required this.onCapture,
     required this.onPhotos,
   });
   final CreationController controller;
+  final VoidCallback onBack;
   final VoidCallback onCapture;
   final VoidCallback onPhotos;
 
@@ -436,8 +502,13 @@ class _CollectScreen extends StatelessWidget {
         : '作成OK · 追加はここまで';
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          onPressed: onBack,
+          tooltip: 'フォルダ一覧',
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+        ),
         title: const Text(
-          'オトグラシ',
+          'いま集めてる音',
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
         actions: [
