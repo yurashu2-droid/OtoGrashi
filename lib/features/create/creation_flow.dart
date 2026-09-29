@@ -1744,14 +1744,33 @@ class _CaptureRouteState extends State<_CaptureRoute> {
   void initState() {
     super.initState();
     controller.addListener(_clearStaleSaveError);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (widget.fromPhotos) {
-        unawaited(controller.importVideo());
-      } else {
-        unawaited(controller.prepare());
-      }
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startWhenSettled());
+  }
+
+  // Starting the camera session mid-transition stalls the UI thread and makes
+  // the shutter's flight stutter, so wait until the route has fully arrived.
+  void _startWhenSettled() {
+    if (!mounted) return;
+    final animation = ModalRoute.of(context)?.animation;
+    if (animation == null || animation.isCompleted) {
+      _start();
+      return;
+    }
+    void onStatus(AnimationStatus status) {
+      if (!status.isCompleted) return;
+      animation.removeStatusListener(onStatus);
+      if (mounted) _start();
+    }
+
+    animation.addStatusListener(onStatus);
+  }
+
+  void _start() {
+    if (widget.fromPhotos) {
+      unawaited(controller.importVideo());
+    } else {
+      unawaited(controller.prepare());
+    }
   }
 
   @override
