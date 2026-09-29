@@ -30,6 +30,7 @@ import 'performance_controls.dart';
 import 'clip_card.dart';
 import 'melody_template_card.dart';
 import 'creation_controller.dart';
+import 'making_screen.dart';
 
 class CreationFlow extends StatefulWidget {
   const CreationFlow({
@@ -124,6 +125,7 @@ class _CreationFlowState extends State<CreationFlow> {
   // Home shows the folder list; the current folder opens on top of it.
   var _folderOpen = true;
   var _capturing = false;
+  String? _shownProjectId;
 
   @override
   void didChangeDependencies() {
@@ -367,6 +369,18 @@ class _CreationFlowState extends State<CreationFlow> {
         controller: widget.controller,
         delivery: widget.delivery,
         onOpenLibrary: () => setState(() => _tabIndex = 1),
+      );
+    }
+    // The first render of a song gets its own waiting screen; re-renders
+    // after a setting change keep the arrange screen and its controls.
+    if (state.preview != null) _shownProjectId = state.project?.id;
+    if (state.phase == CreationPhase.rendering &&
+        state.preview == null &&
+        state.project?.id != _shownProjectId) {
+      return MakingScreen(
+        clips: state.clips,
+        thumbnails: state.thumbnails,
+        seconds: state.durationSeconds,
       );
     }
     if (state.preview != null ||
