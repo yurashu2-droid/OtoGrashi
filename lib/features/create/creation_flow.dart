@@ -137,8 +137,16 @@ class _CreationFlowState extends State<CreationFlow> {
   Future<void> _openCapture({bool fromPhotos = false}) async {
     final before = widget.controller.state.clips.map((clip) => clip.id).toSet();
     await Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (_) => _CaptureRoute(
+      // A fade, so the shutter (a Hero shared with the tab bar's mic ball)
+      // is what visibly travels and grows into place.
+      PageRouteBuilder<void>(
+        transitionDuration: const Duration(milliseconds: 460),
+        reverseTransitionDuration: const Duration(milliseconds: 340),
+        transitionsBuilder: (context, animation, _, child) => FadeTransition(
+          opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+          child: child,
+        ),
+        pageBuilder: (_, _, _) => _CaptureRoute(
           media: widget.media,
           presentation: widget.controller.presentation,
           fromPhotos: fromPhotos,
@@ -246,7 +254,7 @@ class _CreationFlowState extends State<CreationFlow> {
   Future<void> _captureFromBar() async {
     if (_capturing) return;
     setState(() => _capturing = true);
-    await Future<void>.delayed(const Duration(milliseconds: 380));
+    await Future<void>.delayed(const Duration(milliseconds: 540));
     if (!mounted) return;
     try {
       await _startCaptureFromLibrary();

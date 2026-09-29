@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../design/shutter_ball.dart';
 import '../../design/tokens.dart';
 import '../../media/media_messages.dart';
 import '../../media/media_presentation_gateway.dart';
@@ -62,13 +63,7 @@ final class _CaptureScreenState extends State<CaptureScreen> {
           appBar: AppBar(title: const Text('音を録る'), toolbarHeight: 52),
           bottomNavigationBar: state.phase == CapturePhase.completed
               ? _reviewActions()
-              : state.phase == CapturePhase.ready
-              ? _captureActions()
-              : state.phase == CapturePhase.recording
-              ? _recordingActions(state)
-              : (state.phase == CapturePhase.idle || state.canRetry)
-              ? _prepareActions()
-              : null,
+              : _shutterActions(state),
           body: SafeArea(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
@@ -326,113 +321,110 @@ final class _CaptureScreenState extends State<CaptureScreen> {
     ),
   );
 
-  Widget _captureActions() => Material(
-    color: AppTokens.surfaceColor,
-    child: SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                '録音する長さ',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppTokens.ink,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                for (final duration in const [3000000, 6000000])
-                  Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.only(
-                        right: duration == 3000000 ? 5 : 0,
-                        left: duration == 6000000 ? 5 : 0,
-                      ),
-                      child: _DurationChoice(
-                        label: duration == 3000000 ? '3秒' : '6秒',
-                        selected: _durationUs == duration,
-                        onPressed: () => setState(() => _durationUs = duration),
-                      ),
+  /// One round shutter that stays put through every capture phase, so the
+  /// tab bar's mic ball can fly straight into it.
+  Widget _shutterActions(CaptureState state) {
+    final phase = state.phase;
+    final ready = phase == CapturePhase.ready;
+    final recording = phase == CapturePhase.recording;
+    final canPrepare = phase == CapturePhase.idle || state.canRetry;
+    final seconds = _durationUs ~/ 1000000;
+    final VoidCallback? onTap = ready
+        ? () => widget.controller.record(maxDurationUs: _durationUs)
+        : recording
+        ? widget.controller.stop
+        : canPrepare
+        ? widget.controller.prepare
+        : null;
+    final caption = ready
+        ? '♪  $seconds秒撮る'
+        : recording
+        ? '録音中  ${(seconds * state.progress.clamp(0, 1)).toStringAsFixed(1)} / $seconds.0秒'
+        : canPrepare
+        ? 'カメラとマイクを準備'
+        : _statusText(state);
+    final mode = recording
+        ? ShutterMode.stop
+        : ready || canPrepare
+        ? ShutterMode.mic
+        : ShutterMode.busy;
+    Widget side(int durationUs) => SizedBox(
+      width: 84,
+      child: ready
+          ? _DurationChoice(
+              label: durationUs == 3000000 ? '3秒' : '6秒',
+              selected: _durationUs == durationUs,
+              onPressed: () => setState(() => _durationUs = durationUs),
+            )
+          : null,
+    );
+    return Material(
+      color: AppTokens.surfaceColor,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+          child: Row(
+            children: [
+              side(3000000),
+              Expanded(
+                child: Semantics(
+                  button: onTap != null,
+                  label: recording ? '録音を止める' : null,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onTap,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox.square(
+                          dimension: 92,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              if (recording)
+                                SizedBox.square(
+                                  dimension: 92,
+                                  child: CircularProgressIndicator(
+                                    value: state.progress.clamp(0, 1).toDouble(),
+                                    strokeWidth: 4,
+                                    color: AppTokens.blush,
+                                    backgroundColor: AppTokens.hairline,
+                                  ),
+                                ),
+                              SizedBox.square(
+                                dimension: 76,
+                                child: Hero(
+                                  tag: captureShutterTag,
+                                  child: ShutterBall(mode: mode),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          caption,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: AppTokens.ink,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            FilledButton(
-              onPressed: () =>
-                  widget.controller.record(maxDurationUs: _durationUs),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppTokens.coral,
-                foregroundColor: AppTokens.ink,
-                minimumSize: const Size.fromHeight(62),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                textStyle: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
                 ),
               ),
-              child: Text(_durationUs == 3000000 ? '♪  3秒撮る' : '♪  6秒撮る'),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-
-  Widget _recordingActions(CaptureState state) => Material(
-    color: AppTokens.surfaceColor,
-    child: SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _RecordingProgress(
-              progress: state.progress,
-              targetDurationUs: _durationUs,
-            ),
-            const SizedBox(height: 10),
-            FilledButton(
-              onPressed: widget.controller.stop,
-              style: FilledButton.styleFrom(
-                backgroundColor: AppTokens.ink,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('録音を止める'),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-
-  Widget _prepareActions() => Material(
-    color: AppTokens.surfaceColor,
-    child: SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
-        child: FilledButton(
-          onPressed: widget.controller.prepare,
-          style: FilledButton.styleFrom(
-            backgroundColor: AppTokens.coral,
-            foregroundColor: AppTokens.ink,
+              side(6000000),
+            ],
           ),
-          child: const Text('カメラとマイクを準備'),
         ),
       ),
-    ),
-  );
+    );
+  }
 
   String _statusText(CaptureState state) => switch (state.phase) {
     CapturePhase.idle => '身近な音を、3秒から録ってみよう',
@@ -470,10 +462,10 @@ class _DurationChoice extends StatelessWidget {
         duration: const Duration(milliseconds: 150),
         height: 46,
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFFFFE0D7) : Colors.white,
+          color: selected ? AppTokens.blushSoft : Colors.white,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: selected ? AppTokens.coral : const Color(0xFFE9DFD4),
+            color: selected ? AppTokens.blush : AppTokens.hairline,
             width: selected ? 1.5 : 1,
           ),
           boxShadow: const [
@@ -490,7 +482,7 @@ class _DurationChoice extends StatelessWidget {
             Icon(
               selected ? Icons.check_circle_rounded : Icons.circle_outlined,
               size: 17,
-              color: selected ? AppTokens.coral : AppTokens.mutedInk,
+              color: selected ? AppTokens.blush : AppTokens.mutedInk,
             ),
             const SizedBox(width: 7),
             Text(
@@ -715,52 +707,4 @@ final class _CaptureStatus extends StatelessWidget {
           ?.copyWith(color: AppTokens.mutedInk, fontWeight: FontWeight.w600),
     ),
   );
-}
-
-final class _RecordingProgress extends StatelessWidget {
-  const _RecordingProgress({
-    required this.progress,
-    required this.targetDurationUs,
-  });
-
-  final double progress;
-  final int targetDurationUs;
-
-  @override
-  Widget build(BuildContext context) {
-    final boundedProgress = progress.clamp(0, 1).toDouble();
-    final targetSeconds = targetDurationUs / 1000000;
-    final elapsedSeconds = targetSeconds * boundedProgress;
-    return Column(
-      children: [
-        Row(
-          children: [
-            const Icon(
-              Icons.graphic_eq_rounded,
-              color: AppTokens.coral,
-              size: 18,
-            ),
-            const SizedBox(width: 6),
-            const Expanded(
-              child: Text('録音中', style: TextStyle(fontWeight: FontWeight.w800)),
-            ),
-            Text(
-              '${elapsedSeconds.toStringAsFixed(1)} / '
-              '${targetSeconds.toStringAsFixed(1)}秒',
-            ),
-          ],
-        ),
-        const SizedBox(height: 5),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(
-            value: boundedProgress,
-            minHeight: 6,
-            color: AppTokens.coral,
-            backgroundColor: const Color(0xFFE9DFD4),
-          ),
-        ),
-      ],
-    );
-  }
 }

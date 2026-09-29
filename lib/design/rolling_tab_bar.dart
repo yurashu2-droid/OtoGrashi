@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'shutter_ball.dart';
 import 'tokens.dart';
 
 enum RollingTab { home, capture, songs }
@@ -83,6 +84,12 @@ class _RollingTabBarState extends State<RollingTabBar>
   Color _ballColor(int index) =>
       index == RollingTab.capture.index ? AppTokens.blush : AppTokens.barInk;
 
+  // Parked on 録る, the ball is the same object as the capture screen's
+  // shutter, so it flies there and grows when the camera opens.
+  Widget _heroWhenCapture(Widget ball) => _to == RollingTab.capture.index
+      ? Hero(tag: captureShutterTag, child: ball)
+      : ball;
+
   // landing squash: flat, then tall, then settled
   Offset _squash(double t) {
     const keys = [
@@ -140,7 +147,7 @@ class _RollingTabBarState extends State<RollingTabBar>
                     child: Center(
                       child: CustomPaint(
                         size: const Size.square(22),
-                        painter: _TabIconPainter(
+                        painter: TabIconPainter(
                           tab: RollingTab.values[i],
                           color: _ghostInk,
                           progress: 1,
@@ -181,7 +188,7 @@ class _RollingTabBarState extends State<RollingTabBar>
                       ),
                       child: Transform.rotate(
                         angle: _spin(t),
-                        child: DecoratedBox(
+                        child: _heroWhenCapture(DecoratedBox(
                           decoration: BoxDecoration(
                             color: color,
                             shape: BoxShape.circle,
@@ -194,7 +201,7 @@ class _RollingTabBarState extends State<RollingTabBar>
                                   opacity: oldOpacity,
                                   child: CustomPaint(
                                     size: const Size.square(22),
-                                    painter: _TabIconPainter(
+                                    painter: TabIconPainter(
                                       tab: RollingTab.values[_from],
                                       color: Colors.white,
                                       progress: 1,
@@ -203,7 +210,7 @@ class _RollingTabBarState extends State<RollingTabBar>
                                 ),
                               CustomPaint(
                                 size: const Size.square(22),
-                                painter: _TabIconPainter(
+                                painter: TabIconPainter(
                                   tab: RollingTab.values[_to],
                                   color: Colors.white,
                                   progress: draw,
@@ -211,7 +218,7 @@ class _RollingTabBarState extends State<RollingTabBar>
                               ),
                             ],
                           ),
-                        ),
+                        )),
                       ),
                     ),
                   ),
@@ -242,8 +249,9 @@ class _RollingTabBarState extends State<RollingTabBar>
   );
 }
 
-class _TabIconPainter extends CustomPainter {
-  const _TabIconPainter({
+/// Stroke icon for a tab on the 24px grid; [progress] < 1 draws it partway.
+class TabIconPainter extends CustomPainter {
+  const TabIconPainter({
     required this.tab,
     required this.color,
     required this.progress,
@@ -316,7 +324,7 @@ class _TabIconPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_TabIconPainter oldDelegate) =>
+  bool shouldRepaint(TabIconPainter oldDelegate) =>
       oldDelegate.tab != tab ||
       oldDelegate.color != color ||
       oldDelegate.progress != progress;
