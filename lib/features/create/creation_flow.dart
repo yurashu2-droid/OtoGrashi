@@ -1122,15 +1122,15 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               builder: (context, constraints) {
                 const melodies = <MelodyTemplate>[
                   MelodyTemplate.midiScore,
+                  MelodyTemplate.hop,
+                  MelodyTemplate.wink,
+                  MelodyTemplate.answer,
                   MelodyTemplate.odeToJoy,
                   MelodyTemplate.twinkle,
                   MelodyTemplate.furElise,
                   MelodyTemplate.jingleBells,
                   MelodyTemplate.fate,
                   MelodyTemplate.canon,
-                  MelodyTemplate.hop,
-                  MelodyTemplate.wink,
-                  MelodyTemplate.answer,
                   MelodyTemplate.none,
                 ];
                 final cardWidth = (constraints.maxWidth - 24) / 2;
