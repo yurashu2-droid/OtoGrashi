@@ -32,13 +32,13 @@ class MelodyTemplateCard extends StatelessWidget {
       selected: selected,
       label: '${melody.label}、${melody.description}',
       child: Material(
-        color: selected ? const Color(0xFFFFF7F2) : const Color(0xFFFFFEFB),
+        color: selected ? const Color(0xFFF9F9F9) : const Color(0xFFFFFFFF),
         elevation: selected ? 3 : 1,
-        shadowColor: const Color(0x228D6B5B),
+        shadowColor: const Color(0x0F000000),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(
-            color: selected ? AppTokens.coral : const Color(0xFFE7DCD2),
+            color: selected ? AppTokens.coral : const Color(0xFFE9E9E9),
             width: selected ? 2 : 1,
           ),
         ),

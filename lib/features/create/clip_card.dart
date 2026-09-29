@@ -79,21 +79,23 @@ class _ClipCardState extends State<ClipCard> {
     final textScale = MediaQuery.textScalerOf(context).scale(16) / 16;
     final accent = _clipAccent(index);
     return Card(
-      margin: const EdgeInsets.only(bottom: 14),
-      color: const Color(0xFFFFFEFB),
-      elevation: 2,
-      shadowColor: const Color(0x228D6B5B),
+      margin: const EdgeInsets.only(bottom: 10),
+      color: Colors.white,
+      elevation: 0,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: Color(0xFFE7DCD2)),
+        borderRadius: BorderRadius.circular(AppTokens.tileRadius),
       ),
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
         height: 160 + (textScale - 1).clamp(0, 2) * 56,
         child: Row(
           children: [
-            SizedBox(
-              width: 122,
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: SizedBox(
+              width: 106,
               height: double.infinity,
               child: Stack(
                 fit: StackFit.expand,
@@ -142,7 +144,7 @@ class _ClipCardState extends State<ClipCard> {
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         color: accent,
-                        shape: BoxShape.circle,
+                        borderRadius: BorderRadius.circular(9),
                       ),
                       child: SizedBox(
                         width: 27,
@@ -164,7 +166,7 @@ class _ClipCardState extends State<ClipCard> {
                     bottom: 11,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        color: const Color(0xCC211C1A),
+                        color: const Color(0xCC333333),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Padding(
@@ -184,10 +186,12 @@ class _ClipCardState extends State<ClipCard> {
                   ),
                 ],
               ),
+                ),
+              ),
             ),
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 6, 4, 5),
+                padding: const EdgeInsets.fromLTRB(4, 6, 4, 5),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -336,11 +340,7 @@ class _ClipCardState extends State<ClipCard> {
   }
 }
 
-Color _clipAccent(int index) => switch (index % 3) {
-  0 => AppTokens.coral,
-  1 => const Color(0xFF9B78C8),
-  _ => const Color(0xFFE9A347),
-};
+Color _clipAccent(int index) => AppTokens.soundColor(index);
 
 class _ClipWaveform extends StatelessWidget {
   const _ClipWaveform({
@@ -369,7 +369,7 @@ class _ClipWaveform extends StatelessWidget {
     child: Tooltip(
       message: '$clipNameの使う範囲を選ぶ',
       child: Material(
-        color: const Color(0xFFFFF8F1),
+        color: const Color(0xFFFFFFFF),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(9),
           side: BorderSide(color: accent.withValues(alpha: 0.2)),
@@ -589,7 +589,7 @@ class _ClipTrimSheetState extends State<_ClipTrimSheet> {
                   }
                   return DecoratedBox(
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFFF8F1),
+                      color: const Color(0xFFFFFFFF),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: CustomPaint(

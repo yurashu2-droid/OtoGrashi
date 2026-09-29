@@ -179,16 +179,6 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                             onPressed: () => Navigator.maybePop(context),
                           ),
                           const Spacer(),
-                          if (!state.isBusy &&
-                              state.phase != CapturePhase.recording &&
-                              !completed) ...[
-                            _GlassIconButton(
-                              icon: Icons.photo_library_outlined,
-                              tooltip: '写真から動画を選ぶ',
-                              onPressed: widget.controller.importVideo,
-                            ),
-                            const SizedBox(width: 8),
-                          ],
                           if (state.phase == CapturePhase.ready)
                             _GlassPill(
                               onPressed: widget.controller.isSwitchingCamera
@@ -276,7 +266,7 @@ final class _CaptureScreenState extends State<CaptureScreen> {
           right: 12,
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: const Color(0xDD211C1A),
+              color: const Color(0xDD333333),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Padding(
@@ -394,23 +384,27 @@ final class _CaptureScreenState extends State<CaptureScreen> {
         : ready || canPrepare
         ? ShutterMode.mic
         : ShutterMode.busy;
-    Widget side(int durationUs) => SizedBox(
-      width: 84,
-      child: ready
-          ? _DurationChoice(
-              label: durationUs == 3000000 ? '3秒' : '6秒',
-              selected: _durationUs == durationUs,
-              onPressed: () => setState(() => _durationUs = durationUs),
-            )
-          : null,
-    );
+    final canImport =
+        !state.isBusy && !recording && phase != CapturePhase.completed;
     return Material(
       type: MaterialType.transparency,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
         child: Row(
           children: [
-              side(3000000),
+              SizedBox(
+                width: 84,
+                child: canImport
+                    ? Center(
+                        child: _GlassIconButton(
+                          icon: Icons.photo_library_outlined,
+                          tooltip: '写真から動画を選ぶ',
+                          onPressed: widget.controller.importVideo,
+                          size: 52,
+                        ),
+                      )
+                    : null,
+              ),
               Expanded(
                 child: Semantics(
                   button: onTap != null,
@@ -465,7 +459,18 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                   ),
                 ),
               ),
-              side(6000000),
+              SizedBox(
+                width: 84,
+                child: ready
+                    ? Center(
+                        child: _DurationDial(
+                          durationUs: _durationUs,
+                          onChanged: (value) =>
+                              setState(() => _durationUs = value),
+                        ),
+                      )
+                    : null,
+              ),
           ],
         ),
       ),
@@ -487,40 +492,80 @@ final class _CaptureScreenState extends State<CaptureScreen> {
   };
 }
 
-class _DurationChoice extends StatelessWidget {
-  const _DurationChoice({
-    required this.label,
-    required this.selected,
-    required this.onPressed,
-  });
-  final String label;
-  final bool selected;
-  final VoidCallback onPressed;
+/// Recording length on a small ring: the chosen length sits at the top and
+/// the other waits on the side. Tap or swipe to turn the ring.
+class _DurationDial extends StatelessWidget {
+  const _DurationDial({required this.durationUs, required this.onChanged});
+
+  final int durationUs;
+  final ValueChanged<int> onChanged;
+
+  static const _options = [3000000, 6000000];
+  static const _size = 72.0;
+
+  void _turn() =>
+      onChanged(durationUs == _options.first ? _options.last : _options.first);
 
   @override
-  Widget build(BuildContext context) => Semantics(
-    button: true,
-    selected: selected,
-    child: GestureDetector(
-      onTap: onPressed,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        height: 44,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected ? Colors.white : const Color(0x4D000000),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? AppTokens.ink : Colors.white,
-            fontWeight: FontWeight.w800,
+  Widget build(BuildContext context) {
+    final index = _options.indexOf(durationUs).clamp(0, 1);
+    // each option sits a quarter turn apart; the ring turns to bring the
+    // chosen one to twelve o'clock
+    final turns = -index / 4;
+    return Semantics(
+      button: true,
+      label: '録音の長さ ${durationUs ~/ 1000000}秒。タップで切り替え',
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: _turn,
+        onPanEnd: (details) {
+          if (details.velocity.pixelsPerSecond.distance > 80) _turn();
+        },
+        child: SizedBox.square(
+          dimension: _size,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0x4D000000),
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0x59FFFFFF), width: 1.5),
+            ),
+            child: AnimatedRotation(
+              turns: turns,
+              duration: const Duration(milliseconds: 420),
+              curve: const Cubic(0.3, 1.35, 0.5, 1),
+              child: Stack(
+                children: [
+                  for (var i = 0; i < _options.length; i++)
+                    Align(
+                      // a quarter turn apart on the ring, starting at the top
+                      alignment: i == 0
+                          ? const Alignment(0, -0.62)
+                          : const Alignment(0.62, 0),
+                      child: AnimatedRotation(
+                        turns: -turns,
+                        duration: const Duration(milliseconds: 420),
+                        curve: const Cubic(0.3, 1.35, 0.5, 1),
+                        child: AnimatedDefaultTextStyle(
+                          duration: const Duration(milliseconds: 200),
+                          style: TextStyle(
+                            color: i == index
+                                ? Colors.white
+                                : const Color(0x99FFFFFF),
+                            fontSize: i == index ? 17 : 11,
+                            fontWeight: FontWeight.w800,
+                          ),
+                          child: Text('${_options[i] ~/ 1000000}秒'),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 final class _CapturePreview extends StatelessWidget {
@@ -540,7 +585,7 @@ final class _CapturePreview extends StatelessWidget {
         child: Text(
           testFixture ? 'TEST カメラプレビュー' : 'カメラ映像',
           style: const TextStyle(
-            color: Color(0xFFF8EFE6),
+            color: Color(0xFFF1F1F1),
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -554,11 +599,13 @@ final class _GlassIconButton extends StatelessWidget {
     required this.icon,
     required this.tooltip,
     required this.onPressed,
+    this.size = 44,
   });
 
   final IconData icon;
   final String tooltip;
   final VoidCallback? onPressed;
+  final double size;
 
   @override
   Widget build(BuildContext context) => IconButton(
@@ -567,9 +614,9 @@ final class _GlassIconButton extends StatelessWidget {
     style: IconButton.styleFrom(
       backgroundColor: const Color(0x4D000000),
       foregroundColor: Colors.white,
-      minimumSize: const Size.square(44),
+      minimumSize: Size.square(size),
     ),
-    icon: Icon(icon, size: 22),
+    icon: Icon(icon, size: size * 0.46),
   );
 }
 

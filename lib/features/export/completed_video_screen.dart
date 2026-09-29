@@ -126,7 +126,7 @@ class _CompletedVideoScreenState extends State<CompletedVideoScreen> {
                     side: BorderSide(
                       color: version == _active
                           ? AppTokens.coral
-                          : const Color(0xFFE7DCD2),
+                          : const Color(0xFFE9E9E9),
                     ),
                   );
                 },
@@ -245,7 +245,7 @@ class _CompletedVideoScreenState extends State<CompletedVideoScreen> {
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
         decoration: const BoxDecoration(
           color: AppTokens.surfaceColor,
-          border: Border(top: BorderSide(color: Color(0xFFE7DCD2))),
+          border: Border(top: BorderSide(color: Color(0xFFE9E9E9))),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,

@@ -10,7 +10,7 @@ class ClipboardChrome extends StatelessWidget {
       gradient: const LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: [Color(0xFFFFFCF3), Color(0xFFF6E9D2)],
+        colors: [Color(0xFFFFFFFF), Color(0xFFF6E9D2)],
       ),
       borderRadius: BorderRadius.circular(28),
       boxShadow: const [

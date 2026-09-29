@@ -7,7 +7,7 @@ class PlaybackChrome extends StatelessWidget {
   @override
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(
-      color: const Color(0xFFFBF4EA),
+      color: const Color(0xFFF1F1F1),
       border: Border.all(color: const Color(0xFFE8DCCB)),
       borderRadius: BorderRadius.circular(18),
       boxShadow: const [

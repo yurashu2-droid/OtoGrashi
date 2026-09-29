@@ -10,13 +10,14 @@ abstract final class AppTokens {
 
   static const seedColor = Color(0xFFEF716C);
   static const surfaceColor = Color(0xFFF9F9F9);
-  static const coral = Color(0xFFEF716C);
+  // Older screens call the accent "coral"; it now resolves to the pale red.
+  static const coral = Color(0xFFF08F89);
   static const ink = Color(0xFF333333);
   static const mutedInk = Color(0xFF8A8A8A);
   static const hairline = Color(0xFFE9E9E9);
   static const tile = Color(0xFFF1F1F1);
-  static const lavender = Color(0xFFB9A0FF);
-  static const paper = Color(0xFFFFF4E7);
+  static const lavender = Color(0xFF9C84F0);
+  static const paper = Color(0xFFF1F1F1);
 
   /// The one accent: a pale red used sparingly (capture, live states).
   static const blush = Color(0xFFF08F89);

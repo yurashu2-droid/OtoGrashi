@@ -493,8 +493,8 @@ final class _StockViewSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     decoration: BoxDecoration(
-      color: const Color(0xFFFFFEFB),
-      border: Border.all(color: const Color(0xFFE7DCD2)),
+      color: const Color(0xFFFFFFFF),
+      border: Border.all(color: const Color(0xFFE9E9E9)),
       borderRadius: BorderRadius.circular(10),
     ),
     clipBehavior: Clip.antiAlias,
@@ -510,7 +510,7 @@ final class _StockViewSelector extends StatelessWidget {
         ),
         const SizedBox(
           height: 28,
-          child: VerticalDivider(width: 1, color: Color(0xFFE7DCD2)),
+          child: VerticalDivider(width: 1, color: Color(0xFFE9E9E9)),
         ),
         _StockViewOption(
           label: '小',
@@ -634,12 +634,12 @@ class _ProjectCardState extends State<_ProjectCard> {
     final editedAt = project.updatedAt.toLocal();
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
-      color: const Color(0xFFFFFEFB),
+      color: const Color(0xFFFFFFFF),
       elevation: 2,
-      shadowColor: const Color(0x228D6B5B),
+      shadowColor: const Color(0x0F000000),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(15),
-        side: const BorderSide(color: Color(0xFFE7DCD2)),
+        side: const BorderSide(color: Color(0xFFE9E9E9)),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -979,12 +979,12 @@ class _AssetCardState extends State<_AssetCard> {
     }
     return Card(
       margin: const EdgeInsets.only(top: 12),
-      color: const Color(0xFFFFFEFB),
+      color: const Color(0xFFFFFFFF),
       elevation: 2,
-      shadowColor: const Color(0x228D6B5B),
+      shadowColor: const Color(0x0F000000),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: Color(0xFFE7DCD2)),
+        side: const BorderSide(color: Color(0xFFE9E9E9)),
       ),
       clipBehavior: Clip.antiAlias,
       child: SizedBox(
@@ -1087,7 +1087,7 @@ class _AssetCardState extends State<_AssetCard> {
                     Expanded(
                       child: Container(
                         decoration: BoxDecoration(
-                          color: const Color(0xFFFFF8F1),
+                          color: const Color(0xFFFFFFFF),
                           borderRadius: BorderRadius.circular(7),
                         ),
                         child: FutureBuilder<AudioWaveform>(
@@ -1147,12 +1147,12 @@ class _AssetCardState extends State<_AssetCard> {
     String name,
   ) => Card(
     margin: EdgeInsets.zero,
-    color: const Color(0xFFFFFEFB),
+    color: const Color(0xFFFFFFFF),
     elevation: 2,
-    shadowColor: const Color(0x228D6B5B),
+    shadowColor: const Color(0x0F000000),
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(12),
-      side: const BorderSide(color: Color(0xFFE7DCD2)),
+      side: const BorderSide(color: Color(0xFFE9E9E9)),
     ),
     clipBehavior: Clip.antiAlias,
     child: AspectRatio(

@@ -540,13 +540,16 @@ class _CollectScreen extends StatelessWidget {
               Align(
                 alignment: Alignment.centerLeft,
                 child: Transform.rotate(
-                  angle: -0.035,
+                  angle: 0,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 6,
                     ),
-                    color: AppTokens.paper,
+                    decoration: BoxDecoration(
+                      color: AppTokens.blushSoft,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
                     child: const Text(
                       'STEP 1  /  音の採集ノート',
                       style: TextStyle(
@@ -583,12 +586,8 @@ class _CollectScreen extends StatelessWidget {
                             height: 6,
                             decoration: BoxDecoration(
                               color: index < clipCount
-                                  ? index < 3
-                                        ? AppTokens.coral
-                                        : AppTokens.lavender
-                                  : index < 3
-                                  ? const Color(0xFFE9E1DA)
-                                  : AppTokens.lavender.withValues(alpha: 0.32),
+                                  ? AppTokens.soundColor(index)
+                                  : AppTokens.hairline,
                               borderRadius: BorderRadius.circular(3),
                             ),
                           ),
@@ -632,8 +631,7 @@ class _CollectScreen extends StatelessWidget {
                 ),
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFFE9E1DA)),
+                  borderRadius: BorderRadius.circular(AppTokens.tileRadius),
                 ),
                 child: Column(
                   children: [
@@ -739,8 +737,8 @@ class _CollectScreen extends StatelessWidget {
                       icon: const Icon(Icons.videocam_outlined),
                       label: const Text('今撮る'),
                       style: FilledButton.styleFrom(
-                        backgroundColor: AppTokens.coral,
-                        foregroundColor: AppTokens.ink,
+                        backgroundColor: AppTokens.ink,
+                        foregroundColor: Colors.white,
                       ),
                     ),
                   ),

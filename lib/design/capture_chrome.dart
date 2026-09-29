@@ -112,7 +112,7 @@ class _CaptureChromePainter extends CustomPainter {
       Rect.fromLTWH(0, size.height - 18, size.width, 18),
       Paint()
         ..shader = const LinearGradient(
-          colors: [Color(0xFFFFF4E3), Color(0xFFEBD7BC)],
+          colors: [Color(0xFFF1F1F1), Color(0xFFEBD7BC)],
         ).createShader(Rect.fromLTWH(0, size.height - 18, size.width, 18)),
     );
   }
