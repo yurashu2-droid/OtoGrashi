@@ -738,6 +738,11 @@ void main() {
       media.renderRequests.last.arrangement.melodyTemplate,
       MelodyTemplate.answer,
     );
+    // the requested render completes asynchronously; on a busy runner it can
+    // land just after the fixed wait above
+    for (var i = 0; i < 100 && controller.state.preview == null; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
     expect(controller.state.preview, isNotNull);
     expect(controller.state.preview!.revision, projects.project!.revision);
   });
