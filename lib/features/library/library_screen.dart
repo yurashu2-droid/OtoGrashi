@@ -633,13 +633,11 @@ class _ProjectCardState extends State<_ProjectCard> {
     final finished = widget.completed.isNotEmpty;
     final editedAt = project.updatedAt.toLocal();
     return Card(
-      margin: const EdgeInsets.only(bottom: 16),
-      color: const Color(0xFFFFFFFF),
-      elevation: 2,
-      shadowColor: const Color(0x0F000000),
+      margin: const EdgeInsets.only(bottom: 14),
+      color: Colors.white,
+      elevation: 0,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(15),
-        side: const BorderSide(color: Color(0xFFE9E9E9)),
+        borderRadius: BorderRadius.circular(AppTokens.tileRadius),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -671,23 +669,11 @@ class _ProjectCardState extends State<_ProjectCard> {
                   ),
                 ),
                 Positioned(
-                  top: -2,
-                  right: 25,
-                  child: Transform.rotate(
-                    angle: -.10,
-                    child: const SizedBox(
-                      width: 58,
-                      height: 17,
-                      child: ColoredBox(color: Color(0xCFFFEBC6)),
-                    ),
-                  ),
-                ),
-                Positioned(
                   left: 14,
                   top: 14,
                   child: _StatusPill(
                     text: finished ? '完成' : '制作中',
-                    color: finished ? AppTokens.coral : AppTokens.lavender,
+                    color: finished ? AppTokens.ink : AppTokens.blush,
                   ),
                 ),
                 if (finished && widget.onView != null)
@@ -734,6 +720,22 @@ class _ProjectCardState extends State<_ProjectCard> {
               ],
             ),
           ),
+          // one stripe per sound, like the folder cards
+          SizedBox(
+            height: 6,
+            child: Row(
+              children: [
+                for (var i = 0; i < project.clipIds.length.clamp(1, 12); i++)
+                  Expanded(
+                    child: ColoredBox(
+                      color: project.clipIds.isEmpty
+                          ? AppTokens.tile
+                          : AppTokens.soundColor(i),
+                    ),
+                  ),
+              ],
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(15, 10, 12, 14),
             child: Column(
@@ -776,7 +778,7 @@ class _ProjectCardState extends State<_ProjectCard> {
                           icon: const Icon(Icons.play_arrow_rounded),
                           label: const Text('動画を見る'),
                           style: FilledButton.styleFrom(
-                            backgroundColor: AppTokens.coral,
+                            backgroundColor: AppTokens.ink,
                             foregroundColor: Colors.white,
                             minimumSize: const Size(0, 48),
                           ),
