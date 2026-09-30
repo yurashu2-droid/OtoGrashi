@@ -1128,8 +1128,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // the preview now sits below the used sounds and song choices
-    await tester.ensureVisible(find.text('見くらべる'));
+    // the preview now sits below the used sounds and song choices, outside
+    // the lazily built first screen of the list
+    await tester.scrollUntilVisible(
+      find.text('見くらべる'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('見くらべる'));
     await tester.pumpAndSettle();
