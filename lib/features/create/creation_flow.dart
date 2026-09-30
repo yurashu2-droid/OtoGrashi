@@ -12,10 +12,12 @@ import '../../domain/melody_template.dart';
 import '../../domain/project.dart';
 import '../../domain/video_recipe.dart';
 import '../arrange/adjustments_sheet.dart';
+import '../home/folder_screen.dart';
 import '../home/home_screen.dart';
 import '../library/library_screen.dart';
 import '../settings/settings_screen.dart';
 import '../songs/songs_screen.dart';
+import '../../storage/folder_repository.dart';
 import '../../storage/project_repository.dart';
 import '../../features/capture/capture_controller.dart';
 import '../../features/capture/capture_screen.dart';
@@ -38,6 +40,7 @@ class CreationFlow extends StatefulWidget {
     this.delivery,
     this.startWithCapture = false,
     this.startInLibrary = false,
+    this.folders,
     super.key,
   });
 
@@ -46,6 +49,7 @@ class CreationFlow extends StatefulWidget {
   final MediaDeliveryGateway? delivery;
   final bool startWithCapture;
   final bool startInLibrary;
+  final FolderRepository? folders;
 
   @override
   State<CreationFlow> createState() => _CreationFlowState();
@@ -124,6 +128,8 @@ class _CreationFlowState extends State<CreationFlow> {
   // Home shows the folder list; the current folder opens on top of it.
   var _folderOpen = true;
   var _capturing = false;
+  // the folder the last recording went into, offered first next time
+  String? _destinationId;
 
   @override
   void didChangeDependencies() {
@@ -134,8 +140,26 @@ class _CreationFlowState extends State<CreationFlow> {
     }
   }
 
-  Future<void> _openCapture({bool fromPhotos = false}) async {
+  /// Records a sound. From the collection (no [folder]) it joins いま集めてる音
+  /// while there is room; it is always filed into the chosen folder too.
+  /// From a folder it goes only into that folder.
+  Future<void> _openCapture({bool fromPhotos = false, SoundFolder? folder}) async {
     final before = widget.controller.state.clips.map((clip) => clip.id).toSet();
+    final folders = widget.folders;
+    var destinations = const <SoundFolder>[];
+    if (folders != null) {
+      destinations = await folders.list();
+      if (destinations.isEmpty) {
+        destinations = [await folders.create(SqliteFolderRepository.starterTitle)];
+      }
+    }
+    if (!mounted) return;
+    final ids = destinations.map((d) => d.id).toSet();
+    var destination =
+        folder?.id ??
+        (ids.contains(_destinationId) ? _destinationId : null) ??
+        destinations.firstOrNull?.id;
+    final intoCollection = folder == null;
     await Navigator.of(context).push<void>(
       // A fade, so the shutter (a Hero shared with the tab bar's mic ball)
       // is what visibly travels and grows into place.
@@ -151,10 +175,30 @@ class _CreationFlowState extends State<CreationFlow> {
           presentation: widget.controller.presentation,
           fromPhotos: fromPhotos,
           recordedClipCount: widget.controller.state.clips.length,
+          destinations: [for (final d in destinations) (id: d.id, title: d.title)],
+          initialDestination: destination,
+          onDestination: (id) {
+            destination = id;
+            _destinationId = id;
+          },
           onCommit: (captured) async {
-            final added = await widget.controller.addCaptured(captured);
-            if (added && mounted) unawaited(HapticFeedback.selectionClick());
-            return added;
+            final controller = widget.controller;
+            String? newId;
+            if (intoCollection && controller.state.clips.length < 6) {
+              if (await controller.addCaptured(captured)) {
+                newId = controller.state.clips.last.id;
+              }
+            } else {
+              newId = (await controller.importCaptured(captured))?.id;
+            }
+            if (newId == null) return false;
+            final target = destination;
+            if (folders != null && target != null) {
+              await folders.addAsset(target, newId);
+              _destinationId = target;
+            }
+            if (mounted) unawaited(HapticFeedback.selectionClick());
+            return true;
           },
         ),
         fullscreenDialog: true,
@@ -237,6 +281,40 @@ class _CreationFlowState extends State<CreationFlow> {
       person.dispose();
       sound.dispose();
     }
+  }
+
+  Future<void> _openFolder(SoundFolder folder) async {
+    final folders = widget.folders;
+    if (folders == null) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => FolderScreen(
+          folder: folder,
+          folders: folders,
+          assets: widget.controller.assets,
+          presentation: widget.controller.presentation,
+          onCapture: (target) => _openCapture(folder: target),
+          onMakeSong: _makeSongFrom,
+        ),
+      ),
+    );
+  }
+
+  /// A song from a folder: those sounds become the collection, and the song
+  /// settings open (nothing is made until つくる).
+  Future<void> _makeSongFrom(List<ClipAsset> sounds) async {
+    final controller = widget.controller;
+    controller.startNew();
+    for (final sound in sounds.take(6)) {
+      await controller.addExisting(sound);
+    }
+    if (!mounted) return;
+    setState(() {
+      _tabIndex = 0;
+      _folderOpen = true;
+    });
+    controller.beginChoosing();
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   Future<void> _openProject(Project project) async {
@@ -393,6 +471,8 @@ class _CreationFlowState extends State<CreationFlow> {
         presentation: widget.controller.presentation,
         ownerName: widget.controller.ownerName,
         onOpenCurrent: () => setState(() => _folderOpen = true),
+        folders: widget.folders,
+        onOpenFolder: _openFolder,
         onAssetSelected: (asset) => unawaited(_reuseAsset(asset)),
         onSettings: _openSettings,
       );
@@ -1728,18 +1808,25 @@ class _CaptureRoute extends StatefulWidget {
     required this.fromPhotos,
     required this.recordedClipCount,
     required this.onCommit,
+    this.destinations = const [],
+    this.initialDestination,
+    this.onDestination,
   });
   final MediaGateway media;
   final MediaPresentationGateway presentation;
   final bool fromPhotos;
   final int recordedClipCount;
   final Future<bool> Function(CapturedMedia) onCommit;
+  final List<CaptureDestination> destinations;
+  final String? initialDestination;
+  final ValueChanged<String>? onDestination;
 
   @override
   State<_CaptureRoute> createState() => _CaptureRouteState();
 }
 
 class _CaptureRouteState extends State<_CaptureRoute> {
+  late String? _destination = widget.initialDestination;
   bool _committed = false;
   bool _saving = false;
   String? _saveError;
@@ -1847,6 +1934,12 @@ class _CaptureRouteState extends State<_CaptureRoute> {
       addError: _saveError,
       recordedClipCount: widget.recordedClipCount,
       onMediaReady: () => unawaited(_commit()),
+      destinations: widget.destinations,
+      destinationId: _destination,
+      onDestination: (id) {
+        setState(() => _destination = id);
+        widget.onDestination?.call(id);
+      },
     ),
   );
 }

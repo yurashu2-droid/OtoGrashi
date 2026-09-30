@@ -159,6 +159,23 @@ final class ProjectDatabase {
           relative_path TEXT NOT NULL,
           created_at TEXT NOT NULL
         ) STRICT
+      ''')
+      // Folders ("〇〇のオトグラシ") hold any number of sounds; a song still
+      // picks its sounds from them into a project.
+      ..execute('''
+        CREATE TABLE IF NOT EXISTS folders (
+          id TEXT NOT NULL PRIMARY KEY,
+          title TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        ) STRICT
+      ''')
+      ..execute('''
+        CREATE TABLE IF NOT EXISTS folder_assets (
+          folder_id TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          added_at TEXT NOT NULL,
+          PRIMARY KEY (folder_id, asset_id)
+        ) STRICT
       ''');
     final projectColumns = _connection
         .select("PRAGMA table_info('projects')")

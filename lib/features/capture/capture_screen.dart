@@ -12,6 +12,9 @@ import '../export/media_playback.dart';
 import 'capture_controller.dart';
 import 'capture_state.dart';
 
+/// A folder a recording can be filed into.
+typedef CaptureDestination = ({String id, String title});
+
 final class CaptureScreen extends StatefulWidget {
   const CaptureScreen({
     required this.controller,
@@ -21,6 +24,9 @@ final class CaptureScreen extends StatefulWidget {
     this.addError,
     this.recordedClipCount = 0,
     this.testFixture = false,
+    this.destinations = const [],
+    this.destinationId,
+    this.onDestination,
     super.key,
   });
 
@@ -31,6 +37,11 @@ final class CaptureScreen extends StatefulWidget {
   final String? addError;
   final int recordedClipCount;
   final bool testFixture;
+
+  /// Folders the recording can go into, shown as chips over the camera.
+  final List<CaptureDestination> destinations;
+  final String? destinationId;
+  final ValueChanged<String>? onDestination;
 
   @override
   State<CaptureScreen> createState() => _CaptureScreenState();
@@ -203,9 +214,19 @@ final class _CaptureScreenState extends State<CaptureScreen> {
                       left: 0,
                       right: 0,
                       bottom: 0,
-                      child: completed
-                          ? _reviewActions()
-                          : _shutterActions(state),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (widget.destinations.isNotEmpty &&
+                              state.phase != CapturePhase.recording)
+                            _DestinationChips(
+                              destinations: widget.destinations,
+                              selectedId: widget.destinationId,
+                              onSelected: widget.onDestination,
+                            ),
+                          completed ? _reviewActions() : _shutterActions(state),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -665,4 +686,72 @@ final class _GlassPill extends StatelessWidget {
       child: GestureDetector(onTap: onPressed, child: body),
     );
   }
+}
+
+/// Which folder the recording goes into: a row of glass pills.
+final class _DestinationChips extends StatelessWidget {
+  const _DestinationChips({
+    required this.destinations,
+    required this.selectedId,
+    required this.onSelected,
+  });
+
+  final List<CaptureDestination> destinations;
+  final String? selectedId;
+  final ValueChanged<String>? onSelected;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 40,
+    child: ListView.separated(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      itemCount: destinations.length + 1,
+      separatorBuilder: (_, _) => const SizedBox(width: 6),
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.only(right: 2),
+              child: Text(
+                '入れる先',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  shadows: [Shadow(color: Color(0x66000000), blurRadius: 6)],
+                ),
+              ),
+            ),
+          );
+        }
+        final destination = destinations[index - 1];
+        final selected = destination.id == selectedId;
+        return Semantics(
+          button: true,
+          selected: selected,
+          child: GestureDetector(
+            onTap: () => onSelected?.call(destination.id),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected ? Colors.white : const Color(0x4D000000),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                destination.title,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: selected ? AppTokens.ink : Colors.white,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
 }

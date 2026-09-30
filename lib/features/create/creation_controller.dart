@@ -306,6 +306,19 @@ final class CreationController extends ChangeNotifier {
     }
   }
 
+  /// Keeps a recording as a sound (for a folder) without adding it to the
+  /// current collection.
+  Future<ClipAsset?> importCaptured(CapturedMedia captured) async {
+    if (_disposed) return null;
+    final asset = await assets.importManagedStaging(captured.relativePath);
+    try {
+      await media.discardStaged(captured.relativePath);
+    } catch (_) {
+      // The managed staging folder is cleaned on the next launch.
+    }
+    return asset;
+  }
+
   Future<void> addExisting(ClipAsset asset) async {
     if (_disposed ||
         _state.clips.length >= 6 ||

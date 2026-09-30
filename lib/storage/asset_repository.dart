@@ -241,9 +241,11 @@ final class SqliteAssetRepository implements AssetRepository {
           SELECT 1 FROM project_assets
           INNER JOIN projects ON projects.id = project_assets.project_id
           WHERE project_assets.asset_id = ? AND projects.deleted_at IS NULL
+        ) AND NOT EXISTS (
+          SELECT 1 FROM folder_assets WHERE folder_assets.asset_id = ?
         )
         ''',
-        <Object?>[assetId, assetId],
+        <Object?>[assetId, assetId, assetId],
       );
       if (rows.isEmpty) {
         return;
@@ -256,9 +258,11 @@ final class SqliteAssetRepository implements AssetRepository {
           SELECT 1 FROM project_assets
           INNER JOIN projects ON projects.id = project_assets.project_id
           WHERE project_assets.asset_id = ? AND projects.deleted_at IS NULL
+        ) AND NOT EXISTS (
+          SELECT 1 FROM folder_assets WHERE folder_assets.asset_id = ?
         )
         ''',
-        <Object?>[assetId, assetId],
+        <Object?>[assetId, assetId, assetId],
       );
     });
     if (relativePath != null) {

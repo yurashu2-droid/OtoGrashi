@@ -169,6 +169,7 @@ class _CreationHostState extends State<_CreationHost> {
         media: dependencies.media,
         startWithCapture: _startWithCapture,
         startInLibrary: _startInLibrary,
+        folders: dependencies.folders,
       );
     }
     return OnboardingScreen(

@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -15,6 +16,7 @@ final class SoundRow extends StatelessWidget {
     required this.seconds,
     required this.seed,
     this.waveform,
+    this.thumbnail,
     this.trailing,
     this.caption,
     super.key,
@@ -26,6 +28,9 @@ final class SoundRow extends StatelessWidget {
   final double seconds;
   final int seed;
   final Future<AudioWaveform>? waveform;
+
+  /// The recording's frame; without one the row shows a numbered dot.
+  final Future<Uint8List>? thumbnail;
   final Widget? trailing;
   final String? caption;
 
@@ -34,20 +39,23 @@ final class SoundRow extends StatelessWidget {
     padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
     child: Row(
       children: [
-        Container(
-          width: 30,
-          height: 30,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          child: Text(
-            '$number',
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w800,
-              fontSize: 13,
+        if (thumbnail != null)
+          SoundThumb(thumbnail: thumbnail, color: color, number: number)
+        else
+          Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            child: Text(
+              '$number',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+              ),
             ),
           ),
-        ),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
@@ -139,4 +147,68 @@ final class SoundBarsPainter extends CustomPainter {
   @override
   bool shouldRepaint(SoundBarsPainter oldDelegate) =>
       oldDelegate.color != color || !identical(oldDelegate.levels, levels);
+}
+
+/// A sound's photo with its number badge in the sound's colour.
+final class SoundThumb extends StatelessWidget {
+  const SoundThumb({
+    required this.thumbnail,
+    required this.color,
+    required this.number,
+    this.size = 44,
+    super.key,
+  });
+
+  final Future<Uint8List>? thumbnail;
+  final Color color;
+  final int number;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: size,
+    child: Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Positioned.fill(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(size * 0.24),
+            child: FutureBuilder<Uint8List>(
+              future: thumbnail,
+              builder: (context, snapshot) => snapshot.hasData
+                  ? Image.memory(
+                      snapshot.data!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) =>
+                          ColoredBox(color: color.withValues(alpha: 0.35)),
+                    )
+                  : ColoredBox(color: color.withValues(alpha: 0.35)),
+            ),
+          ),
+        ),
+        Positioned(
+          left: -4,
+          top: -4,
+          child: Container(
+            width: 22,
+            height: 22,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white, width: 1.5),
+            ),
+            child: Text(
+              '$number',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }
