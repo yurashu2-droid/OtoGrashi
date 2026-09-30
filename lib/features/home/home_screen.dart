@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../../design/tokens.dart';
+import '../../design/wordmark.dart';
 import '../../domain/clip_asset.dart';
 import '../../media/media_presentation_gateway.dart';
 import '../../storage/asset_repository.dart';
@@ -145,14 +146,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'オトグラシ',
-                            style: TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.w800,
-                              color: AppTokens.ink,
-                            ),
-                          ),
+                          const OtoWordmark(),
+                          const SizedBox(height: 4),
                           Text(
                             owner == null || owner.isEmpty
                                 ? '毎日の音を、フォルダにあつめる'
@@ -170,6 +165,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                   ],
                 ),
+                if (widget.currentClips.isNotEmpty) ...[
+                  const SizedBox(height: 18),
+                  _DraftSongCard(
+                    thumbs: [
+                      for (final clip in widget.currentClips) _thumb(clip),
+                    ],
+                    onTap: widget.onOpenCurrent,
+                  ),
+                ],
                 const SizedBox(height: 20),
                 const _SectionLabel('フォルダ'),
                 const SizedBox(height: 10),
@@ -179,18 +183,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     scrollDirection: Axis.horizontal,
                     clipBehavior: Clip.none,
                     children: [
-                      _FolderCard(
-                        title: 'いま集めてる音',
-                        caption: '${widget.currentClips.length}/6つ · 曲づくり中',
-                        tiles: [
-                          for (final clip in widget.currentClips.take(4))
-                            _thumb(clip),
-                        ],
-                        colorCount: widget.currentClips.length,
-                        live: true,
-                        onTap: widget.onOpenCurrent,
-                      ),
-                      const SizedBox(width: 12),
                       for (final folder
                           in data?.folders ?? const <SoundFolder>[]) ...[
                         _FolderCard(
@@ -252,7 +244,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             trailing: widget.onAssetSelected == null
                                 ? null
                                 : IconButton(
-                                    tooltip: 'いま集めてる音に入れる',
+                                    tooltip: 'つくりかけの曲に入れる',
                                     onPressed: () => widget.onAssetSelected!(
                                       data.recent[i],
                                     ),
@@ -448,6 +440,86 @@ final class _NewFolderCard extends StatelessWidget {
                 color: AppTokens.mutedInk,
               ),
             ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// The song in progress: its sounds in a row, one tap to carry on.
+final class _DraftSongCard extends StatelessWidget {
+  const _DraftSongCard({required this.thumbs, required this.onTap});
+
+  final List<Future<Uint8List>?> thumbs;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: 'つくりかけの曲 ${thumbs.length}/6つの音',
+    child: GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(AppTokens.tileRadius),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: const BoxDecoration(
+                          color: AppTokens.blush,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      const Text(
+                        'つくりかけの曲',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: AppTokens.ink,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${thumbs.length}/6つの音',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppTokens.mutedInk,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      for (var i = 0; i < thumbs.length; i++)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: SoundThumb(
+                            thumbnail: thumbs[i],
+                            color: AppTokens.soundColor(i),
+                            number: i + 1,
+                            size: 40,
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: AppTokens.mutedInk),
           ],
         ),
       ),

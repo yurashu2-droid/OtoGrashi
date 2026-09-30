@@ -212,3 +212,27 @@ final class SoundThumb extends StatelessWidget {
     ),
   );
 }
+
+/// A user tag on a sound ("海", "1日目"…).
+final class SoundTagChip extends StatelessWidget {
+  const SoundTagChip(this.label, {super.key});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+    decoration: BoxDecoration(
+      color: AppTokens.surfaceColor,
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: AppTokens.hairline),
+    ),
+    child: Text(
+      label,
+      style: const TextStyle(
+        fontSize: 10,
+        fontWeight: FontWeight.w800,
+        color: AppTokens.mutedInk,
+      ),
+    ),
+  );
+}

@@ -76,6 +76,35 @@ void main() {
     await folders.delete(folder.id);
     expect((await folders.list()).where((f) => f.id == folder.id), isEmpty);
   });
+
+  test('tags, moving, trimming and removing a sound everywhere', () async {
+    final trip = await folders.create('旅');
+    final friends = await folders.create('いつメン');
+    final id = await importSound('wave');
+    await folders.addAsset(trip.id, id);
+
+    await folders.setTags(id, ['海', ' 声 ', '', '海']);
+    expect((await folders.tagsFor([id]))[id], ['海', '声']);
+    await folders.setTags(id, const []);
+    expect(await folders.tagsFor([id]), isEmpty);
+
+    await folders.moveAsset(id, trip.id, friends.id);
+    final listed = await folders.list();
+    expect(listed.singleWhere((f) => f.id == trip.id).assetIds, isEmpty);
+    expect(listed.singleWhere((f) => f.id == friends.id).assetIds, [id]);
+
+    await folders.setSelection(id, 500000, 1000000);
+    final trimmed = await assets.load(id);
+    expect(trimmed!.selectionStartUs, 500000);
+    expect(trimmed.selectionDurationUs, 1000000);
+    // past the end of the recording is ignored
+    await folders.setSelection(id, 2500000, 1000000);
+    expect((await assets.load(id))!.selectionStartUs, 500000);
+
+    await folders.removeEverywhere(id);
+    await assets.deleteUnreferenced(id);
+    expect(await assets.load(id), isNull);
+  });
 }
 
 final class _Inspector implements AssetInspector {

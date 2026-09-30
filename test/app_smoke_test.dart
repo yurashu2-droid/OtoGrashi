@@ -90,6 +90,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // launch lands on Home; the song in progress is one tap away
+    expect(find.text('つくりかけの曲'), findsOneWidget);
+    await tester.tap(find.text('つくりかけの曲'));
+    await tester.pumpAndSettle();
+
     expect(find.text('1/6'), findsOneWidget);
     expect(find.text('typing'), findsOneWidget);
     expect(find.text('cup'), findsNothing);

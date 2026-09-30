@@ -41,6 +41,7 @@ class CreationFlow extends StatefulWidget {
     this.startWithCapture = false,
     this.startInLibrary = false,
     this.folders,
+    this.startAtHome = false,
     super.key,
   });
 
@@ -50,6 +51,9 @@ class CreationFlow extends StatefulWidget {
   final bool startWithCapture;
   final bool startInLibrary;
   final FolderRepository? folders;
+
+  /// Open on Home rather than inside the song in progress.
+  final bool startAtHome;
 
   @override
   State<CreationFlow> createState() => _CreationFlowState();
@@ -126,7 +130,7 @@ class _CreationFlowState extends State<CreationFlow> {
   var _captureOpened = false;
   late int _tabIndex = widget.startInLibrary ? 1 : 0;
   // Home shows the folder list; the current folder opens on top of it.
-  var _folderOpen = true;
+  late var _folderOpen = !widget.startAtHome;
   var _capturing = false;
   // the folder the last recording went into, offered first next time
   String? _destinationId;
@@ -603,11 +607,11 @@ class _CollectScreen extends StatelessWidget {
       appBar: AppBar(
         leading: IconButton(
           onPressed: onBack,
-          tooltip: 'フォルダ一覧',
+          tooltip: 'ホーム',
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
         ),
         title: const Text(
-          'いま集めてる音',
+          'つくりかけの曲',
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
         actions: [

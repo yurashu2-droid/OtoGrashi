@@ -176,6 +176,13 @@ final class ProjectDatabase {
           added_at TEXT NOT NULL,
           PRIMARY KEY (folder_id, asset_id)
         ) STRICT
+      ''')
+      ..execute('''
+        CREATE TABLE IF NOT EXISTS asset_tags (
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          tag TEXT NOT NULL,
+          PRIMARY KEY (asset_id, tag)
+        ) STRICT
       ''');
     final projectColumns = _connection
         .select("PRAGMA table_info('projects')")
