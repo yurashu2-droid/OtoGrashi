@@ -64,8 +64,13 @@ class PerformanceControls extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          '音と映像のあそび方',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+          'つくり方',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.5,
+            color: AppTokens.mutedInk,
+          ),
         ),
         const SizedBox(height: 10),
         Wrap(
@@ -75,15 +80,21 @@ class PerformanceControls extends StatelessWidget {
             for (final option in PerformanceMode.values)
               ChoiceChip(
                 label: Text(labels[option]!.$1),
-                avatar: Icon(labels[option]!.$2, size: 17),
+                avatar: Icon(
+                  labels[option]!.$2,
+                  size: 17,
+                  color: mode == option ? Colors.white : AppTokens.ink,
+                ),
                 selected: mode == option,
                 onSelected: (_) => onMode(option),
-                selectedColor: AppTokens.coral.withValues(alpha: .16),
+                shape: const StadiumBorder(),
+                side: BorderSide.none,
+                backgroundColor: AppTokens.tile,
+                selectedColor: AppTokens.ink,
                 showCheckmark: false,
                 labelStyle: TextStyle(
-                  fontWeight: mode == option
-                      ? FontWeight.w800
-                      : FontWeight.w500,
+                  fontWeight: FontWeight.w800,
+                  color: mode == option ? Colors.white : AppTokens.ink,
                 ),
               ),
           ],

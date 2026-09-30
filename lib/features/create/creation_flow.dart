@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,7 +29,6 @@ import '../export/media_playback.dart';
 import 'beat_building_preview.dart';
 import 'performance_controls.dart';
 import 'clip_card.dart';
-import 'melody_template_card.dart';
 import 'creation_controller.dart';
 import 'making_screen.dart';
 
@@ -956,8 +956,6 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
   final ScrollController _scrollController = ScrollController(
     keepScrollOffset: false,
   );
-  final ScrollController _melodyScrollController = ScrollController();
-  bool _melodyPositioned = false;
   late final MediaPlaybackController playback = MediaPlaybackController(
     widget.controller.presentation,
   );
@@ -965,7 +963,6 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
   @override
   void dispose() {
     _scrollController.dispose();
-    _melodyScrollController.dispose();
     unawaited(playback.pause());
     playback.dispose();
     super.dispose();
@@ -1074,7 +1071,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
     final path = state.preview?.relativePath;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('音づくり'),
+        title: const Text('曲をつくる'),
         centerTitle: true,
         leading: IconButton(
           onPressed: widget.controller.editClips,
@@ -1087,40 +1084,19 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
           controller: _scrollController,
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 30),
           children: [
-            const Text(
-              'STEP 2  /  音の変化を聴く',
-              style: TextStyle(
-                color: AppTokens.coral,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.1,
-              ),
+            _UsedSounds(
+              clips: state.clips,
+              thumbnails: state.thumbnails,
+              onRename: _renameSounds,
             ),
-            const SizedBox(height: 7),
-            Text(
-              'さっきの場面が、\n曲になっていく。',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 18),
-            Row(
-              children: [
-                const Text(
-                  '曲のかたち',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'スワイプで選ぶ・音程は自動',
-                    textAlign: TextAlign.end,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-              ],
-            ),
+            const SizedBox(height: 20),
+            const _SectionLabel('曲'),
             const SizedBox(height: 8),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                const melodies = <MelodyTemplate>[
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final melody in const <MelodyTemplate>[
                   MelodyTemplate.midiScore,
                   MelodyTemplate.hop,
                   MelodyTemplate.wink,
@@ -1132,45 +1108,19 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
                   MelodyTemplate.fate,
                   MelodyTemplate.canon,
                   MelodyTemplate.none,
-                ];
-                final cardWidth = (constraints.maxWidth - 24) / 2;
-                final selectedIndex = melodies.indexOf(state.melody);
-                if (!_melodyPositioned && selectedIndex > 0) {
-                  _melodyPositioned = true;
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (!_melodyScrollController.hasClients) return;
-                    final target = (selectedIndex - 1) * (cardWidth + 8);
-                    _melodyScrollController.jumpTo(
-                      target.clamp(
-                        0,
-                        _melodyScrollController.position.maxScrollExtent,
-                      ),
-                    );
-                  });
-                }
-                final textScale =
-                    MediaQuery.textScalerOf(context).scale(16) / 16;
-                return SizedBox(
-                  height: 140 + (textScale - 1).clamp(0, 2) * 48,
-                  child: ListView.separated(
-                    controller: _melodyScrollController,
-                    scrollDirection: Axis.horizontal,
-                    itemCount: melodies.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 8),
-                    itemBuilder: (context, index) {
-                      final melody = melodies[index];
-                      return SizedBox(
-                        width: cardWidth,
-                        child: MelodyTemplateCard(
-                          melody: melody,
-                          selected: state.melody == melody,
-                          onTap: () => widget.controller.selectMelody(melody),
-                        ),
-                      );
-                    },
+                ])
+                  _PillChoice(
+                    label: melody.label,
+                    tooltip: melody.description,
+                    selected: state.melody == melody,
+                    onTap: () => widget.controller.selectMelody(melody),
                   ),
-                );
-              },
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              state.melody.description,
+              style: Theme.of(context).textTheme.bodySmall,
             ),
             PerformanceControls(
               mode: state.performanceMode,
@@ -1856,6 +1806,189 @@ class _CaptureRouteState extends State<_CaptureRoute> {
       addError: _saveError,
       recordedClipCount: widget.recordedClipCount,
       onMediaReady: () => unawaited(_commit()),
+    ),
+  );
+}
+
+final class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    text,
+    style: const TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w800,
+      letterSpacing: 1.5,
+      color: AppTokens.mutedInk,
+    ),
+  );
+}
+
+/// A rounded choice: dark when chosen, pale grey otherwise.
+final class _PillChoice extends StatelessWidget {
+  const _PillChoice({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.tooltip,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    selected: selected,
+    hint: tooltip,
+    child: GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? AppTokens.ink : AppTokens.tile,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.5,
+            color: selected ? Colors.white : AppTokens.ink,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// The sounds this song is made of, as a row of small photos.
+final class _UsedSounds extends StatelessWidget {
+  const _UsedSounds({
+    required this.clips,
+    required this.thumbnails,
+    required this.onRename,
+  });
+
+  final List<ClipAsset> clips;
+  final Map<String, Uint8List> thumbnails;
+  final VoidCallback onRename;
+
+  static String _name(ClipAsset clip, int index) =>
+      RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$').hasMatch(clip.label)
+      ? '音${index + 1}'
+      : clip.label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: AppTokens.tile,
+      borderRadius: BorderRadius.circular(AppTokens.tileRadius),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                '使う音',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+              ),
+            ),
+            Text(
+              '${clips.length}つ',
+              style: const TextStyle(fontSize: 11, color: AppTokens.mutedInk),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        GestureDetector(
+          onTap: onRename,
+          child: Row(
+            children: [
+              for (var i = 0; i < 6; i++)
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    child: i < clips.length
+                        ? Column(
+                            children: [
+                              AspectRatio(
+                                aspectRatio: 1,
+                                child: Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    Positioned.fill(
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(14),
+                                        child: thumbnails[clips[i].id] != null
+                                            ? Image.memory(
+                                                thumbnails[clips[i].id]!,
+                                                fit: BoxFit.cover,
+                                                errorBuilder:
+                                                    (context, error, stack) =>
+                                                        ColoredBox(
+                                                          color: AppTokens
+                                                              .soundColor(i),
+                                                        ),
+                                              )
+                                            : ColoredBox(
+                                                color: AppTokens.soundColor(i),
+                                              ),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      left: -3,
+                                      top: -3,
+                                      child: Container(
+                                        width: 16,
+                                        height: 16,
+                                        alignment: Alignment.center,
+                                        decoration: BoxDecoration(
+                                          color: AppTokens.soundColor(i),
+                                          borderRadius: BorderRadius.circular(5),
+                                        ),
+                                        child: Text(
+                                          '${i + 1}',
+                                          style: const TextStyle(
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.w800,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _name(clips[i], i),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
     ),
   );
 }
