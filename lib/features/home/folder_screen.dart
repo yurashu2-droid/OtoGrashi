@@ -101,7 +101,7 @@ class _FolderScreenState extends State<FolderScreen> {
     if (presentation == null) return null;
     return _thumbnails.putIfAbsent(
       asset.id,
-      () => presentation.thumbnail(asset.relativePath),
+      () => _guard(() => presentation.thumbnail(asset.relativePath)),
     );
   }
 
@@ -110,7 +110,7 @@ class _FolderScreenState extends State<FolderScreen> {
     if (presentation == null) return null;
     return _waveforms.putIfAbsent(
       asset.id,
-      () => presentation.waveform(asset.relativePath),
+      () => _guard(() => presentation.waveform(asset.relativePath)),
     );
   }
 
@@ -724,5 +724,15 @@ final class _FolderSoundTile extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// A preview that fails (even synchronously) must not take the page down;
+/// the sound then shows its colour and a stand-in waveform.
+Future<T> _guard<T>(Future<T> Function() request) {
+  try {
+    return request();
+  } catch (error, stackTrace) {
+    return Future<T>.error(error, stackTrace);
   }
 }
