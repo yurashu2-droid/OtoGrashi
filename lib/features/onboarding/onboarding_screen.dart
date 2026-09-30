@@ -63,7 +63,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
           const SizedBox(height: 14),
           Text(
-            '友達の「わっ！」も、タイピングの音も。何気ない3つの動画が重なって、15秒の曲になります。',
+            '友達の「わっ！」も、タイピングの音も。旅行やいつメンのフォルダに音をあつめて、そこから1曲に。',
             style: Theme.of(context).textTheme.bodyLarge,
           ),
           const SizedBox(height: 28),
