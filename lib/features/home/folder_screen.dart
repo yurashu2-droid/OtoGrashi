@@ -65,10 +65,7 @@ class _FolderScreenState extends State<FolderScreen> {
     final byId = {for (final asset in all) asset.id: asset};
     setState(() {
       _folder = folder;
-      _sounds = [
-        for (final id in folder.assetIds)
-          if (byId[id] case final asset?) asset,
-      ];
+      _sounds = [for (final id in folder.assetIds) ?byId[id]];
       _picked.retainWhere((id) => byId.containsKey(id));
     });
   }
