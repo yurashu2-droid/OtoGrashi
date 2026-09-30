@@ -74,6 +74,8 @@ class _CreationHostState extends State<_CreationHost> {
         demo: BundledDemoAssetSource(
           stagingDirectory: dependencies.database.stagingDirectory,
         ),
+        // choose first, then make: nothing renders until つくる is pressed
+        deferRendering: true,
       );
       final projects = resume
           ? await dependencies.projects.list()

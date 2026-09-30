@@ -124,7 +124,6 @@ class _CreationFlowState extends State<CreationFlow> {
   // Home shows the folder list; the current folder opens on top of it.
   var _folderOpen = true;
   var _capturing = false;
-  String? _shownProjectId;
 
   @override
   void didChangeDependencies() {
@@ -370,12 +369,10 @@ class _CreationFlowState extends State<CreationFlow> {
         onOpenLibrary: () => setState(() => _tabIndex = 1),
       );
     }
-    // The first render of a song gets its own waiting screen; re-renders
-    // after a setting change keep the arrange screen and its controls.
-    if (state.preview != null) _shownProjectId = state.project?.id;
-    if (state.phase == CreationPhase.rendering &&
-        state.preview == null &&
-        state.project?.id != _shownProjectId) {
+    // Pressing つくる shows its own waiting screen until the song is ready.
+    if (state.making &&
+        (state.phase == CreationPhase.preparing ||
+            state.phase == CreationPhase.rendering)) {
       return MakingScreen(
         clips: state.clips,
         thumbnails: state.thumbnails,
@@ -383,6 +380,7 @@ class _CreationFlowState extends State<CreationFlow> {
       );
     }
     if (state.preview != null ||
+        state.choosing ||
         state.phase == CreationPhase.rendering ||
         (state.phase == CreationPhase.failed && state.project != null)) {
       return _ArrangeScreen(controller: widget.controller);
@@ -833,7 +831,9 @@ class _CollectScreen extends StatelessWidget {
                           const SizedBox(width: 8),
                           Expanded(
                             child: FilledButton(
-                              onPressed: controller.createPreview,
+                              onPressed: controller.deferRendering
+                                  ? controller.beginChoosing
+                                  : controller.createPreview,
                               style: FilledButton.styleFrom(
                                 backgroundColor: AppTokens.ink,
                                 foregroundColor: Colors.white,
@@ -844,12 +844,18 @@ class _CollectScreen extends StatelessWidget {
                         ],
                       )
                     : FilledButton(
-                        onPressed: controller.createPreview,
+                        onPressed: controller.deferRendering
+                            ? controller.beginChoosing
+                            : controller.createPreview,
                         style: FilledButton.styleFrom(
                           backgroundColor: AppTokens.ink,
                           foregroundColor: Colors.white,
                         ),
-                        child: Text('この音で${state.durationSeconds}秒をつくる  ↗'),
+                        child: Text(
+                          controller.deferRendering
+                              ? 'この音で曲をつくる  ↗'
+                              : 'この音で${state.durationSeconds}秒をつくる  ↗',
+                        ),
                       ),
               ),
             )
@@ -1224,16 +1230,19 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
             const SizedBox(height: 16),
             if (state.melody != MelodyTemplate.none)
               _SongRoleSummary(state: state),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              onPressed: widget.controller.another,
-              child: const Text('同じ音でもうひとつ作る'),
-            ),
-            const SizedBox(height: 10),
-            OutlinedButton(
-              onPressed: () => _showAdjustments(context),
-              child: const Text('かんたん調整'),
-            ),
+            // nothing to vary or adjust before the first song is made
+            if (!widget.controller.deferRendering || path != null) ...[
+              const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed: widget.controller.another,
+                child: const Text('同じ音でもうひとつ作る'),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton(
+                onPressed: () => _showAdjustments(context),
+                child: const Text('かんたん調整'),
+              ),
+            ],
             if (state.phase == CreationPhase.failed) ...[
               const SizedBox(height: 10),
               TextButton(
@@ -1248,16 +1257,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-          child: FilledButton(
-            onPressed: state.phase == CreationPhase.ready
-                ? widget.controller.complete
-                : null,
-            style: FilledButton.styleFrom(
-              backgroundColor: AppTokens.coral,
-              foregroundColor: AppTokens.ink,
-            ),
-            child: const Text('これで完成'),
-          ),
+          child: _bottomAction(state),
         ),
       ),
     );
@@ -1265,6 +1265,48 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
 
   Future<void> _showAdjustments(BuildContext context) =>
       showAdjustmentsSheet(context, widget.controller);
+
+  /// Choose first, then make: つくる until there is a song for the current
+  /// choices, then これで完成.
+  Widget _bottomAction(CreationState state) {
+    final controller = widget.controller;
+    final busy =
+        state.phase == CreationPhase.preparing ||
+        state.phase == CreationPhase.rendering;
+    final needsMaking =
+        controller.deferRendering &&
+        (state.preview == null || state.settingsChanged);
+    if (needsMaking) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (state.settingsChanged) ...[
+            const Text(
+              '選び直した曲は、つくり直すと反映されます',
+              style: TextStyle(fontSize: 12, color: AppTokens.mutedInk),
+            ),
+            const SizedBox(height: 6),
+          ],
+          FilledButton(
+            onPressed: busy ? null : controller.createPreview,
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTokens.ink,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(state.preview == null ? '♪  つくる' : 'この設定でつくり直す'),
+          ),
+        ],
+      );
+    }
+    return FilledButton(
+      onPressed: state.phase == CreationPhase.ready ? controller.complete : null,
+      style: FilledButton.styleFrom(
+        backgroundColor: AppTokens.coral,
+        foregroundColor: AppTokens.ink,
+      ),
+      child: const Text('これで完成'),
+    );
+  }
 }
 
 class _CompletedScreen extends StatefulWidget {

@@ -747,6 +747,52 @@ void main() {
     expect(controller.state.preview!.revision, projects.project!.revision);
   });
 
+  test('deferred choices render only when つくる is pressed', () async {
+    final projects = _MemoryProjects();
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: projects,
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+      deferRendering: true,
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+
+    controller.beginChoosing();
+    expect(controller.state.choosing, isTrue);
+    controller.selectMelody(MelodyTemplate.odeToJoy);
+    controller.selectStyle(ArrangementStyle.lively);
+    controller.selectPerformance(PerformanceMode.mad);
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    expect(media.renderRequests, isEmpty);
+    expect(controller.state.phase, CreationPhase.readyToCreate);
+    expect(controller.state.melody, MelodyTemplate.odeToJoy);
+
+    final making = controller.createPreview();
+    expect(controller.state.making, isTrue);
+    await making;
+    for (var i = 0; i < 100 && controller.state.preview == null; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(media.renderRequests, hasLength(1));
+    expect(
+      media.renderRequests.single.arrangement.melodyTemplate,
+      MelodyTemplate.odeToJoy,
+    );
+    expect(controller.state.making, isFalse);
+    expect(controller.state.settingsChanged, isFalse);
+
+    // a later choice waits for the next つくる and marks the song as stale
+    controller.selectMelody(MelodyTemplate.canon);
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    expect(media.renderRequests, hasLength(1));
+    expect(controller.state.preview, isNotNull);
+    expect(controller.state.settingsChanged, isTrue);
+  });
+
   test('melody change during a save keeps the next revision valid', () async {
     final projects = _MemoryProjects();
     final media = _FakeMedia();

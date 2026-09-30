@@ -46,6 +46,9 @@ final class CreationState {
     this.preview,
     this.error,
     this.relayPending = false,
+    this.choosing = false,
+    this.settingsChanged = false,
+    this.making = false,
   });
 
   final CreationPhase phase;
@@ -62,6 +65,15 @@ final class CreationState {
   final RenderedMedia? preview;
   final Object? error;
   final bool relayPending;
+
+  /// The song-settings screen is open before (or between) creations.
+  final bool choosing;
+
+  /// A song choice changed since the shown preview was made.
+  final bool settingsChanged;
+
+  /// A song is being made because the person pressed つくる.
+  final bool making;
 
   CreationState copyWith({
     CreationPhase? phase,
@@ -80,6 +92,9 @@ final class CreationState {
     Object? error,
     bool clearError = false,
     bool? relayPending,
+    bool? choosing,
+    bool? settingsChanged,
+    bool? making,
   }) => CreationState(
     phase: phase ?? this.phase,
     project: project ?? this.project,
@@ -95,6 +110,9 @@ final class CreationState {
     preview: clearPreview ? null : preview ?? this.preview,
     error: clearError ? null : error ?? this.error,
     relayPending: relayPending ?? this.relayPending,
+    choosing: choosing ?? this.choosing,
+    settingsChanged: settingsChanged ?? this.settingsChanged,
+    making: making ?? this.making,
   );
 }
 
@@ -156,6 +174,7 @@ final class CreationController extends ChangeNotifier {
     required this.presentation,
     required this.demo,
     Iterator<String>? renderOperationIds,
+    this.deferRendering = false,
   }) : _render = RenderController(
          gateway: media,
          operationIds: renderOperationIds,
@@ -169,6 +188,35 @@ final class CreationController extends ChangeNotifier {
   final MediaPresentationGateway presentation;
   final DemoAssetSource demo;
   final RenderController _render;
+
+  /// When true, song choices are only remembered; a song is made when the
+  /// person presses つくる ([createPreview]), never on each choice.
+  final bool deferRendering;
+
+  /// Choices are held (not rendered) while the settings screen is in use.
+  bool get _holdChoices =>
+      deferRendering &&
+      (_state.choosing ||
+          _state.phase == CreationPhase.readyToCreate ||
+          _state.phase == CreationPhase.ready ||
+          _state.phase == CreationPhase.failed);
+
+  void _holdChoice(CreationState next) {
+    _previewRenderTimer?.cancel();
+    _set(
+      next.copyWith(
+        compareOriginal: false,
+        settingsChanged: _state.preview != null || _state.settingsChanged,
+        clearError: true,
+      ),
+    );
+  }
+
+  /// Opens the song-settings screen without making anything yet.
+  void beginChoosing() {
+    if (_disposed || _state.clips.isEmpty) return;
+    _set(_state.copyWith(choosing: true));
+  }
 
   /// The creator's name for the cover ("〇〇の日常"); written into every
   /// recipe arranged from now on.
@@ -291,6 +339,8 @@ final class CreationController extends ChangeNotifier {
           project: updated,
           clips: clips,
           relayPending: false,
+          choosing: false,
+          settingsChanged: false,
           phase: clips.isNotEmpty
               ? CreationPhase.readyToCreate
               : CreationPhase.collecting,
@@ -319,6 +369,8 @@ final class CreationController extends ChangeNotifier {
           project: project,
           clips: clips,
           relayPending: false,
+          choosing: false,
+          settingsChanged: false,
           phase: clips.isNotEmpty
               ? CreationPhase.readyToCreate
               : CreationPhase.collecting,
@@ -409,6 +461,7 @@ final class CreationController extends ChangeNotifier {
 
   void selectPerformance(PerformanceMode mode) {
     if (_disposed || mode == _state.performanceMode) return;
+    if (_holdChoices) return _holdChoice(_state.copyWith(performanceMode: mode));
     final regenerate =
         _state.phase != CreationPhase.collecting &&
         _state.phase != CreationPhase.readyToCreate;
@@ -444,6 +497,9 @@ final class CreationController extends ChangeNotifier {
         seconds == _state.durationSeconds) {
       return;
     }
+    if (_holdChoices) {
+      return _holdChoice(_state.copyWith(durationSeconds: seconds));
+    }
     final regenerate =
         _state.phase != CreationPhase.collecting &&
         _state.phase != CreationPhase.readyToCreate;
@@ -475,12 +531,17 @@ final class CreationController extends ChangeNotifier {
 
   void selectStyle(ArrangementStyle style) {
     if (_disposed) return;
+    if (_holdChoices) {
+      if (style != _state.style) _holdChoice(_state.copyWith(style: style));
+      return;
+    }
     _set(_state.copyWith(style: style, compareOriginal: false));
     unawaited(_requestArrangement(style: style, seed: _state.seed));
   }
 
   void selectMelody(MelodyTemplate melody) {
     if (_disposed || melody == _state.melody) return;
+    if (_holdChoices) return _holdChoice(_state.copyWith(melody: melody));
     _previewRenderTimer?.cancel();
     final project = _state.project;
     if (project != null) _render.open(project);
@@ -502,14 +563,27 @@ final class CreationController extends ChangeNotifier {
     );
   }
 
-  Future<void> createPreview() => _disposed
-      ? Future<void>.value()
-      : _requestArrangement(style: _state.style, seed: _state.seed);
+  Future<void> createPreview() {
+    if (_disposed) return Future<void>.value();
+    if (deferRendering) {
+      _set(
+        _state.copyWith(choosing: true, making: true, settingsChanged: false),
+      );
+    }
+    return _requestArrangement(style: _state.style, seed: _state.seed);
+  }
 
   void another() {
     if (_disposed) return;
     final seed = _state.seed + 1;
-    _set(_state.copyWith(seed: seed, compareOriginal: false));
+    _set(
+      _state.copyWith(
+        seed: seed,
+        compareOriginal: false,
+        making: deferRendering,
+        settingsChanged: false,
+      ),
+    );
     unawaited(_requestArrangement(style: _state.style, seed: seed));
   }
 
@@ -593,6 +667,8 @@ final class CreationController extends ChangeNotifier {
         clearPreview: true,
         clearError: true,
         compareOriginal: false,
+        choosing: false,
+        settingsChanged: false,
       ),
     );
   }
@@ -963,6 +1039,13 @@ final class CreationController extends ChangeNotifier {
 
   void _set(CreationState value) {
     if (_disposed) return;
+    // "making" only covers the wait itself
+    if (value.making &&
+        value.phase != CreationPhase.preparing &&
+        value.phase != CreationPhase.rendering &&
+        value.phase != CreationPhase.readyToCreate) {
+      value = value.copyWith(making: false);
+    }
     _state = value;
     notifyListeners();
   }
