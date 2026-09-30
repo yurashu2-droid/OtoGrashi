@@ -1129,7 +1129,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.drag(find.byType(ListView).first, const Offset(0, -300));
+    // the save and share tiles sit under the song card
+    await tester.scrollUntilVisible(
+      find.text('保存する'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存する'));
     await tester.pumpAndSettle();

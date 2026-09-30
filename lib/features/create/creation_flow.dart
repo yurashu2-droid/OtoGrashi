@@ -1543,56 +1543,81 @@ class _CompletedScreenState extends State<_CompletedScreen> {
     return Scaffold(
       backgroundColor: AppTokens.surfaceColor,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        foregroundColor: AppTokens.ink,
         title: const Text('できあがり'),
         centerTitle: true,
+        actions: const [
+          Padding(
+            padding: EdgeInsets.only(right: 16),
+            child: Center(
+              child: Text(
+                'オトグラシに保存したよ',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: AppTokens.mutedInk,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
           children: [
-            const Text(
-              'STEP 3  /  今日の音、完成！',
-              style: TextStyle(
-                color: AppTokens.coral,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.1,
-              ),
-            ),
-            const SizedBox(height: 7),
-            Text(
-              'あの瞬間が、\nみんなの曲に。',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 7),
-            Text(
-              state.project?.title ?? '今日の音',
-              style: const TextStyle(color: AppTokens.mutedInk),
-            ),
-            const SizedBox(height: 16),
             Center(
-              child: SizedBox(
-                width: 300,
-                child: PlaybackChrome(
-                  child: Stack(
-                    children: [
-                      AspectRatio(
-                        aspectRatio: 9 / 16,
-                        child: NativeMovieView(
-                          relativePath: state.preview!.relativePath,
-                          gateway: widget.controller.presentation,
-                          controller: playback,
-                          fallback: _SyntheticPreview(clips: state.clips),
-                        ),
+              child: Container(
+                width: 280,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTokens.tile,
+                  borderRadius: BorderRadius.circular(AppTokens.tileRadius),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: Stack(
+                        children: [
+                          AspectRatio(
+                            aspectRatio: 9 / 16,
+                            child: NativeMovieView(
+                              relativePath: state.preview!.relativePath,
+                              gateway: widget.controller.presentation,
+                              controller: playback,
+                              fallback: _SyntheticPreview(clips: state.clips),
+                            ),
+                          ),
+                          Positioned(
+                            top: 8,
+                            right: 8,
+                            child: _CompareVideoButton(
+                              onPressed: _openComparison,
+                            ),
+                          ),
+                        ],
                       ),
-                      Positioned(
-                        top: 8,
-                        right: 8,
-                        child: _CompareVideoButton(onPressed: _openComparison),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      state.project?.title ?? '今日の音',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        color: AppTokens.ink,
                       ),
-                    ],
-                  ),
+                    ),
+                    Text(
+                      '${state.clips.length}つの音 · ${state.durationSeconds}秒 · ${state.melody.label}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppTokens.mutedInk,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1601,20 +1626,52 @@ class _CompletedScreenState extends State<_CompletedScreen> {
               playback: playback,
               label: '完成した${state.durationSeconds}秒',
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                _ShareTile(
+                  icon: _saved ? Icons.check_rounded : Icons.download_rounded,
+                  label: _saved ? '保存済み' : '保存する',
+                  onTap: _busy || _saved ? null : _save,
+                ),
+                const SizedBox(width: 8),
+                _ShareTile(
+                  icon: Icons.ios_share_rounded,
+                  label: 'シェアする',
+                  onTap: _busy ? null : _share,
+                ),
+                const SizedBox(width: 8),
+                _ShareTile(
+                  icon: Icons.compare_rounded,
+                  label: '元の音と',
+                  onTap: _openComparison,
+                ),
+                const SizedBox(width: 8),
+                _ShareTile(
+                  icon: Icons.library_music_outlined,
+                  label: '作品を見る',
+                  onTap: widget.onOpenLibrary,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_busy) ...[
+              const LinearProgressIndicator(),
+              const SizedBox(height: 7),
+              Text(
+                _busyStage ?? '動画を準備しています',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 7),
+            ],
+            if (_message != null) ...[
+              Text(_message!, textAlign: TextAlign.center),
+              const SizedBox(height: 7),
+            ],
             const Text(
               '映り込みや会話がないか、最後に確認してください。',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppTokens.mutedInk),
-            ),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              onPressed: widget.controller.startNew,
-              child: const Text('新しくつくる'),
-            ),
-            TextButton(
-              onPressed: widget.onOpenLibrary,
-              child: const Text('作品を見る'),
+              style: TextStyle(fontSize: 12, color: AppTokens.mutedInk),
             ),
           ],
         ),
@@ -1623,49 +1680,62 @@ class _CompletedScreenState extends State<_CompletedScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_busy) ...[
-                const LinearProgressIndicator(),
-                const SizedBox(height: 7),
-                Text(_busyStage ?? '動画を準備しています'),
-              ],
-              if (_message != null) ...[
-                Text(_message!, textAlign: TextAlign.center),
-                const SizedBox(height: 7),
-              ],
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _busy || _saved ? null : _save,
-                      icon: Icon(
-                        _saved ? Icons.check_rounded : Icons.download_rounded,
-                      ),
-                      label: Text(_saved ? '保存済み' : '保存する'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: _busy ? null : _share,
-                      icon: const Icon(Icons.ios_share_rounded),
-                      label: const Text('シェアする'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppTokens.coral,
-                        foregroundColor: AppTokens.ink,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
+          child: FilledButton(
+            onPressed: widget.controller.startNew,
+            child: const Text('新しくつくる'),
           ),
         ),
       ),
     );
   }
+}
+
+/// One of the four square actions under a finished song.
+final class _ShareTile extends StatelessWidget {
+  const _ShareTile({required this.icon, required this.label, this.onTap});
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+    child: Semantics(
+      button: true,
+      enabled: onTap != null,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 160),
+          opacity: onTap == null ? 0.45 : 1,
+          child: Container(
+            height: 68,
+            decoration: BoxDecoration(
+              color: AppTokens.tile,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 22, color: AppTokens.ink),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: AppTokens.ink,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _CompareVideoButton extends StatelessWidget {
