@@ -218,6 +218,10 @@ jobs:
             fail="$( (grep -n -B6 -A24 -E 'Expected:|\[E\]' ci-logs/test.txt || true) | head -90 | cut -c1-200)"
             fail="${fail//'%'/'%25'}"
             [ -z "$fail" ] || echo "::warning title=failing dart test::${fail//$'\n'/'%0A'}"
+            # the framework's exception report: what actually threw, and where
+            caught="$( (grep -n -A28 -E 'EXCEPTION CAUGHT BY' ci-logs/test.txt || true) | head -60 | cut -c1-200)"
+            caught="${caught//'%'/'%25'}"
+            [ -z "$caught" ] || echo "::warning title=dart test exception::${caught//$'\n'/'%0A'}"
           fi
           summarize ios-simulator-build 'error:|Error'
           summarize xctest 'error:|failed|Executed|TEST SUCCEEDED|TEST FAILED|XCTAssert|MAD_CHECK'
