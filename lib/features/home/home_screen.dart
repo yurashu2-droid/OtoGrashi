@@ -297,7 +297,6 @@ final class _FolderCard extends StatelessWidget {
     required this.tiles,
     required this.colorCount,
     required this.onTap,
-    this.live = false,
   });
 
   final String title;
@@ -305,7 +304,6 @@ final class _FolderCard extends StatelessWidget {
   final List<Future<Uint8List>?> tiles;
   final int colorCount;
   final VoidCallback onTap;
-  final bool live;
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -383,17 +381,6 @@ final class _FolderCard extends StatelessWidget {
             ),
             Row(
               children: [
-                if (live) ...[
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: const BoxDecoration(
-                      color: AppTokens.blush,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 5),
-                ],
                 Text(
                   caption,
                   style: const TextStyle(
