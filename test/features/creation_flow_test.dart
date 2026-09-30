@@ -1128,6 +1128,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // the preview now sits below the used sounds and song choices
+    await tester.ensureVisible(find.text('見くらべる'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('見くらべる'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('元の音'));
