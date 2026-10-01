@@ -212,6 +212,26 @@ final class CreationController extends ChangeNotifier {
     );
   }
 
+  /// Stops a make that is under way and goes back to the song settings.
+  Future<void> cancelMaking() async {
+    if (_disposed || !_state.making) return;
+    ++_requestVersion;
+    _previewRenderTimer?.cancel();
+    await _render.cancel();
+    if (_disposed) return;
+    _set(
+      _state.copyWith(
+        making: false,
+        choosing: true,
+        phase: _state.clips.isNotEmpty
+            ? CreationPhase.readyToCreate
+            : CreationPhase.collecting,
+        clearPreview: true,
+        clearError: true,
+      ),
+    );
+  }
+
   /// Opens the song-settings screen without making anything yet.
   void beginChoosing() {
     if (_disposed || _state.clips.isEmpty) return;
@@ -1052,11 +1072,16 @@ final class CreationController extends ChangeNotifier {
 
   void _set(CreationState value) {
     if (_disposed) return;
-    // "making" only covers the wait itself
+    // "making" only covers the wait itself: it ends when a make that was
+    // under way finishes or fails (starting one from a finished song keeps it)
+    final wasMaking =
+        _state.phase == CreationPhase.preparing ||
+        _state.phase == CreationPhase.rendering;
     if (value.making &&
-        value.phase != CreationPhase.preparing &&
-        value.phase != CreationPhase.rendering &&
-        value.phase != CreationPhase.readyToCreate) {
+        wasMaking &&
+        (value.phase == CreationPhase.ready ||
+            value.phase == CreationPhase.failed ||
+            value.phase == CreationPhase.collecting)) {
       value = value.copyWith(making: false);
     }
     _state = value;

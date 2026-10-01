@@ -459,6 +459,7 @@ class _CreationFlowState extends State<CreationFlow> {
         clips: state.clips,
         thumbnails: state.thumbnails,
         seconds: state.durationSeconds,
+        onCancel: () => unawaited(widget.controller.cancelMaking()),
       );
     }
     if (state.preview != null ||
@@ -1178,33 +1179,39 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               thumbnails: state.thumbnails,
               onRename: _renameSounds,
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 18),
             const _SectionLabel('曲'),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final melody in const <MelodyTemplate>[
-                  MelodyTemplate.midiScore,
-                  MelodyTemplate.hop,
-                  MelodyTemplate.wink,
-                  MelodyTemplate.answer,
-                  MelodyTemplate.odeToJoy,
-                  MelodyTemplate.twinkle,
-                  MelodyTemplate.furElise,
-                  MelodyTemplate.jingleBells,
-                  MelodyTemplate.fate,
-                  MelodyTemplate.canon,
-                  MelodyTemplate.none,
-                ])
-                  _PillChoice(
-                    label: melody.label,
-                    tooltip: melody.description,
-                    selected: state.melody == melody,
-                    onTap: () => widget.controller.selectMelody(melody),
-                  ),
-              ],
+            // one sliding row, so the list of songs never pushes the page down
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              clipBehavior: Clip.none,
+              child: Row(
+                children: [
+                  for (final melody in const <MelodyTemplate>[
+                    MelodyTemplate.midiScore,
+                    MelodyTemplate.hop,
+                    MelodyTemplate.wink,
+                    MelodyTemplate.answer,
+                    MelodyTemplate.odeToJoy,
+                    MelodyTemplate.twinkle,
+                    MelodyTemplate.furElise,
+                    MelodyTemplate.jingleBells,
+                    MelodyTemplate.fate,
+                    MelodyTemplate.canon,
+                    MelodyTemplate.none,
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: _PillChoice(
+                        label: melody.label,
+                        tooltip: melody.description,
+                        selected: state.melody == melody,
+                        onTap: () => widget.controller.selectMelody(melody),
+                      ),
+                    ),
+                ],
+              ),
             ),
             const SizedBox(height: 6),
             Text(
@@ -1217,114 +1224,115 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               onMode: widget.controller.selectPerformance,
               onDuration: widget.controller.selectDuration,
             ),
-            if (state.melody.isMidiScore) ...[
-              const SizedBox(height: 8),
-              Text(
-                'この楽譜を撮った音で。${state.durationSeconds}秒で再生。',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-            const SizedBox(height: 18),
-            Center(
-              child: PlaybackChrome(
-                child: SizedBox(
-                  width: 225,
-                  child: Stack(
-                    children: [
-                      AspectRatio(
-                        aspectRatio: 9 / 16,
-                        child: path == null
-                            ? state.phase == CreationPhase.failed
-                                  ? const _PreviewFailed()
-                                  : BeatBuildingPreview(
-                                      clips: state.clips,
-                                      thumbnails: state.thumbnails,
-                                    )
-                            : NativeMovieView(
-                                key: ValueKey(
-                                  '$path:${state.project?.revision}',
+            const _SectionLabel('雰囲気'),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                for (final (style, label) in const [
+                  (ArrangementStyle.sparse, 'ぽつぽつ'),
+                  (ArrangementStyle.swaying, 'ゆらゆら'),
+                  (ArrangementStyle.lively, 'にぎやか'),
+                ])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: _PillChoice(
+                      label: label,
+                      selected: state.style == style,
+                      onTap: () => widget.controller.selectStyle(style),
+                    ),
+                  ),
+              ],
+            ),
+            if (path != null ||
+                !widget.controller.deferRendering ||
+                state.phase == CreationPhase.failed) ...[
+              const SizedBox(height: 22),
+              Center(
+                child: PlaybackChrome(
+                  child: SizedBox(
+                    width: 200,
+                    child: Stack(
+                      children: [
+                        AspectRatio(
+                          aspectRatio: 9 / 16,
+                          child: path == null
+                              ? state.phase == CreationPhase.failed
+                                    ? const _PreviewFailed()
+                                    : BeatBuildingPreview(
+                                        clips: state.clips,
+                                        thumbnails: state.thumbnails,
+                                      )
+                              : NativeMovieView(
+                                  key: ValueKey(
+                                    '$path:${state.project?.revision}',
+                                  ),
+                                  relativePath: path,
+                                  gateway: widget.controller.presentation,
+                                  controller: playback,
+                                  fallback: _SyntheticPreview(clips: state.clips),
                                 ),
-                                relativePath: path,
-                                gateway: widget.controller.presentation,
-                                controller: playback,
-                                fallback: _SyntheticPreview(clips: state.clips),
-                              ),
-                      ),
-                      if (path != null)
-                        Positioned(
-                          top: 8,
-                          right: 8,
-                          child: _CompareVideoButton(
-                            onPressed: _openComparison,
-                          ),
                         ),
-                    ],
+                        if (path != null)
+                          Positioned(
+                            top: 8,
+                            right: 8,
+                            child: _CompareVideoButton(
+                              onPressed: _openComparison,
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 14),
-            if (state.phase == CreationPhase.rendering ||
-                state.phase == CreationPhase.preparing)
-              Column(
-                children: [
-                  const LinearProgressIndicator(),
-                  const SizedBox(height: 8),
-                  Text('${state.durationSeconds}秒のプレビューをつくっています'),
-                ],
-              )
-            else if (state.phase == CreationPhase.failed)
-              Text(
-                'プレビューを作れませんでした。別のアレンジでもう一度お試しください。',
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              )
-            else
-              _PlaybackControls(playback: playback, label: '曲になった音'),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: _renameSounds,
-              icon: const Icon(Icons.edit_note_rounded),
-              label: const Text('音の名前をつける'),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              '曲の雰囲気',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
-            ),
-            const SizedBox(height: 8),
-            SegmentedButton<ArrangementStyle>(
-              segments: const [
-                ButtonSegment(
-                  value: ArrangementStyle.sparse,
-                  label: Text('ぽつぽつ'),
-                ),
-                ButtonSegment(
-                  value: ArrangementStyle.swaying,
-                  label: Text('ゆらゆら'),
-                ),
-                ButtonSegment(
-                  value: ArrangementStyle.lively,
-                  label: Text('にぎやか'),
-                ),
+              const SizedBox(height: 12),
+              if (state.phase == CreationPhase.rendering ||
+                  state.phase == CreationPhase.preparing)
+                Column(
+                  children: [
+                    const LinearProgressIndicator(),
+                    const SizedBox(height: 8),
+                    Text('${state.durationSeconds}秒のプレビューをつくっています'),
+                  ],
+                )
+              else if (state.phase == CreationPhase.failed)
+                Text(
+                  'プレビューを作れませんでした。別のアレンジでもう一度お試しください。',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                )
+              else
+                _PlaybackControls(playback: playback, label: '曲になった音'),
+              if (state.melody != MelodyTemplate.none) ...[
+                const SizedBox(height: 12),
+                _SongRoleSummary(state: state),
               ],
-              selected: {state.style},
-              onSelectionChanged: (value) =>
-                  widget.controller.selectStyle(value.single),
-            ),
-            const SizedBox(height: 16),
-            if (state.melody != MelodyTemplate.none)
-              _SongRoleSummary(state: state),
+            ],
             // nothing to vary or adjust before the first song is made
             if (!widget.controller.deferRendering || path != null) ...[
               const SizedBox(height: 12),
-              OutlinedButton(
-                onPressed: widget.controller.another,
-                child: const Text('同じ音でもうひとつ作る'),
-              ),
-              const SizedBox(height: 10),
-              OutlinedButton(
-                onPressed: () => _showAdjustments(context),
-                child: const Text('かんたん調整'),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: widget.controller.another,
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 48),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                      child: const Text('同じ音でもうひとつ作る'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => _showAdjustments(context),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 48),
+                      ),
+                      child: const Text('かんたん調整'),
+                    ),
+                  ),
+                ],
               ),
             ],
             if (state.phase == CreationPhase.failed) ...[
@@ -2116,9 +2124,19 @@ final class _UsedSounds extends StatelessWidget {
               '${clips.length}つ',
               style: const TextStyle(fontSize: 11, color: AppTokens.mutedInk),
             ),
+            const SizedBox(width: 4),
+            TextButton(
+              onPressed: onRename,
+              style: TextButton.styleFrom(
+                minimumSize: const Size(44, 36),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                textStyle: const TextStyle(fontSize: 12),
+              ),
+              child: const Text('音の名前をつける'),
+            ),
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         GestureDetector(
           onTap: onRename,
           child: Row(

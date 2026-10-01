@@ -18,12 +18,16 @@ final class MakingScreen extends StatefulWidget {
     required this.clips,
     required this.thumbnails,
     required this.seconds,
+    this.onCancel,
     super.key,
   });
 
   final List<ClipAsset> clips;
   final Map<String, Uint8List> thumbnails;
   final int seconds;
+
+  /// Stops making and goes back; shown as × at the top left.
+  final VoidCallback? onCancel;
 
   @override
   State<MakingScreen> createState() => _MakingScreenState();
@@ -82,13 +86,29 @@ class _MakingScreenState extends State<MakingScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
-                '曲をつくっています',
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w800,
-                  color: AppTokens.ink,
-                ),
+              Row(
+                children: [
+                  if (widget.onCancel != null) ...[
+                    IconButton(
+                      onPressed: widget.onCancel,
+                      tooltip: 'やめる',
+                      style: IconButton.styleFrom(
+                        backgroundColor: AppTokens.tile,
+                        foregroundColor: AppTokens.ink,
+                      ),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  const Text(
+                    '曲をつくっています',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                      color: AppTokens.ink,
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 4),
               Text(

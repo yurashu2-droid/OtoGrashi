@@ -1268,8 +1268,6 @@ void main() {
       180,
       scrollable: find.byType(Scrollable).first,
     );
-    await tester.drag(find.byType(Scrollable).first, const Offset(0, -140));
-    await tester.pumpAndSettle();
     await tester.tap(find.text('音の名前をつける'));
     await tester.pumpAndSettle();
     expect(find.text('合成素材 1'), findsWidgets);

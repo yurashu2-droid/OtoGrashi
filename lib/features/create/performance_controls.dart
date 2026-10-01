@@ -63,62 +63,105 @@ class PerformanceControls extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'つくり方',
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 1.5,
-            color: AppTokens.mutedInk,
-          ),
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 7,
-          runSpacing: 6,
+        Row(
           children: [
-            for (final option in PerformanceMode.values)
-              ChoiceChip(
-                label: Text(labels[option]!.$1),
-                avatar: Icon(
-                  labels[option]!.$2,
-                  size: 17,
-                  color: mode == option ? Colors.white : AppTokens.ink,
-                ),
-                selected: mode == option,
-                onSelected: (_) => onMode(option),
-                shape: const StadiumBorder(),
-                side: BorderSide.none,
-                backgroundColor: AppTokens.tile,
-                selectedColor: AppTokens.ink,
-                showCheckmark: false,
-                labelStyle: TextStyle(
+            const Expanded(
+              child: Text(
+                'つくり方',
+                style: TextStyle(
+                  fontSize: 11,
                   fontWeight: FontWeight.w800,
-                  color: mode == option ? Colors.white : AppTokens.ink,
+                  letterSpacing: 1.5,
+                  color: AppTokens.mutedInk,
+                ),
+              ),
+            ),
+            for (final (value, label) in const [(15, '15秒'), (30, '30秒・展開あり')])
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: _LengthPill(
+                  label: label,
+                  selected: seconds == value,
+                  onTap: () => onDuration(value),
                 ),
               ),
           ],
         ),
         const SizedBox(height: 8),
-        Text(labels[mode]!.$3, style: Theme.of(context).textTheme.bodySmall),
-        const SizedBox(height: 14),
-        SegmentedButton<int>(
-          segments: const [
-            ButtonSegment(
-              value: 15,
-              label: Text('15秒'),
-              icon: Icon(Icons.bolt_rounded),
-            ),
-            ButtonSegment(
-              value: 30,
-              label: Text('30秒・展開あり'),
-              icon: Icon(Icons.loop_rounded),
-            ),
-          ],
-          selected: {seconds},
-          onSelectionChanged: (v) => onDuration(v.first),
+        // one sliding row of modes keeps the screen short
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          clipBehavior: Clip.none,
+          child: Row(
+            children: [
+              for (final option in PerformanceMode.values)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: ChoiceChip(
+                    label: Text(labels[option]!.$1),
+                    avatar: Icon(
+                      labels[option]!.$2,
+                      size: 17,
+                      color: mode == option ? Colors.white : AppTokens.ink,
+                    ),
+                    selected: mode == option,
+                    onSelected: (_) => onMode(option),
+                    shape: const StadiumBorder(),
+                    side: BorderSide.none,
+                    backgroundColor: AppTokens.tile,
+                    selectedColor: AppTokens.ink,
+                    showCheckmark: false,
+                    labelStyle: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: mode == option ? Colors.white : AppTokens.ink,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
+        const SizedBox(height: 6),
+        Text(labels[mode]!.$3, style: Theme.of(context).textTheme.bodySmall),
       ],
+    ),
+  );
+}
+
+final class _LengthPill extends StatelessWidget {
+  const _LengthPill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    selected: selected,
+    child: GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? AppTokens.ink : AppTokens.tile,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+            color: selected ? Colors.white : AppTokens.ink,
+          ),
+        ),
+      ),
     ),
   );
 }
