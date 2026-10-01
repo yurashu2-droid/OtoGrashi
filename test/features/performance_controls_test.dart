@@ -29,7 +29,7 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(ChoiceChip), findsNWidgets(8));
+      expect(find.byType(ChoiceChip), findsNWidgets(9));
       await tester.ensureVisible(find.text('MAD（おすすめ）'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('MAD（おすすめ）'));

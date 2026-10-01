@@ -25,6 +25,7 @@ Arrangement arrangeMad({
   required int seed,
   required MelodyTemplate melodyTemplate,
   required int seconds,
+  bool collect = false,
 }) {
   if (seconds != 15 && seconds != 30) {
     throw const MediaContractException('Choose a 15 or 30 second MAD.');
@@ -58,12 +59,18 @@ Arrangement arrangeMad({
     scoreNotes: melodyTemplate.scoreNotes,
     total: seconds * _sampleRate,
   );
-  if (seconds == 30) {
+  if (collect) {
+    builder.buildCollect();
+  } else if (seconds == 30) {
     builder.buildLong();
   } else {
     builder.buildShort();
   }
-  return builder.finish(style: style, melodyTemplate: melodyTemplate);
+  return builder.finish(
+    style: style,
+    melodyTemplate: melodyTemplate,
+    performanceMode: collect ? PerformanceMode.collect : PerformanceMode.mad,
+  );
 }
 
 const _sampleRate = 48000;
@@ -730,6 +737,49 @@ class _MadBuilder {
     _effects(intoMelody: 4 * _bar, intoBreak: 12 * _bar, breakBars: 2, intoClimax: 14 * _bar, stabBar: 8, climaxBar: 14);
   }
 
+  /// あつめる: each sound alone in turn, then the beat stacks up one layer
+  /// per bar (kick, + snare, + hats and bass), then the tune rides on top;
+  /// in the last bar everyone says their first syllable, in the order
+  /// collected. The picture follows the three sections.
+  void buildCollect() {
+    final bars = total ~/ _bar;
+    final order = [lead, ...others];
+    final long = bars >= 16;
+    final collectBars = long
+        ? (order.length <= 3 ? order.length : (order.length / 2).ceil())
+        : (order.length <= 2 ? order.length : 2);
+    final per = (collectBars * _bar) ~/ math.max(1, order.length);
+    for (final (k, v) in order.indexed) {
+      phrase(v, k * per, v.longest, limit: math.min(1.4, (per - 600) / _sampleRate));
+    }
+    final build = collectBars;
+    final buildBars = long ? 3 : 2;
+    drums(build, build + 1, snare: false, hats: false);
+    if (buildBars == 3) drums(build + 1, build + 2, hats: false);
+    drums(build + buildBars - 1, bars);
+    final song = build + buildBars;
+    final beats = math.max(0, (bars - 1 - song) * 4);
+    if (melodic) {
+      final cursor = bassPart((0, null), [for (final n in bassLine) if (n.$1 < 4) n], build + buildBars - 1, .6);
+      bassPart(cursor, [for (final n in bassLine) if (n.$1 < beats) n], song, .55);
+      final singer = singers.first;
+      syllableLine(singer, (0, null), [for (final n in _sungBy(singer)) if (n.$1 < beats) n], song, .95);
+    } else {
+      // rhythm only: the first sound answers in its own words, unpitched
+      for (var bar = song; bar < bars - 1; bar += 2) {
+        phrase(lead, bar * _bar, lead.longest, gain: .9, limit: 1.2);
+      }
+    }
+    for (final (k, v) in order.indexed) {
+      stutterHead(v, (bars - 1) * _bar + k * (_bar ~/ math.max(1, order.length)), v.longest, times: 2, gain: .8);
+    }
+    sections.addAll([
+      SongSection(fromBar: 0, toBar: build, energy: 'calm'),
+      SongSection(fromBar: build, toBar: song, energy: 'mid'),
+      SongSection(fromBar: song, toBar: bars, energy: 'high'),
+    ]);
+  }
+
   void buildShort() {
     final cursors = <String, (int, int?)>{};
     (int, int?) bassCursor = (0, null);
@@ -895,7 +945,11 @@ class _MadBuilder {
 
   // -- output -------------------------------------------------------------------
 
-  Arrangement finish({required ArrangementStyle style, required MelodyTemplate melodyTemplate}) {
+  Arrangement finish({
+    required ArrangementStyle style,
+    required MelodyTemplate melodyTemplate,
+    PerformanceMode performanceMode = PerformanceMode.mad,
+  }) {
     // Stay inside the event budget: thin hats first, then stabs, then chops.
     for (final role in const ['hat', 'stab', 'echo', 'chop']) {
       if (events.length <= 500) break;
@@ -932,7 +986,7 @@ class _MadBuilder {
     ];
     final (kickVoice, _) = kit['kick']!;
     return Arrangement(
-      templateId: 'mad-${total ~/ _sampleRate}-${melodyTemplate.name}',
+      templateId: '${performanceMode.name}-${total ~/ _sampleRate}-${melodyTemplate.name}',
       templateVersion: 1,
       analysisVersion: 1,
       rendererVersion: 1,
@@ -949,7 +1003,7 @@ class _MadBuilder {
       events: sound,
       videoEvents: video,
       totalSamples: total,
-      performanceMode: PerformanceMode.mad,
+      performanceMode: performanceMode,
       masterEffects: masterEffects,
       sections: sections,
     );

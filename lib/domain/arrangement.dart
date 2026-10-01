@@ -6,6 +6,8 @@ export '../media/media_messages.dart';
 enum PerformanceMode {
   natural,
   mad,
+  // あつめる: the sounds are collected one by one, then stacked into a beat
+  collect,
   mosaic,
   vinyl,
   sampler,

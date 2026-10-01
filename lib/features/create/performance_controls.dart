@@ -21,6 +21,11 @@ class PerformanceControls extends StatelessWidget {
       Icons.graphic_eq_rounded,
       '声を1音ずつ歌わせて、連打・スクラッチ・分身で曲にする。',
     ),
+    PerformanceMode.collect: (
+      'あつめる',
+      Icons.collections_rounded,
+      '音が1つずつ登場して集まり、ビートに積み上がってから曲になる。',
+    ),
     PerformanceMode.natural: (
       '原声を楽しむ',
       Icons.record_voice_over_rounded,
@@ -63,9 +68,13 @@ class PerformanceControls extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            const Expanded(
+            const Padding(
+              padding: EdgeInsets.only(right: 6),
               child: Text(
                 'つくり方',
                 style: TextStyle(
@@ -77,13 +86,10 @@ class PerformanceControls extends StatelessWidget {
               ),
             ),
             for (final (value, label) in const [(15, '15秒'), (30, '30秒・展開あり')])
-              Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: _LengthPill(
-                  label: label,
-                  selected: seconds == value,
-                  onTap: () => onDuration(value),
-                ),
+              _LengthPill(
+                label: label,
+                selected: seconds == value,
+                onTap: () => onDuration(value),
               ),
           ],
         ),

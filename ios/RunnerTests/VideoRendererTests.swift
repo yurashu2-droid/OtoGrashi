@@ -124,8 +124,8 @@ final class VideoRendererTests: XCTestCase {
   func testPerformanceModesRenderWithProductionValidation() async throws {
     let directory = try evidenceDirectory()
     let modes = fullChecks
-      ? ["mad", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"]
-      : ["mad", "mosaic"]
+      ? ["mad", "collect", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"]
+      : ["mad", "collect", "mosaic"]
     print("MAD_CHECK full=\(fullChecks) modes=\(modes)")
     for mode in modes {
       let requestURL = directory.appendingPathComponent("native-\(mode).json")

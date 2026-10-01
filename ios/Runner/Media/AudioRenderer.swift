@@ -265,7 +265,7 @@ struct ArrangementPayload: Decodable, Equatable {
     guard schemaVersion == Self.supportedSchemaVersion,
       sampleRate == Self.sampleRate,
       [Self.totalSamples, Self.maximumTotalSamples].contains(totalSamples),
-      ["natural", "mad", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"].contains(performanceMode),
+      ["natural", "mad", "collect", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"].contains(performanceMode),
       templateVersion == 1,
       analysisVersion == 1,
       rendererVersion == 1,
@@ -459,7 +459,8 @@ struct AudioRenderer {
             let shaped = try EverydayAudioDSP.render(leveled,
               count: event.durationSamples, targetMidiNote: event.targetMidiNote,
               reverse: event.isReversed, pitchSteps: event.pitchSteps ?? [],
-              hardTune: arrangement.performanceMode == "neonTune" || arrangement.performanceMode == "mad")
+              hardTune: arrangement.performanceMode == "neonTune" || arrangement.performanceMode == "mad"
+                || arrangement.performanceMode == "collect")
             processed = event.targetMidiNote == nil && (event.pitchSteps?.isEmpty ?? true) && event.effectivePitchSemitones != 0
               ? try pitchPreservingDuration(shaped, semitones: event.effectivePitchSemitones,
                   cancellation: cancellation, latencyCache: &pitchLatencies) : shaped

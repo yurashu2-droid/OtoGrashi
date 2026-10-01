@@ -1226,20 +1226,20 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
             ),
             const _SectionLabel('雰囲気'),
             const SizedBox(height: 8),
-            Row(
+            // wraps instead of overflowing with large text
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
               children: [
                 for (final (style, label) in const [
                   (ArrangementStyle.sparse, 'ぽつぽつ'),
                   (ArrangementStyle.swaying, 'ゆらゆら'),
                   (ArrangementStyle.lively, 'にぎやか'),
                 ])
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: _PillChoice(
-                      label: label,
-                      selected: state.style == style,
-                      onTap: () => widget.controller.selectStyle(style),
-                    ),
+                  _PillChoice(
+                    label: label,
+                    selected: state.style == style,
+                    onTap: () => widget.controller.selectStyle(style),
                   ),
               ],
             ),

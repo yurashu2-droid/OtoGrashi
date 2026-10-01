@@ -257,6 +257,8 @@ struct VideoRenderer {
     videoRenderDiagnostic("VIDEO_STAGE providers_ready count=\(providers.count)")
     let mad = request.arrangement.performanceMode == "mad"
       ? MadDirector(request: request, peaks: audioReport.eventPeaks) : nil
+    // stills for the あつめる form, taken once per render
+    let collectCache = CollectStillCache()
     if FileManager.default.fileExists(atPath: outputURL.path) {
       try FileManager.default.removeItem(at: outputURL)
     }
@@ -384,7 +386,8 @@ struct VideoRenderer {
               eventPeaks: audioReport.eventPeaks,
               into: buffer,
               width: dimensions.width,
-              height: dimensions.height
+              height: dimensions.height,
+              collectCache: collectCache
             )
           }
         }, onCancel: {
@@ -704,9 +707,15 @@ struct VideoRenderer {
     eventPeaks: [[Float]],
     into buffer: CVPixelBuffer,
     width: Int,
-    height: Int
+    height: Int,
+    collectCache: CollectStillCache? = nil
   ) async throws {
     let sample = frame * 1_600
+    if request.arrangement.performanceMode == "collect" {
+      try await drawCollectFrame(frame, request: request, providers: providers,
+        cache: collectCache ?? CollectStillCache(), into: buffer, width: width, height: height)
+      return
+    }
     if request.arrangement.performanceMode != "natural" {
       try await drawPerformanceFrame(frame, request: request, providers: providers,
         waveformPeaks: waveformPeaks, eventPeaks: eventPeaks, into: buffer, width: width, height: height)
@@ -903,7 +912,8 @@ struct VideoRenderer {
           y: h * 0.32 - CGFloat(row + 1) * size - CGFloat(row) * gap, width: size, height: size)
       }
     }
-    var canvas = CIImage(color: CIColor(red: 0.035, green: 0.04, blue: 0.065)).cropped(to: bounds)
+    // a flat pastel ground per mode, like the app (no dark stage)
+    var canvas = CIImage(color: CIColor(cgColor: Self.performanceGround(mode))).cropped(to: bounds)
     var cards: [PerformanceCard] = []
     for (index, identity) in keys.enumerated() {
       let all = sorted.filter { key($0) == identity }
@@ -953,7 +963,8 @@ struct VideoRenderer {
         ]).applyingFilter("CIHueAdjust", parameters: ["inputAngle": Double(sample) / 48000 * 0.9])
       }
       image = image.cropped(to: tile)
-      if !isPlaying { image = image.applyingFilter("CIColorControls", parameters: ["inputSaturation": 0.25, "inputBrightness": -0.16]) }
+      // waiting sounds go soft and pale, not dark
+      if !isPlaying { image = image.applyingFilter("CIColorControls", parameters: ["inputSaturation": 0.45, "inputBrightness": 0.04, "inputContrast": 0.92]) }
       if mode == "vinyl" {
         let radius = min(tile.width, tile.height) / 2
         guard let mask = CIFilter(name: "CIRadialGradient", parameters: [
@@ -970,6 +981,29 @@ struct VideoRenderer {
     try drawCaptions(request.video.captions.filter { sample >= $0.destinationStartSample && sample < $0.destinationStartSample + $0.durationSamples }, into: buffer, width: width, height: height)
   }
 
+  /// The calm ground each performance mode is drawn on.
+  static func performanceGround(_ mode: String) -> CGColor {
+    switch mode {
+    case "mosaic": return CGColor(red: 0.98, green: 0.96, blue: 0.93, alpha: 1)
+    case "vinyl": return CGColor(red: 0.94, green: 0.93, blue: 0.98, alpha: 1)
+    case "sampler": return CGColor(red: 0.92, green: 0.97, blue: 0.95, alpha: 1)
+    case "voiceLead": return CGColor(red: 0.93, green: 0.96, blue: 0.99, alpha: 1)
+    case "neonTune": return CGColor(red: 0.99, green: 0.94, blue: 0.95, alpha: 1)
+    case "loopStation": return CGColor(red: 0.99, green: 0.97, blue: 0.90, alpha: 1)
+    default: return CGColor(red: 0.976, green: 0.976, blue: 0.976, alpha: 1)
+    }
+  }
+
+  /// The app's per-sound colours, in capture order.
+  static let soundPalette: [CGColor] = [
+    CGColor(red: 0.937, green: 0.443, blue: 0.424, alpha: 1),
+    CGColor(red: 0.612, green: 0.518, blue: 0.941, alpha: 1),
+    CGColor(red: 0.949, green: 0.663, blue: 0.231, alpha: 1),
+    CGColor(red: 0.310, green: 0.682, blue: 0.549, alpha: 1),
+    CGColor(red: 0.306, green: 0.592, blue: 0.878, alpha: 1),
+    CGColor(red: 0.878, green: 0.443, blue: 0.706, alpha: 1),
+  ]
+
   private func drawPerformanceOverlay(_ cards: [PerformanceCard], frame: Int,
     request: VideoRenderRequestPayload, peaks: [CGFloat], into buffer: CVPixelBuffer,
     width: Int, height: Int) throws {
@@ -980,35 +1014,77 @@ struct VideoRenderer {
       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue)
     else { throw VideoRenderError.writerFailed }
     let w = CGFloat(width), h = CGFloat(height), mode = request.arrangement.performanceMode
-    let palette: [CGColor] = [CGColor(red: 0.7, green: 1, blue: 0.28, alpha: 1),
-      CGColor(red: 1, green: 0.39, blue: 0.59, alpha: 1), CGColor(red: 0.35, green: 0.85, blue: 1, alpha: 1),
-      CGColor(red: 1, green: 0.76, blue: 0.27, alpha: 1)]
-    func text(_ string: String, _ x: CGFloat, _ y: CGFloat, _ size: CGFloat, _ color: CGColor) {
-      let attrs: [NSAttributedString.Key: Any] = [NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("HiraginoSans-W6" as CFString, size, nil), NSAttributedString.Key(kCTForegroundColorAttributeName as String): color]
-      let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: attrs))
-      g.textPosition = CGPoint(x: x, y: y); CTLineDraw(line, g)
-    }
+    let ink = CGColor(red: 0.2, green: 0.2, blue: 0.2, alpha: 1)
+    let muted = CGColor(red: 0.54, green: 0.54, blue: 0.54, alpha: 1)
     let white = CGColor(gray: 1, alpha: 1)
-    let title = ["mosaic": "MEMORY WALL", "vinyl": "VOICE VINYL", "sampler": "DAILY SAMPLER", "voiceLead": "VOICE & MELODY", "neonTune": "RAINBOW TUNE", "loopStation": "LOOP STATION"][mode] ?? "OTOGRASHI"
-    text("OTOGRASHI / 128 BPM", w * 0.06, h * 0.937, w * 0.024, palette[0])
-    text(title, w * 0.06, h * 0.871, w * 0.06, white)
-    let seconds = request.arrangement.totalSamples / 48000
-    text("\(cards.filter(\.playing).count) VOICES  ·  \(String(format: "%02d", frame / 30)) / \(seconds)s", w * 0.06, h * 0.833, w * 0.025, CGColor(gray: 0.67, alpha: 1))
+    let ground = Self.performanceGround(mode)
+    func line(_ string: String, _ size: CGFloat, _ color: CGColor) -> CTLine {
+      let attrs: [NSAttributedString.Key: Any] = [
+        NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("HiraginoSans-W6" as CFString, size, nil),
+        NSAttributedString.Key(kCTForegroundColorAttributeName as String): color]
+      return CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: attrs))
+    }
+    // A small rounded pill with text (and an optional colour dot).
+    func pill(_ string: String, x: CGFloat, y: CGFloat, size: CGFloat, dot: CGColor? = nil,
+      fill: CGColor = CGColor(gray: 1, alpha: 0.92), color: CGColor = CGColor(red: 0.2, green: 0.2, blue: 0.2, alpha: 1)) {
+      let text = line(string, size, color)
+      let textWidth = CGFloat(CTLineGetTypographicBounds(text, nil, nil, nil))
+      let padX = size * 0.7, height = size * 1.75
+      let dotSpace: CGFloat = dot == nil ? 0 : size * 0.85
+      let rect = CGRect(x: x, y: y, width: textWidth + padX * 2 + dotSpace, height: height)
+      g.setFillColor(fill)
+      g.addPath(CGPath(roundedRect: rect, cornerWidth: height / 2, cornerHeight: height / 2, transform: nil))
+      g.fillPath()
+      if let dot {
+        g.setFillColor(dot)
+        g.fillEllipse(in: CGRect(x: x + padX * 0.8, y: y + height / 2 - size * 0.25, width: size * 0.5, height: size * 0.5))
+      }
+      g.textPosition = CGPoint(x: x + padX + dotSpace, y: y + height * 0.3)
+      CTLineDraw(text, g)
+    }
+
     for card in cards {
-      let color = palette[card.index % palette.count], r = card.rect
-      g.setStrokeColor(card.playing ? color : CGColor(gray: 0.35, alpha: 0.5))
-      g.setLineWidth(w * (card.playing ? 0.006 : 0.002))
+      let color = Self.soundPalette[card.index % Self.soundPalette.count], r = card.rect
+      let border = w * 0.012
       if mode == "vinyl" {
-        g.strokeEllipse(in: r)
-        for k in [0.06, 0.12, 0.18] { g.strokeEllipse(in: r.insetBy(dx: r.width * k, dy: r.height * k)) }
-        g.setFillColor(CGColor(gray: 0.04, alpha: 0.9)); g.fillEllipse(in: r.insetBy(dx: r.width * 0.35, dy: r.height * 0.35))
-        g.setFillColor(color); g.fillEllipse(in: r.insetBy(dx: r.width * 0.465, dy: r.height * 0.465))
-      } else { g.stroke(r) }
-      let title = request.video.clipNames[card.event.assetId] ?? "SOUND \(card.index + 1)"
+        // a record: soft grooves, a coloured label and a white rim
+        g.setStrokeColor(CGColor(gray: 1, alpha: 0.45))
+        g.setLineWidth(w * 0.002)
+        for k in [0.08, 0.15, 0.22] { g.strokeEllipse(in: r.insetBy(dx: r.width * k, dy: r.height * k)) }
+        g.setFillColor(ground); g.fillEllipse(in: r.insetBy(dx: r.width * 0.34, dy: r.height * 0.34))
+        g.setFillColor(color); g.fillEllipse(in: r.insetBy(dx: r.width * 0.38, dy: r.height * 0.38))
+        g.setFillColor(ground); g.fillEllipse(in: r.insetBy(dx: r.width * 0.475, dy: r.height * 0.475))
+        g.setStrokeColor(white); g.setLineWidth(border); g.strokeEllipse(in: r)
+        if card.playing {
+          g.setStrokeColor(color); g.setLineWidth(w * 0.006)
+          g.strokeEllipse(in: r.insetBy(dx: -border * 1.3, dy: -border * 1.3))
+        }
+      } else {
+        // a sticker: rounded corners cut from the ground, a white edge
+        let radius = min(r.width, r.height) * 0.12
+        let rounded = CGPath(roundedRect: r, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        g.saveGState()
+        g.addRect(r.insetBy(dx: -1, dy: -1)); g.addPath(rounded)
+        g.setFillColor(ground); g.fillPath(using: .evenOdd)
+        g.restoreGState()
+        g.addPath(rounded); g.setStrokeColor(white); g.setLineWidth(border); g.strokePath()
+        if card.playing {
+          let outer = r.insetBy(dx: -border * 1.4, dy: -border * 1.4)
+          g.addPath(CGPath(roundedRect: outer, cornerWidth: radius + border * 1.4,
+            cornerHeight: radius + border * 1.4, transform: nil))
+          g.setStrokeColor(color); g.setLineWidth(w * 0.006); g.strokePath()
+        }
+      }
+      // the sound's name as a small pill under it
+      let title = request.video.clipNames[card.event.assetId] ?? "音 \(card.index + 1)"
       let part = card.event.partIndex ?? 0
-      let name = part > 0 ? "\(title) ·\(part + 1)" : title
-      g.saveGState(); g.clip(to: CGRect(x: r.minX, y: r.minY - w * 0.04, width: r.width, height: w * 0.05))
-      text(String(name.prefix(14)), r.minX + 2, r.minY - w * 0.033, min(w * 0.027, r.width * 0.09), card.playing ? white : CGColor(gray: 0.55, alpha: 1)); g.restoreGState()
+      let name = String((part > 0 ? "\(title) ·\(part + 1)" : title).prefix(12))
+      let labelSize = min(w * 0.024, max(w * 0.016, r.width * 0.075))
+      g.saveGState()
+      g.clip(to: CGRect(x: r.minX - w * 0.01, y: r.minY - labelSize * 2.6, width: r.width + w * 0.02, height: labelSize * 2.4))
+      pill(name, x: r.minX, y: r.minY - labelSize * 2.4, size: labelSize, dot: color,
+        color: card.playing ? ink : muted)
+      g.restoreGState()
       if card.playing && (mode == "sampler" || mode == "neonTune" || mode == "loopStation") {
         let radius = min(r.width, r.height) * 0.44
         // Each pad follows its OWN post-fade rendered samples, not another voice in the mix.
@@ -1016,27 +1092,36 @@ struct VideoRenderer {
           let a = Double(k) * Double.pi * 2 / 40
           let envelopeFrame = card.age / 1600 + k / 5 - 4
           let level = card.peaks.isEmpty ? CGFloat(0) : CGFloat(card.peaks[max(0, min(card.peaks.count - 1, envelopeFrame))])
-          let length = w * 0.01 + min(1, level) * w * 0.038
+          let length = w * 0.008 + min(1, level) * w * 0.032
           let x = CGFloat(cos(a)), y = CGFloat(sin(a))
           g.move(to: CGPoint(x: r.midX + x * radius, y: r.midY + y * radius))
           g.addLine(to: CGPoint(x: r.midX + x * (radius + length), y: r.midY + y * (radius + length)))
         }
-        g.setLineWidth(w * 0.003); g.strokePath()
+        g.setStrokeColor(CGColor(gray: 1, alpha: 0.9)); g.setLineCap(.round)
+        g.setLineWidth(w * 0.005); g.strokePath()
       }
       if card.voices > 1 {
-        text("×\(card.voices)", r.maxX - w * 0.055, r.maxY - w * 0.037, w * 0.029, color)
+        pill("×\(card.voices)", x: r.maxX - w * 0.1, y: r.maxY - w * 0.06, size: w * 0.022, fill: color, color: white)
       }
       if card.playing && card.event.isReversed {
-        text("REVERSE", r.minX + 5, r.maxY - w * 0.037, w * 0.026, palette[1])
+        pill("巻き戻し", x: r.minX + w * 0.015, y: r.maxY - w * 0.06, size: w * 0.022)
       }
     }
+    // the mode's name, small, top left (no big English titles)
+    let title = ["mosaic": "どんどん増殖", "vinyl": "声レコード", "sampler": "サンプラー",
+      "voiceLead": "メロディ＋会話", "neonTune": "虹色チューン", "loopStation": "ループ育成"][mode] ?? "オトグラシ"
+    pill(title, x: w * 0.06, y: h * 0.905, size: w * 0.03, dot: Self.soundPalette[0])
+    // the bar as sixteen quiet dots
     let beat = frame * 1600 / 22500
+    let dot = w * 0.014, step = w * 0.034
+    let left = (w - step * 15 - dot) / 2
     for index in 0..<16 {
-      let x = w * 0.06 + CGFloat(index) * w * 0.055
-      g.setFillColor(index == beat % 16 ? palette[0] : CGColor(gray: 0.3, alpha: 0.8))
-      g.fill(CGRect(x: x, y: h * 0.082, width: w * 0.038, height: h * 0.008))
+      g.setFillColor(index == beat % 16
+        ? Self.soundPalette[beat / 16 % Self.soundPalette.count]
+        : CGColor(red: 0.2, green: 0.2, blue: 0.2, alpha: 0.14))
+      g.fillEllipse(in: CGRect(x: left + CGFloat(index) * step, y: h * 0.06, width: dot, height: dot))
     }
-    text("RECORDED LIFE. REMIXED.", w * 0.06, h * 0.046, w * 0.025, CGColor(gray: 0.7, alpha: 1))
+    _ = peaks
   }
 
   static func targetRects(
@@ -3318,5 +3403,310 @@ extension MadDirector {
         color: CGColor(gray: 1, alpha: 0.92), H: H, shadow: true)
     }
     return out.cropped(to: full)
+  }
+}
+
+// MARK: - あつめる (collect)
+
+/// Pictures for the あつめる form, kept for the whole render: each hit is a
+/// still taken once, and each sound's face once.
+final class CollectStillCache {
+  var hits: [Int: CGImage] = [:]
+  var faces: [String: CGImage] = [:]
+}
+
+/// あつめる: the sounds are collected one at a time (each on its own colour,
+/// bouncing in under its name, its face then flying into a tray at the top),
+/// then become lanes where every hit leaves a photo at the playhead that
+/// drifts left, while the singer's lane grows and draws the tune as notes.
+struct CollectFrameRenderer {
+  static let bar = 90_000
+  static let sampleRate: CGFloat = 48_000
+
+  struct Entry {
+    let assetId: String
+    let start: Int
+    let end: Int
+    let eventIndex: Int
+  }
+
+  /// The collecting part: each sound's first phrase, in the order heard.
+  static func entries(_ arrangement: ArrangementPayload, buildSample: Int) -> [Entry] {
+    var firsts: [(String, Int, Int)] = []
+    for (index, event) in arrangement.events.enumerated()
+    where event.role == "phrase" && event.destinationStartSample < buildSample
+      && !firsts.contains(where: { $0.0 == event.assetId }) {
+      firsts.append((event.assetId, event.destinationStartSample, index))
+    }
+    firsts.sort { $0.1 < $1.1 }
+    return firsts.enumerated().map { k, item in
+      Entry(assetId: item.0, start: item.1,
+        end: k + 1 < firsts.count ? firsts[k + 1].1 : buildSample, eventIndex: item.2)
+    }
+  }
+
+  static func phases(_ arrangement: ArrangementPayload) -> (build: Int, song: Int) {
+    let build = arrangement.sections.first { $0.energy == "mid" }?.fromBar ?? 2
+    let song = arrangement.sections.first { $0.energy == "high" }?.fromBar ?? build + 3
+    return (build * bar, song * bar)
+  }
+
+  static func overshoot(_ x: CGFloat) -> CGFloat {
+    let t = min(max(x, 0), 1)
+    let c = 1.70158 * 1.2
+    return 1 + (c + 1) * pow(t - 1, 3) + c * pow(t - 1, 2)
+  }
+
+  static func pastel(_ index: Int, mix: CGFloat = 0.72) -> CGColor {
+    let base = VideoRenderer.soundPalette[index % VideoRenderer.soundPalette.count]
+    let c = base.components ?? [0.9, 0.9, 0.9, 1]
+    return CGColor(red: c[0] + (1 - c[0]) * mix, green: c[1] + (1 - c[1]) * mix,
+      blue: c[2] + (1 - c[2]) * mix, alpha: 1)
+  }
+
+  static func darker(_ index: Int, by k: CGFloat = 0.6) -> CGColor {
+    let base = VideoRenderer.soundPalette[index % VideoRenderer.soundPalette.count]
+    let c = base.components ?? [0.3, 0.3, 0.3, 1]
+    return CGColor(red: c[0] * k, green: c[1] * k, blue: c[2] * k, alpha: 1)
+  }
+
+  /// Draws `image` to fill `rect` (cropping the overflow).
+  static func fill(_ g: CGContext, _ image: CGImage, _ rect: CGRect) {
+    let iw = CGFloat(image.width), ih = CGFloat(image.height)
+    let scale = max(rect.width / iw, rect.height / ih)
+    let size = CGSize(width: iw * scale, height: ih * scale)
+    g.draw(image, in: CGRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2,
+      width: size.width, height: size.height))
+  }
+
+  static func sticker(_ g: CGContext, _ image: CGImage?, _ rect: CGRect, radius: CGFloat,
+    edge: CGFloat, fallback: CGColor) {
+    let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
+    g.saveGState()
+    g.setShadow(offset: CGSize(width: 0, height: -edge * 0.8), blur: edge * 2.4,
+      color: CGColor(gray: 0, alpha: 0.18))
+    g.addPath(path); g.setFillColor(CGColor(gray: 1, alpha: 1)); g.fillPath()
+    g.restoreGState()
+    let inner = rect.insetBy(dx: edge, dy: edge)
+    let innerRadius = max(0, radius - edge)
+    g.saveGState()
+    g.addPath(CGPath(roundedRect: inner, cornerWidth: innerRadius, cornerHeight: innerRadius, transform: nil))
+    g.clip()
+    if let image { fill(g, image, inner) } else { g.setFillColor(fallback); g.fill(inner) }
+    g.restoreGState()
+  }
+
+  static func disc(_ g: CGContext, _ image: CGImage?, center: CGPoint, diameter: CGFloat,
+    ring: CGColor, fallback: CGColor) {
+    let rect = CGRect(x: center.x - diameter / 2, y: center.y - diameter / 2, width: diameter, height: diameter)
+    g.setFillColor(ring); g.fillEllipse(in: rect)
+    let inner = rect.insetBy(dx: diameter * 0.07, dy: diameter * 0.07)
+    g.saveGState(); g.addEllipse(in: inner); g.clip()
+    if let image { fill(g, image, inner) } else { g.setFillColor(fallback); g.fill(inner) }
+    g.restoreGState()
+  }
+
+  static func text(_ g: CGContext, _ string: String, size: CGFloat, color: CGColor,
+    centerX: CGFloat? = nil, x: CGFloat = 0, y: CGFloat) {
+    let attrs: [NSAttributedString.Key: Any] = [
+      NSAttributedString.Key(kCTFontAttributeName as String):
+        CTFontCreateWithName("HiraginoSans-W6" as CFString, size, nil),
+      NSAttributedString.Key(kCTForegroundColorAttributeName as String): color]
+    let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: attrs))
+    let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+    g.textPosition = CGPoint(x: centerX.map { $0 - width / 2 } ?? x, y: y)
+    CTLineDraw(line, g)
+  }
+}
+
+extension VideoRenderer {
+  fileprivate func drawCollectFrame(_ frame: Int, request: VideoRenderRequestPayload,
+    providers: [String: SourceProvider], cache: CollectStillCache,
+    into buffer: CVPixelBuffer, width: Int, height: Int) async throws {
+    typealias R = CollectFrameRenderer
+    let sample = frame * 1600
+    let arrangement = request.arrangement
+    let (buildSample, songSample) = R.phases(arrangement)
+    let entries = R.entries(arrangement, buildSample: buildSample)
+    let order = entries.map(\.assetId)
+    let w = CGFloat(width), h = CGFloat(height)
+    let video = arrangement.videoEvents
+
+    func still(_ eventIndex: Int, at s: Int) async throws -> CGImage? {
+      guard eventIndex < video.count, let provider = providers[video[eventIndex].assetId] else { return nil }
+      let event = video[eventIndex]
+      let local = event.destinationStartSample + min(max(0, s - event.destinationStartSample), max(0, event.durationSamples - 1))
+      return try await provider.image(at: VideoRenderer.sourceTime(assetId: event.assetId, sample: local,
+        events: [event], duration: provider.duration))
+    }
+    func face(_ assetId: String) async throws -> CGImage? {
+      if let cached = cache.faces[assetId] { return cached }
+      guard let entry = entries.first(where: { $0.assetId == assetId }) else { return nil }
+      let image = try await still(entry.eventIndex, at: entry.start + 2400)
+      cache.faces[assetId] = image
+      return image
+    }
+    func hitStill(_ index: Int) async throws -> CGImage? {
+      if let cached = cache.hits[index] { return cached }
+      let image = try await still(index, at: video[index].destinationStartSample)
+      if cache.hits.count < 160 { cache.hits[index] = image }
+      return image
+    }
+    let names = request.video.clipNames
+    func name(_ assetId: String, _ k: Int) -> String { String((names[assetId] ?? "音 \(k + 1)").prefix(10)) }
+
+    // gather every picture first; drawing is synchronous on the locked buffer
+    var current: CGImage?
+    var faces: [String: CGImage] = [:]
+    for id in order { faces[id] = try await face(id) }
+    var hits: [(index: Int, image: CGImage?)] = []
+    let k = entries.lastIndex { $0.start <= sample } ?? 0
+    let collecting = sample < buildSample && !entries.isEmpty
+    let singer = arrangement.events.first { $0.role == "melody" }?.assetId ?? order.first
+    let playhead = w * 0.8, speed = w * 0.39 // per second
+    if collecting {
+      current = try await still(entries[k].eventIndex, at: sample)
+    } else {
+      var lastHit: [String: Int] = [:]
+      for (index, event) in arrangement.events.enumerated() {
+        guard event.destinationStartSample >= buildSample, event.destinationStartSample <= sample,
+          order.contains(event.assetId) else { continue }
+        if event.assetId == singer && sample >= songSample && event.role == "melody" { continue }
+        if let last = lastHit[event.assetId], event.destinationStartSample - last < 4800 { continue }
+        lastHit[event.assetId] = event.destinationStartSample
+        let x = playhead - CGFloat(sample - event.destinationStartSample) / R.sampleRate * speed
+        if x < w * 0.14 { continue }
+        let image = try await hitStill(index)
+        hits.append((index: index, image: image))
+      }
+    }
+
+    CVPixelBufferLockBaseAddress(buffer, [])
+    defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+    guard let base = CVPixelBufferGetBaseAddress(buffer), let g = CGContext(data: base,
+      width: width, height: height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+      space: CGColorSpaceCreateDeviceRGB(),
+      bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue)
+    else { throw VideoRenderError.writerFailed }
+    let white = CGColor(gray: 1, alpha: 1)
+    let edge = w * 0.022
+
+    // the tray of collected sounds along the top
+    func tray(alpha: CGFloat) {
+      let n = max(1, entries.count)
+      let size = n <= 4 ? w * 0.13 : w * 0.105
+      let gap = w * 0.03
+      let x0 = (w - (CGFloat(n) * size + CGFloat(n - 1) * gap)) / 2 + size / 2
+      for (j, entry) in entries.enumerated() {
+        let slot = CGPoint(x: x0 + CGFloat(j) * (size + gap), y: h * 0.9)
+        g.setStrokeColor(CGColor(gray: 1, alpha: 0.9 * alpha)); g.setLineWidth(w * 0.008)
+        g.setFillColor(CGColor(gray: 1, alpha: 0.35 * alpha))
+        let ringRect = CGRect(x: slot.x - size / 2, y: slot.y - size / 2, width: size, height: size)
+        g.fillEllipse(in: ringRect); g.strokeEllipse(in: ringRect)
+        let fly = entry.end - 13_440 // 0.28 s
+        guard sample >= fly else { continue }
+        let u = CGFloat(sample - fly) / 13_440
+        var center = slot, diameter = size
+        if u < 1 {
+          let v = u * u * (3 - 2 * u)
+          let from = CGPoint(x: w / 2, y: h * 0.42)
+          center = CGPoint(x: from.x + (slot.x - from.x) * v, y: from.y + (slot.y - from.y) * v)
+          diameter = size * (2.2 - 1.2 * v)
+        } else {
+          diameter = size * (1 + 0.15 * max(0, 1 - (u - 1) * 4))
+        }
+        g.saveGState(); g.setAlpha(alpha)
+        R.disc(g, faces[entry.assetId], center: center, diameter: diameter, ring: white, fallback: R.pastel(j, mix: 0.3))
+        g.restoreGState()
+      }
+    }
+
+    if collecting {
+      let entry = entries[k]
+      g.setFillColor(R.pastel(k)); g.fill(CGRect(x: 0, y: 0, width: w, height: h))
+      let age = CGFloat(sample - entry.start) / R.sampleRate
+      let scale = R.overshoot(age / 0.3)
+      let boxH = h * 0.44 * scale, boxW = min(w * 0.7, boxH * 0.78)
+      let rect = CGRect(x: w / 2 - boxW / 2, y: h * 0.42 - boxH / 2, width: boxW, height: boxH)
+      g.saveGState()
+      g.translateBy(x: rect.midX, y: rect.midY)
+      g.rotate(by: -0.06 + 0.04 * sin(age * 7))
+      g.translateBy(x: -rect.midX, y: -rect.midY)
+      R.sticker(g, current, rect, radius: w * 0.05, edge: edge, fallback: R.pastel(k, mix: 0.3))
+      g.restoreGState()
+      let pop = min(1, max(0, (age - 0.05) / 0.25))
+      if pop > 0 {
+        g.saveGState(); g.setAlpha(pop)
+        R.text(g, name(entry.assetId, k), size: w * 0.075, color: R.darker(k, by: 0.45),
+          centerX: w / 2, y: h * 0.7)
+        g.restoreGState()
+      }
+      tray(alpha: 1)
+      return
+    }
+
+    // lanes: the collected sounds become a beat that draws itself
+    g.setFillColor(CGColor(red: 0.976, green: 0.976, blue: 0.976, alpha: 1))
+    g.fill(CGRect(x: 0, y: 0, width: w, height: h))
+    let grow: CGFloat = sample >= songSample
+      ? min(1, CGFloat(sample - songSample) / (R.sampleRate * 0.4)) : 0
+    let weights = order.map { $0 == singer ? 1 + 1.6 * grow : 1 }
+    let top = h * 0.84, bottom = h * 0.1
+    let slide = min(1, CGFloat(sample - buildSample) / (R.sampleRate * 0.35))
+    let offset = (1 - slide) * h * 0.4
+    var y = top - offset
+    let total = weights.reduce(0, +)
+    for (lane, assetId) in order.enumerated() {
+      let laneH = (top - bottom) * weights[lane] / total
+      let band = CGRect(x: w * 0.03, y: y - laneH + 4, width: w * 0.94, height: laneH - 8)
+      g.addPath(CGPath(roundedRect: band, cornerWidth: w * 0.04, cornerHeight: w * 0.04, transform: nil))
+      g.setFillColor(R.pastel(lane, mix: 0.62)); g.fillPath()
+      let mid = y - laneH / 2
+      // the tune, as notes on the singer's lane
+      if assetId == singer && sample >= songSample {
+        let notes = arrangement.events.filter {
+          $0.assetId == assetId && $0.role == "melody" && $0.destinationStartSample >= songSample
+            && $0.destinationStartSample <= sample && $0.targetMidiNote != nil
+        }
+        let pitches = notes.compactMap(\.targetMidiNote)
+        let centre = pitches.isEmpty ? 60 : pitches.reduce(0, +) / Double(pitches.count)
+        for note in notes {
+          let on = CGFloat(note.destinationStartSample), off = on + CGFloat(note.durationSamples)
+          let x0 = playhead - (CGFloat(sample) - on) / R.sampleRate * speed
+          let x1 = min(playhead, playhead - (CGFloat(sample) - off) / R.sampleRate * speed)
+          if x1 < w * 0.14 { continue }
+          let cy = mid - CGFloat((note.targetMidiNote! - centre) / 12) * laneH * 0.3
+          let playing = CGFloat(sample) >= on && CGFloat(sample) < off
+          let barH = laneH * (playing ? 0.11 : 0.085)
+          let rect = CGRect(x: max(w * 0.14, x0), y: cy - barH / 2,
+            width: max(barH, x1 - max(w * 0.14, x0)), height: barH)
+          g.addPath(CGPath(roundedRect: rect, cornerWidth: barH / 2, cornerHeight: barH / 2, transform: nil))
+          g.setFillColor(playing ? white : R.darker(lane, by: 0.75)); g.fillPath()
+        }
+      }
+      // every hit leaves a photo at the playhead that drifts left
+      var level: CGFloat = 0
+      for hit in hits where video[hit.index].assetId == assetId {
+        let event = arrangement.events[hit.index]
+        let x = playhead - CGFloat(sample - event.destinationStartSample) / R.sampleRate * speed
+        let age = CGFloat(sample - event.destinationStartSample) / R.sampleRate
+        let pop = R.overshoot(age / 0.18)
+        if sample < event.destinationStartSample + event.durationSamples { level = 1 }
+        let size = min(laneH * 0.7, assetId == singer ? w * 0.13 : w * 0.085) * pop
+        var cy = mid
+        if assetId == singer, let note = event.targetMidiNote { cy -= CGFloat((note - 60) / 12) * laneH * 0.2 }
+        R.sticker(g, hit.image, CGRect(x: x - size / 2, y: cy - size / 2, width: size, height: size),
+          radius: size * 0.18, edge: max(2, size * 0.06), fallback: R.pastel(lane, mix: 0.3))
+      }
+      // the lane's head: its face, swelling while it plays
+      let diameter = min(laneH * 0.62, w * 0.11) * (1 + 0.16 * level)
+      R.disc(g, faces[assetId], center: CGPoint(x: w * 0.085, y: mid), diameter: diameter,
+        ring: white, fallback: R.pastel(lane, mix: 0.3))
+      y -= laneH
+    }
+    g.setStrokeColor(CGColor(red: 0.2, green: 0.2, blue: 0.2, alpha: 0.35)); g.setLineWidth(w * 0.004)
+    g.move(to: CGPoint(x: playhead, y: top - offset)); g.addLine(to: CGPoint(x: playhead, y: bottom - offset))
+    g.strokePath()
+    if slide < 1 { tray(alpha: 1 - slide) }
   }
 }

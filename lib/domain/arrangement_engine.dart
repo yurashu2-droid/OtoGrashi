@@ -12,13 +12,15 @@ Arrangement arrange({
   PerformanceMode performanceMode = PerformanceMode.natural,
   int durationSeconds = 15,
 }) {
-  if (performanceMode == PerformanceMode.mad) {
+  if (performanceMode == PerformanceMode.mad ||
+      performanceMode == PerformanceMode.collect) {
     return arrangeMad(
       clips: clips,
       style: style,
       seed: seed,
       melodyTemplate: melodyTemplate,
       seconds: durationSeconds,
+      collect: performanceMode == PerformanceMode.collect,
     );
   }
   if (performanceMode != PerformanceMode.natural ||
