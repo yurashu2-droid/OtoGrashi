@@ -9,6 +9,8 @@ on:
       - 'ios/**'
       - 'assets/**'
       - 'test/**'
+      # tests run the review scripts, so a change there must be checked too
+      - 'scripts/**'
       - 'integration_test/**'
       - 'pubspec.yaml'
       - 'pubspec.lock'
