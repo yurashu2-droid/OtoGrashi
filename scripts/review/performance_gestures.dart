@@ -46,10 +46,12 @@ void main() {
         'rhythm-only must remain unpitched',
       );
       checks++;
-      // MAD places its own stutters by song structure, not on these cues.
+      // MAD and あつめる place their own stutters by song structure, not on
+      // these cues.
       if (mode == PerformanceMode.natural ||
           mode == PerformanceMode.loopStation ||
-          mode == PerformanceMode.mad) {
+          mode == PerformanceMode.mad ||
+          mode == PerformanceMode.collect) {
         continue;
       }
       final a = arrange(
