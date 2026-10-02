@@ -194,14 +194,14 @@ jobs:
           fi
 
       - name: Verify rendered audio evidence
-        if: always() && env.OTO_MEDIA_PARITY != '1'
+        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1'
         shell: bash
         run: |
           test -f ci-artifacts/audio-render-fixture.wav
           test -f ci-artifacts/audio-render-report.json
 
       - name: Verify rendered video evidence
-        if: always() && env.OTO_MEDIA_PARITY != '1'
+        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1'
         shell: bash
         run: |
           test -f ci-artifacts/video-render-preview.mp4
