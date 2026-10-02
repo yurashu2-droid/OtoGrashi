@@ -3,12 +3,15 @@ import 'package:flutter/services.dart';
 
 import '../../media/platform_media_gateway.dart';
 
-/// Hidden check (long-press the wordmark): can this phone record depth alongside video?
-/// Runs a separate 1.5 s session on the native side and shows what it found.
+/// Hidden measurement (long-press the wordmark): how long the depth model takes to
+/// download, compile and run over the newest clip on this phone.
 Future<void> runDepthProbe(BuildContext context) async {
   final messenger = ScaffoldMessenger.of(context);
   messenger.showSnackBar(
-    const SnackBar(content: Text('奥行きの記録を確認しています…')),
+    const SnackBar(
+      duration: Duration(minutes: 2),
+      content: Text('奥行き推定を計測しています…（初回はモデル約50MBをダウンロード）'),
+    ),
   );
   String report;
   try {
@@ -28,7 +31,7 @@ Future<void> runDepthProbe(BuildContext context) async {
   await showDialog<void>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('奥行きの確認'),
+      title: const Text('奥行き推定の計測'),
       content: SelectableText(report),
       actions: [
         TextButton(
