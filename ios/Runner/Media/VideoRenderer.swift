@@ -204,11 +204,16 @@ struct VideoRenderReport {
 /// Subsequent frames use the same image graph and color space on the CPU.
 final class VideoRenderContext: @unchecked Sendable {
   private let lock = NSLock()
+  private let cancellation: CancellationToken?
   private var backgrounded = false
   private lazy var hardware = CIContext(options: [.cacheIntermediates: false])
   private lazy var software = CIContext(options: [
     .cacheIntermediates: false, .useSoftwareRenderer: true,
   ])
+
+  init(cancellation: CancellationToken? = nil) {
+    self.cancellation = cancellation
+  }
 
   var usesSoftwareRenderer: Bool {
     lock.lock()
@@ -225,10 +230,19 @@ final class VideoRenderContext: @unchecked Sendable {
   func render(
     _ image: CIImage, to buffer: CVPixelBuffer, bounds: CGRect, colorSpace: CGColorSpace?
   ) {
+    withRenderer { renderer, _ in
+      renderer.render(image, to: buffer, bounds: bounds, colorSpace: colorSpace)
+    }
+  }
+
+  func withRenderer<Value>(_ work: (CIContext, Bool) -> Value) -> Value {
     lock.lock()
     defer { lock.unlock() }
-    let renderer = backgrounded ? software : hardware
-    renderer.render(image, to: buffer, bounds: bounds, colorSpace: colorSpace)
+    return work(backgrounded ? software : hardware, backgrounded)
+  }
+
+  func cancelInterruptedAttempt() {
+    cancellation?.cancel()
   }
 }
 
@@ -292,7 +306,7 @@ struct VideoRenderer {
     )
     videoRenderDiagnostic("VIDEO_STAGE providers_ready count=\(providers.count)")
     let mad = request.arrangement.performanceMode == "mad"
-      ? MadDirector(request: request, peaks: audioReport.eventPeaks) : nil
+      ? MadDirector(request: request, peaks: audioReport.eventPeaks, context: context) : nil
     // stills for the あつめる form, taken once per render
     let collectCache = CollectStillCache()
     if FileManager.default.fileExists(atPath: outputURL.path) {
@@ -1925,6 +1939,7 @@ enum MadShot: String {
 /// clips only, and adds the moments (a strip of stills for repeats, opening
 /// and ending cards, the picture side of master effects).
 final class MadDirector {
+  private let renderContext: VideoRenderContext
   /// PIL multiplies output-encoded RGB. Use Core Image's color matching to the
   /// writer's actual BT.709 profile around that operation; its ICC transfer
   /// curve is not the simple textbook BT.709 power law.
@@ -1991,7 +2006,8 @@ final class MadDirector {
   /// How long before the downbeat the last post starts to lift off.
   static let liftIn = 19_200
 
-  init(request: VideoRenderRequestPayload, peaks: [[Float]]) {
+  init(request: VideoRenderRequestPayload, peaks: [[Float]], context: VideoRenderContext = VideoRenderContext()) {
+    renderContext = context
     let arrangement = request.arrangement
     assetIds = arrangement.sourceAssetIds
     names = assetIds.enumerated().map { request.video.clipNames[$1] ?? "音\($0 + 1)" }
@@ -2475,7 +2491,7 @@ final class MadDirector {
   private func mask(_ e: MadVideoEvent, _ s: Int, picture: CIImage, largest: Bool = false) -> MadMask? {
     let key = "\(e.assetId)#\(e.sourceSample(s) / 1_600)\(largest ? "L" : "")"
     if let cached = masks[key] { return cached }
-    let made = Self.foregroundMask(picture, largest: largest)
+    let made = Self.foregroundMask(picture, largest: largest, renderContext: renderContext)
     if masks.count > 160 { masks.removeAll() }
     masks[key] = made
     return made
@@ -2498,57 +2514,65 @@ final class MadDirector {
 
   /// largest: keep only the biggest subject, so a small sticker never carries
   /// a stray piece of someone at the edge of the frame.
-  static func foregroundMask(_ picture: CIImage, largest: Bool = false) -> MadMask? {
-    // Cutout extraction must also avoid submitting GPU work while backgrounded.
-    let context = CIContext(options: [.cacheIntermediates: false, .useSoftwareRenderer: true])
-    guard let cg = context.createCGImage(picture, from: picture.extent) else { return nil }
-    let handler = VNImageRequestHandler(cgImage: cg, options: [:])
-    let request = VNGenerateForegroundInstanceMaskRequest()
-    request.usesCPUOnly = true
-    do {
-      try handler.perform([request])
-      guard let observation = request.results?.first else { return nil }
-      var instances = observation.allInstances
-      if largest, instances.count > 1 {
-        var best: (instance: Int, pixels: Int)?
-        for instance in instances {
-          let single = try observation.generateScaledMaskForImage(forInstances: IndexSet(integer: instance), from: handler)
-          let pixels = maskPixels(single)
-          if best == nil || pixels > best!.pixels { best = (instance, pixels) }
-        }
-        if let best { instances = IndexSet(integer: best.instance) }
-      }
-      let buffer = try observation.generateScaledMaskForImage(forInstances: instances, from: handler)
-      CVPixelBufferLockBaseAddress(buffer, .readOnly)
-      defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-      let w = CVPixelBufferGetWidth(buffer), h = CVPixelBufferGetHeight(buffer)
-      guard w > 0, h > 0, let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
-      let row = CVPixelBufferGetBytesPerRow(buffer)
-      var minX = w, maxX = -1, minY = h, maxY = -1, on = 0, rowsOn = 0, samples = 0
-      for y in stride(from: 0, to: h, by: 4) {
-        let line = base.advanced(by: y * row).assumingMemoryBound(to: Float32.self)
-        var any = false
-        for x in stride(from: 0, to: w, by: 4) {
-          samples += 1
-          if line[x] > 0.5 {
-            on += 1
-            any = true
-            minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+  static func foregroundMask(
+    _ picture: CIImage, largest: Bool = false,
+    renderContext: VideoRenderContext = VideoRenderContext()
+  ) -> MadMask? {
+    // Include Vision in the lifecycle barrier. Foreground extraction keeps its
+    // existing accelerator; background extraction cannot submit GPU work.
+    return renderContext.withRenderer { context, backgrounded in
+      guard let cg = context.createCGImage(picture, from: picture.extent) else { return nil }
+      let handler = VNImageRequestHandler(cgImage: cg, options: [:])
+      let request = VNGenerateForegroundInstanceMaskRequest()
+      request.usesCPUOnly = backgrounded
+      do {
+        try handler.perform([request])
+        guard let observation = request.results?.first else { return nil }
+        var instances = observation.allInstances
+        if largest, instances.count > 1 {
+          var best: (instance: Int, pixels: Int)?
+          for instance in instances {
+            let single = try observation.generateScaledMaskForImage(forInstances: IndexSet(integer: instance), from: handler)
+            let pixels = maskPixels(single)
+            if best == nil || pixels > best!.pixels { best = (instance, pixels) }
           }
+          if let best { instances = IndexSet(integer: best.instance) }
         }
-        if any { rowsOn += 1 }
+        let buffer = try observation.generateScaledMaskForImage(forInstances: instances, from: handler)
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let w = CVPixelBufferGetWidth(buffer), h = CVPixelBufferGetHeight(buffer)
+        guard w > 0, h > 0, let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+        let row = CVPixelBufferGetBytesPerRow(buffer)
+        var minX = w, maxX = -1, minY = h, maxY = -1, on = 0, rowsOn = 0, samples = 0
+        for y in stride(from: 0, to: h, by: 4) {
+          let line = base.advanced(by: y * row).assumingMemoryBound(to: Float32.self)
+          var any = false
+          for x in stride(from: 0, to: w, by: 4) {
+            samples += 1
+            if line[x] > 0.5 {
+              on += 1
+              any = true
+              minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+            }
+          }
+          if any { rowsOn += 1 }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+        let image = CIImage(cvPixelBuffer: buffer).transformed(by: CGAffineTransform(
+          translationX: picture.extent.minX, y: picture.extent.minY))
+        // pixel rows run top-down; Core Image runs bottom-up
+        let box = CGRect(x: picture.extent.minX + CGFloat(minX), y: picture.extent.minY + CGFloat(h - 1 - maxY),
+          width: CGFloat(maxX - minX + 4), height: CGFloat(maxY - minY + 4))
+        let boxRows = Double(max(1, (maxY - minY) / 4 + 1))
+        return MadMask(image: image, box: box, rowsFilled: Double(rowsOn) / boxRows,
+          coverage: Double(on) / Double(max(1, samples)))
+      } catch {
+        // Some devices cannot run this Vision request on CPU. Preserve the
+        // sticker appearance by retrying in foreground, not publishing a fallback.
+        if backgrounded { renderContext.cancelInterruptedAttempt() }
+        return nil
       }
-      guard maxX >= minX, maxY >= minY else { return nil }
-      let image = CIImage(cvPixelBuffer: buffer).transformed(by: CGAffineTransform(
-        translationX: picture.extent.minX, y: picture.extent.minY))
-      // pixel rows run top-down; Core Image runs bottom-up
-      let box = CGRect(x: picture.extent.minX + CGFloat(minX), y: picture.extent.minY + CGFloat(h - 1 - maxY),
-        width: CGFloat(maxX - minX + 4), height: CGFloat(maxY - minY + 4))
-      let boxRows = Double(max(1, (maxY - minY) / 4 + 1))
-      return MadMask(image: image, box: box, rowsFilled: Double(rowsOn) / boxRows,
-        coverage: Double(on) / Double(max(1, samples)))
-    } catch {
-      return nil
     }
   }
 

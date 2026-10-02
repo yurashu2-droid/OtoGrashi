@@ -339,12 +339,12 @@ final class MediaPlugin: NSObject, FlutterPlugin {
   private func renderWithBackgroundSupport(
     request: VideoRenderRequestPayload, output: URL, cancellation: CancellationToken
   ) async throws -> MediaValidationReport {
-    let context = VideoRenderContext()
     while true {
       guard !cancellation.isCancelled else { throw VideoRenderError.cancelled }
       // The writer cancels its own token on producer failure. Keep that local to
       // this attempt so an OS interruption cannot cancel the user's whole job.
       let attempt = CancellationToken(operationId: request.operationId, parent: cancellation)
+      let context = VideoRenderContext(cancellation: attempt)
       let activity = await MainActor.run {
         BackgroundRenderActivity(
           operationId: request.operationId, cancellation: attempt, context: context
