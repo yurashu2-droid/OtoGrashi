@@ -8,6 +8,7 @@ import '../../domain/clip_asset.dart';
 import '../../media/media_presentation_gateway.dart';
 import '../../storage/asset_repository.dart';
 import '../../storage/folder_repository.dart';
+import 'depth_probe.dart';
 import 'folder_screen.dart';
 import 'sound_row.dart';
 
@@ -146,7 +147,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const OtoWordmark(),
+                          GestureDetector(
+                            onLongPress: () => runDepthProbe(context),
+                            child: const OtoWordmark(),
+                          ),
                           const SizedBox(height: 4),
                           Text(
                             owner == null || owner.isEmpty

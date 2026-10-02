@@ -50,6 +50,7 @@ final class MediaPlugin: NSObject, FlutterPlugin {
   private let eventStream: MediaEventStreamHandler
   fileprivate let capture: CaptureService
   fileprivate let playback: PlaybackRegistry
+  private let depthProbe = DepthProbe()
 
   init(eventStream: MediaEventStreamHandler) {
     let store = ManagedMediaStore()
@@ -64,6 +65,8 @@ final class MediaPlugin: NSObject, FlutterPlugin {
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
+    case "probeDepth":
+      depthProbe.run { report in result(report) }
     case "managedRoot":
       complete(result) {
         try self.store.prepareRoot().path
@@ -1046,4 +1049,145 @@ struct ManagedMediaStore {
         CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_"
       }
   }
+}
+
+
+/// A self-contained check, kept apart from real capture: can this phone record a movie and
+/// depth at the same time? It runs its own short session (no microphone), records about
+/// 1.5 seconds, and reports which depth cameras exist, what was configured and how many
+/// depth frames arrived. Nothing it records is kept.
+final class DepthProbe: NSObject, AVCaptureDepthDataOutputDelegate, AVCaptureFileOutputRecordingDelegate {
+  private let queue = DispatchQueue(label: "dev.otogurashi.depth-probe")
+  private let depthQueue = DispatchQueue(label: "dev.otogurashi.depth-probe.frames")
+  private var session: AVCaptureSession?
+  private var depthOutput: AVCaptureDepthDataOutput?
+  private var movieURL: URL?
+  private var report: [String: Any] = [:]
+  private var depthFrames = 0
+  private var depthSize = ""
+  private var completion: (([String: Any]) -> Void)?
+
+  func run(completion: @escaping ([String: Any]) -> Void) {
+    queue.async { self.start(completion) }
+  }
+
+  private func start(_ completion: @escaping ([String: Any]) -> Void) {
+    guard self.completion == nil else { completion(["error": "already running"]); return }
+    self.completion = completion
+    report = [:]
+    depthFrames = 0
+    depthSize = ""
+    let cameras: [(String, AVCaptureDevice.DeviceType, AVCaptureDevice.Position)] = [
+      ("frontTrueDepth", .builtInTrueDepthCamera, .front),
+      ("backLiDAR", .builtInLiDARDepthCamera, .back),
+      ("backDual", .builtInDualCamera, .back),
+      ("backDualWide", .builtInDualWideCamera, .back),
+    ]
+    for (name, type, position) in cameras {
+      report[name] = AVCaptureDevice.default(type, for: .video, position: position) != nil
+    }
+    guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+      finish(error: "camera permission not granted yet (open the capture screen once)")
+      return
+    }
+    guard let device = AVCaptureDevice.default(.builtInTrueDepthCamera, for: .video, position: .front) else {
+      finish(error: "no front TrueDepth camera")
+      return
+    }
+    do {
+      let session = AVCaptureSession()
+      session.beginConfiguration()
+      let input = try AVCaptureDeviceInput(device: device)
+      guard session.canAddInput(input) else { throw ProbeError("cannot add camera input") }
+      session.addInput(input)
+      let movie = AVCaptureMovieFileOutput()
+      report["canAddMovie"] = session.canAddOutput(movie)
+      if session.canAddOutput(movie) { session.addOutput(movie) }
+      let depth = AVCaptureDepthDataOutput()
+      report["canAddDepth"] = session.canAddOutput(depth)
+      if session.canAddOutput(depth) {
+        session.addOutput(depth)
+        depth.isFilteringEnabled = true
+        depth.setDelegate(self, callbackQueue: depthQueue)
+        depthOutput = depth
+      }
+      // pick a video format that also offers depth, and its largest float16 depth format
+      let formats = device.formats.filter { !$0.supportedDepthDataFormats.isEmpty }
+      report["formatsWithDepth"] = formats.count
+      if let format = formats.max(by: { a, b in
+        let da = CMVideoFormatDescriptionGetDimensions(a.formatDescription)
+        let db = CMVideoFormatDescriptionGetDimensions(b.formatDescription)
+        return Int(da.width) * Int(da.height) < Int(db.width) * Int(db.height)
+      }) {
+        let depthFormat = format.supportedDepthDataFormats
+          .filter { CMFormatDescriptionGetMediaSubType($0.formatDescription) == kCVPixelFormatType_DepthFloat16 }
+          .max(by: { CMVideoFormatDescriptionGetDimensions($0.formatDescription).width
+            < CMVideoFormatDescriptionGetDimensions($1.formatDescription).width })
+        try device.lockForConfiguration()
+        device.activeFormat = format
+        if let depthFormat { device.activeDepthDataFormat = depthFormat }
+        device.unlockForConfiguration()
+        let video = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        report["videoFormat"] = "\(video.width)x\(video.height)"
+        if let depthFormat {
+          let d = CMVideoFormatDescriptionGetDimensions(depthFormat.formatDescription)
+          report["depthFormat"] = "\(d.width)x\(d.height) float16"
+        }
+      }
+      session.commitConfiguration()
+      self.session = session
+      session.startRunning()
+      report["running"] = session.isRunning
+      guard session.outputs.contains(movie) else {
+        queue.asyncAfter(deadline: .now() + 1.5) { self.finish(error: nil) }
+        return
+      }
+      let url = FileManager.default.temporaryDirectory.appendingPathComponent("depth-probe-\(UUID().uuidString).mov")
+      movieURL = url
+      movie.startRecording(to: url, recordingDelegate: self)
+      queue.asyncAfter(deadline: .now() + 1.5) { movie.stopRecording() }
+    } catch {
+      finish(error: "\(error)")
+    }
+  }
+
+  func depthDataOutput(_ output: AVCaptureDepthDataOutput, didOutput depthData: AVDepthData,
+    timestamp: CMTime, connection: AVCaptureConnection) {
+    depthFrames += 1
+    if depthSize.isEmpty {
+      let map = depthData.depthDataMap
+      depthSize = "\(CVPixelBufferGetWidth(map))x\(CVPixelBufferGetHeight(map))"
+    }
+  }
+
+  func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL,
+    from connections: [AVCaptureConnection], error: Error?) {
+    queue.async {
+      let size = (try? FileManager.default.attributesOfItem(atPath: outputFileURL.path)[.size] as? Int) ?? 0
+      self.report["movieBytes"] = size
+      if let error { self.report["movieError"] = "\(error)" }
+      self.finish(error: nil)
+    }
+  }
+
+  private func finish(error: String?) {
+    session?.stopRunning()
+    session = nil
+    depthOutput = nil
+    if let url = movieURL { try? FileManager.default.removeItem(at: url) }
+    movieURL = nil
+    depthQueue.sync {}
+    report["depthFrames"] = depthFrames
+    report["depthFrameSize"] = depthSize
+    if let error { report["error"] = error }
+    let done = completion
+    completion = nil
+    let result = report
+    DispatchQueue.main.async { done?(result) }
+  }
+}
+
+private struct ProbeError: Error, CustomStringConvertible {
+  let description: String
+  init(_ description: String) { self.description = description }
 }
