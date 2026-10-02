@@ -24,7 +24,7 @@ final class VideoRendererTests: XCTestCase {
     let attempt = CancellationToken(operationId: "export", parent: export)
     let center = NotificationCenter()
     let context = VideoRenderContext()
-    var expiration: (() -> Void)?
+    var expiration: (@MainActor @Sendable () -> Void)?
     var ends: [UIBackgroundTaskIdentifier] = []
     let id = UIBackgroundTaskIdentifier(rawValue: 42)
     let activity = BackgroundRenderActivity(
@@ -75,7 +75,7 @@ final class VideoRendererTests: XCTestCase {
   @MainActor
   func testCompletedBackgroundLeaseIsReleasedWithoutCancellingTheExport() {
     let token = CancellationToken(operationId: "completed")
-    var expiration: (() -> Void)?
+    var expiration: (@MainActor @Sendable () -> Void)?
     var ended = 0
     let activity = BackgroundRenderActivity(
       operationId: "completed", cancellation: token, context: VideoRenderContext(),

@@ -455,7 +455,7 @@ final class MediaPlugin: NSObject, FlutterPlugin {
 /// lifecycle state and lease cleanup is serialized on main.
 @MainActor
 final class BackgroundRenderActivity {
-  typealias BeginTask = (String, @escaping () -> Void) -> UIBackgroundTaskIdentifier
+  typealias BeginTask = (String, @escaping @MainActor @Sendable () -> Void) -> UIBackgroundTaskIdentifier
   private let cancellation: CancellationToken
   private let context: VideoRenderContext
   private let center: NotificationCenter
@@ -479,11 +479,11 @@ final class BackgroundRenderActivity {
     let backgrounded = initiallyBackgrounded ?? (UIApplication.shared.applicationState != .active)
     context.setBackgrounded(backgrounded)
     wasInterrupted = backgrounded
-    let begin = beginTask ?? { name, expiration in
+    let begin: BeginTask = beginTask ?? { name, expiration in
       UIApplication.shared.beginBackgroundTask(withName: name, expirationHandler: expiration)
     }
     identifier = begin("OtoGrashi render \(operationId)") { [weak self] in
-      MainActor.assumeIsolated { self?.expire() }
+      self?.expire()
     }
     observers.append(center.addObserver(
       forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
