@@ -3,6 +3,59 @@ import XCTest
 @testable import Runner
 
 final class AudioRendererTests: XCTestCase {
+  func testPreparedPitchSourceMatchesIndependentRendersForDifferentAutomation() throws {
+    let input = (0..<12_000).map { frame in
+      Float(0.25 * sin(2 * Double.pi * 220 * Double(frame) / 48_000))
+    }
+    let count = 24_000
+    let prepared = try EverydayAudioDSP.prepare(input, count: count, reverse: true)
+    let automations = [
+      [EverydayAudioDSP.NoteStep(offsetSamples: 0, durationSamples: count, midiNote: 60)],
+      [EverydayAudioDSP.NoteStep(offsetSamples: 0, durationSamples: count / 2, midiNote: 67),
+       EverydayAudioDSP.NoteStep(offsetSamples: count / 2, durationSamples: count / 2, midiNote: 72)],
+    ]
+    for steps in automations {
+      let independent = try EverydayAudioDSP.render(input, count: count, targetMidiNote: nil,
+        reverse: true, pitchSteps: steps)
+      let reused = try EverydayAudioDSP.render(input, count: count, targetMidiNote: nil,
+        reverse: true, pitchSteps: steps, prepared: prepared)
+      XCTAssertEqual(reused, independent)
+    }
+  }
+
+  func testPreparedPitchAnalysisChecksCancellationDuringTracking() throws {
+    enum Stop: Error { case cancelled }
+    let input = (0..<24_000).map { frame in
+      Float(0.25 * sin(2 * Double.pi * 220 * Double(frame) / 48_000))
+    }
+    var checks = 0
+    XCTAssertThrowsError(try EverydayAudioDSP.prepare(input, count: input.count,
+      cancellationCheck: {
+        checks += 1
+        if checks == 5 { throw Stop.cancelled }
+      })) {
+      XCTAssertTrue($0 is Stop)
+    }
+    XCTAssertEqual(checks, 5)
+  }
+
+  func testPreparedPitchRenderChecksCancellationBetweenGrains() throws {
+    enum Stop: Error { case cancelled }
+    let input = (0..<12_000).map { frame in
+      Float(0.25 * sin(2 * Double.pi * 220 * Double(frame) / 48_000))
+    }
+    let prepared = try EverydayAudioDSP.prepare(input, count: input.count)
+    var checks = 0
+    XCTAssertThrowsError(try EverydayAudioDSP.render(input, count: input.count,
+      targetMidiNote: 72, prepared: prepared, cancellationCheck: {
+        checks += 1
+        if checks == 5 { throw Stop.cancelled }
+      })) {
+      XCTAssertTrue($0 is Stop)
+    }
+    XCTAssertEqual(checks, 5)
+  }
+
   func testStretchedVoicedToneHasSteadyLevelAcrossAnalysisFrames() throws {
     let source = (0..<24_000).map { frame in
       Float(0.3 * sin(2 * Double.pi * 220 * Double(frame) / 48_000))

@@ -19,12 +19,16 @@ final class MakingScreen extends StatefulWidget {
     required this.thumbnails,
     required this.seconds,
     this.onCancel,
+    this.progress,
+    this.stage,
     super.key,
   });
 
   final List<ClipAsset> clips;
   final Map<String, Uint8List> thumbnails;
   final int seconds;
+  final double? progress;
+  final String? stage;
 
   /// Stops making and goes back; shown as × at the top left.
   final VoidCallback? onCancel;
@@ -35,12 +39,10 @@ final class MakingScreen extends StatefulWidget {
 
 class _MakingScreenState extends State<MakingScreen> {
   static const _tick = Duration(milliseconds: 240);
-  static const _steps = ['音をならべてる', 'リズムにしてる', 'メロディをのせてる', '映像をあわせてる'];
   static const _bars = 18;
 
   Timer? _timer;
   var _step = 0;
-  final _started = DateTime.now();
 
   @override
   void didChangeDependencies() {
@@ -61,13 +63,7 @@ class _MakingScreenState extends State<MakingScreen> {
     super.dispose();
   }
 
-  // No real progress comes from the renderer, so the bar eases toward 90%
-  // over roughly the expected time and waits there for the finish.
-  double get _progress {
-    final expected = 4.0 + widget.seconds * 0.5;
-    final elapsed = DateTime.now().difference(_started).inMilliseconds / 1000;
-    return 0.9 * (1 - math.exp(-elapsed / expected * 1.6));
-  }
+  double? get _progress => widget.progress;
 
   double _barHeight(int i) {
     final x = math.sin(_step * 0.9 + i * 1.7) * math.cos(_step * 0.37 + i);
@@ -78,7 +74,14 @@ class _MakingScreenState extends State<MakingScreen> {
   Widget build(BuildContext context) {
     final clips = widget.clips.take(6).toList();
     final hopping = clips.isEmpty ? -1 : _step % (clips.length + 2);
-    final line = _steps[(_step ~/ 7) % _steps.length];
+    final line = switch (widget.stage) {
+      'audio' => '声と音程を整えています',
+      'video' => '映像を組み立てています',
+      'finalizing' => '動画を書き出しています',
+      'validating' => 'できあがりを確認しています',
+      'waitingForeground' => 'アプリに戻ると作成を再開します',
+      _ => '音を調べています',
+    };
     return Scaffold(
       body: SafeArea(
         child: Padding(

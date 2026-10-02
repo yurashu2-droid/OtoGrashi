@@ -137,6 +137,7 @@ final class MediaEvent {
     required this.operationId,
     required this.type,
     this.progress,
+    this.stage,
     this.errorCode,
   });
 
@@ -152,6 +153,7 @@ final class MediaEvent {
         operationId: json['operationId'] as String,
         type: type,
         progress: (json['progress'] as num?)?.toDouble(),
+        stage: json['stage'] as String?,
         errorCode: json['errorCode'] as String?,
       );
       if (event.operationId.isEmpty ||
@@ -170,6 +172,7 @@ final class MediaEvent {
   final String operationId;
   final MediaEventType type;
   final double? progress;
+  final String? stage;
   final String? errorCode;
 }
 
@@ -359,8 +362,7 @@ final class AnalyzedClip {
         !syllables.every(inside) ||
         !voicedRuns.every(inside) ||
         (pitchSpread != null && (!pitchSpread!.isFinite || pitchSpread! < 0)) ||
-        (purity != null &&
-            (!purity!.isFinite || purity! < 0 || purity! > 1))) {
+        (purity != null && (!purity!.isFinite || purity! < 0 || purity! > 1))) {
       throw const MediaContractException('Voice analysis is invalid.');
     }
   }

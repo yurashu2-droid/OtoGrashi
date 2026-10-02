@@ -130,6 +130,24 @@ enum EverydayAudioDSP {
 
   typealias PitchStep = NoteStep
 
+  /// The exact looped/reversed recording and its pitch analysis for one output window.
+  /// Callers may reuse it only when the source window, count and reverse flag match.
+  struct PreparedSource {
+    fileprivate let dry: [Float]
+    fileprivate let frames: [Frame]
+    var storageSampleCost: Int { dry.count + frames.count * 6 }
+  }
+
+  static func prepare(_ input: [Float], count: Int, reverse: Bool = false,
+                      cancellationCheck: (() throws -> Void)? = nil) throws -> PreparedSource {
+    guard count > 0, count <= 1_440_000, !input.isEmpty, input.count <= 720_000,
+      input.allSatisfy(\.isFinite) else { throw Failure.invalidInput }
+    try cancellationCheck?()
+    let source = reverse ? Array(input.reversed()) : input
+    let dry = looped(source, count: count)
+    return PreparedSource(dry: dry, frames: try track(dry, cancellationCheck: cancellationCheck))
+  }
+
   static func validSteps(_ steps: [NoteStep], count: Int) -> Bool {
     guard steps.count <= 128 else { return false }
     var end = 0
@@ -151,19 +169,26 @@ enum EverydayAudioDSP {
   /// source separation. Large transpositions still sound deliberately edited.
   static func render(
     _ input: [Float], count: Int, targetMidiNote: Double?, reverse: Bool = false,
-    pitchSteps: [NoteStep] = [], hardTune: Bool = false
+    pitchSteps: [NoteStep] = [], hardTune: Bool = false,
+    prepared: PreparedSource? = nil, cancellationCheck: (() throws -> Void)? = nil
   ) throws -> [Float] {
     guard count > 0, count <= 1_440_000, !input.isEmpty, input.count <= 720_000,
       input.allSatisfy(\.isFinite), validSteps(pitchSteps, count: count),
       targetMidiNote == nil || (targetMidiNote!.isFinite && (24...100).contains(targetMidiNote!))
     else { throw Failure.invalidInput }
-    let source = reverse ? Array(input.reversed()) : input
-    let dry = looped(source, count: count)
-    guard targetMidiNote != nil || !pitchSteps.isEmpty else { return dry }
+    try cancellationCheck?()
+    guard targetMidiNote != nil || !pitchSteps.isEmpty else {
+      let source = reverse ? Array(input.reversed()) : input
+      return looped(source, count: count)
+    }
+    let source = try prepared ?? prepare(input, count: count, reverse: reverse,
+                                         cancellationCheck: cancellationCheck)
+    guard source.dry.count == count, !source.frames.isEmpty else { throw Failure.invalidInput }
+    let dry = source.dry
     let steps = pitchSteps.isEmpty
       ? [NoteStep(offsetSamples: 0, durationSamples: count, midiNote: targetMidiNote!)]
       : pitchSteps
-    let frames = track(dry)
+    let frames = source.frames
     // Entirely a scrape/tap/wind: retain its evolving texture with a modest
     // source-excited comb resonance. Never replace it with a sine oscillator.
     guard frames.contains(where: { $0.pitch != nil }) else {
@@ -175,6 +200,7 @@ enum EverydayAudioDSP {
     var mark: Double?
     var stepIndex = 0
     while position < Double(count) {
+      try cancellationCheck?()
       let t = Int(position)
       while stepIndex + 1 < steps.count && steps[stepIndex + 1].offsetSamples <= t {
         stepIndex += 1
@@ -207,12 +233,12 @@ enum EverydayAudioDSP {
   /// rise and fall around the note, so speech still sounds like speech.
   /// Consonants and breath are read at the same pace, untouched.
   static func renderStretched(_ source: [Float], count: Int, targetMidiNote: Double, stretch: Double,
-                              refMidi: Double?) throws -> [Float] {
+                              refMidi: Double?, cancellationCheck: (() throws -> Void)? = nil) throws -> [Float] {
     guard count > 0, count <= 1_440_000, !source.isEmpty, source.count <= 720_000,
       source.allSatisfy(\.isFinite), stretch.isFinite, (0.05...2).contains(stretch),
       targetMidiNote.isFinite, (24...100).contains(targetMidiNote)
     else { throw Failure.invalidInput }
-    let frames = track(source)
+    let frames = try track(source, cancellationCheck: cancellationCheck)
     guard frames.contains(where: { $0.pitch != nil }) else {
       return timeStretchedDry(source, count: count, stretch: stretch)
     }
@@ -221,6 +247,7 @@ enum EverydayAudioDSP {
     var position = 0.0
     var mark: Double?
     while position < Double(count) {
+      try cancellationCheck?()
       let centre = position * stretch
       let frame = min(frames.count - 1, max(0, Int(centre) / trackingHop))
       if let pitch = frames[frame].pitch, centre < Double(source.count) {
@@ -341,14 +368,15 @@ enum EverydayAudioDSP {
   }
 
   private static let trackingHop = 480 // Lab analysis advances every 10 ms.
-  private struct Frame {
+  fileprivate struct Frame {
     let pitch: Pitch?
   }
 
-  private static func track(_ source: [Float]) -> [Frame] {
+  private static func track(_ source: [Float], cancellationCheck: (() throws -> Void)? = nil) throws -> [Frame] {
     var candidates: [Pitch?] = []
     var levels: [Double] = []
     for offset in stride(from: 0, to: source.count, by: trackingHop) {
+      try cancellationCheck?()
       let n = min(1920, source.count)
       let start = max(0, min(source.count - n, offset))
       let level = sqrt(source[start..<(start + n)].reduce(0.0) {

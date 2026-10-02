@@ -16,6 +16,8 @@ final class RenderState {
     this.operationId,
     this.readyMedia,
     this.error,
+    this.progress,
+    this.stage,
   });
 
   final Project project;
@@ -23,10 +25,17 @@ final class RenderState {
   final String? operationId;
   final RenderedMedia? readyMedia;
   final Object? error;
+  final double? progress;
+  final String? stage;
 }
 
 final class RenderController extends ChangeNotifier {
-  RenderController({required this.gateway, this.operationIds});
+  RenderController({required this.gateway, this.operationIds}) {
+    _progressSubscription = gateway.events.listen(
+      _onProgress,
+      onError: (Object _) {},
+    );
+  }
 
   final MediaGateway gateway;
   final Iterator<String>? operationIds;
@@ -36,9 +45,33 @@ final class RenderController extends ChangeNotifier {
   Future<void>? _drainAttempt;
   var _fallbackId = 0;
   var _disposed = false;
+  late final StreamSubscription<MediaEvent> _progressSubscription;
+
+  void _onProgress(MediaEvent event) {
+    final current = _stateValue;
+    if (_disposed ||
+        current == null ||
+        current.phase != RenderPhase.rendering ||
+        event.operationId != current.operationId ||
+        event.type != MediaEventType.progress ||
+        event.stage == null) {
+      return;
+    }
+    _setState(
+      RenderState(
+        project: current.project,
+        phase: current.phase,
+        operationId: current.operationId,
+        progress: event.progress,
+        stage: event.stage,
+      ),
+    );
+  }
 
   RenderState get state =>
       _stateValue ?? (throw StateError('Open a project before rendering.'));
+  double? get progress => _stateValue?.progress;
+  String? get stage => _stateValue?.stage;
 
   void open(Project project) {
     final previous = _stateValue;
@@ -146,6 +179,7 @@ final class RenderController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    unawaited(_progressSubscription.cancel());
     final operationId = _stateValue?.phase == RenderPhase.rendering
         ? _stateValue?.operationId
         : null;

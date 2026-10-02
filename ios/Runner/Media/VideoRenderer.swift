@@ -204,7 +204,9 @@ struct VideoRenderReport {
 /// Subsequent frames use the same image graph and color space on the CPU.
 final class VideoRenderContext: @unchecked Sendable {
   private let lock = NSLock()
+  private let interruptionLock = NSLock()
   private let cancellation: CancellationToken?
+  private var interrupted = false
   private var backgrounded = false
   private lazy var hardware = CIContext(options: [.cacheIntermediates: false])
   private lazy var software = CIContext(options: [
@@ -242,7 +244,16 @@ final class VideoRenderContext: @unchecked Sendable {
   }
 
   func cancelInterruptedAttempt() {
+    interruptionLock.lock()
+    interrupted = true
+    interruptionLock.unlock()
     cancellation?.cancel()
+  }
+
+  var wasInterrupted: Bool {
+    interruptionLock.lock()
+    defer { interruptionLock.unlock() }
+    return interrupted
   }
 }
 
@@ -251,13 +262,16 @@ struct VideoRenderer {
   static let framesPerSecond = 30
   let audioRenderer: AudioRenderer
   private let context: VideoRenderContext
+  private let progress: ((String, Double) -> Void)?
 
   init(
     audioRenderer: AudioRenderer = AudioRenderer(),
-    context: VideoRenderContext = VideoRenderContext()
+    context: VideoRenderContext = VideoRenderContext(),
+    progress: ((String, Double) -> Void)? = nil
   ) {
     self.audioRenderer = audioRenderer
     self.context = context
+    self.progress = progress
   }
 
   static func nearestFrame(forSample sample: Int) -> Int {
@@ -283,7 +297,10 @@ struct VideoRenderer {
       arrangement: request.arrangement,
       assets: assets,
       outputURL: audioURL,
-      cancellation: cancellation
+      cancellation: cancellation,
+      onProgress: { index, total in
+        progress?("audio", 0.48 * Double(index) / Double(max(1, total)))
+      }
     )
     videoRenderDiagnostic("VIDEO_STAGE audio_complete")
     try checkCancellation(cancellation)
@@ -305,6 +322,7 @@ struct VideoRenderer {
       cancellation: cancellation
     )
     videoRenderDiagnostic("VIDEO_STAGE providers_ready count=\(providers.count)")
+    progress?("video", 0.5)
     let mad = request.arrangement.performanceMode == "mad"
       ? MadDirector(request: request, peaks: audioReport.eventPeaks, context: context) : nil
     // stills for the あつめる form, taken once per render
@@ -454,6 +472,7 @@ struct VideoRenderer {
         }
         writerProgress.markProgress()
         if frame == 0 || frame % 30 == 0 || frame == outputFrames - 1 {
+          progress?("video", 0.5 + 0.43 * Double(frame + 1) / Double(outputFrames))
           videoRenderDiagnostic(
             "VIDEO_STAGE video_frame frame=\(frame) pts=\(CMTime(value: CMTimeValue(frame), timescale: 30))"
           )
@@ -466,8 +485,10 @@ struct VideoRenderer {
       )
       let audioResult = await audioTask.value
       try audioResult.get()
-      watchdogTask.cancel()
-      _ = await watchdogTask.value
+      // Keep cancellation/stall detection alive through finishWriting too.
+      // Previously a finalization stall could leave Flutter waiting forever.
+      writerProgress.markProgress()
+      progress?("finalizing", 0.94)
       writer.endSession(atSourceTime: CMTime(value: CMTimeValue(request.arrangement.totalSamples), timescale: 48_000))
       videoRenderDiagnostic(
         "VIDEO_STAGE finish_writing begin \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
@@ -475,6 +496,8 @@ struct VideoRenderer {
       await withCheckedContinuation { continuation in
         writer.finishWriting { continuation.resume() }
       }
+      watchdogTask.cancel()
+      _ = await watchdogTask.value
       videoRenderDiagnostic(
         "VIDEO_STAGE finish_writing end \(writerDiagnosticState(writer, videoInput: videoInput, audioInput: audioInput))"
       )

@@ -153,6 +153,13 @@ jobs:
             TEST_SELECTION=(
               -only-testing:RunnerTests/VideoRendererTests/testPerformanceModesRenderWithProductionValidation
               -only-testing:RunnerTests/VideoRendererTests/testReturningFromBackgroundDoesNotRetryAnOrdinaryRenderFailure
+              -only-testing:RunnerTests/VideoRendererTests/testBackgroundAttemptCancellationDoesNotCancelTheWholeExport
+              -only-testing:RunnerTests/VideoRendererTests/testBackgroundExpirationEndsLeaseOnceAndCancelsOnlyTheAttempt
+              -only-testing:RunnerTests/VideoRendererTests/testCompletedBackgroundLeaseIsReleasedWithoutCancellingTheExport
+              -only-testing:RunnerTests/VideoRendererTests/testWriterProgressWatchdogTracksEitherProducerAndDetectsAFullStall
+              -only-testing:RunnerTests/AudioRendererTests/testPreparedPitchSourceMatchesIndependentRendersForDifferentAutomation
+              -only-testing:RunnerTests/AudioRendererTests/testPreparedPitchAnalysisChecksCancellationDuringTracking
+              -only-testing:RunnerTests/AudioRendererTests/testPreparedPitchRenderChecksCancellationBetweenGrains
             )
           elif [[ "$OTO_BACKGROUND_RENDER" == 1 ]]; then
             TEST_SELECTION=(

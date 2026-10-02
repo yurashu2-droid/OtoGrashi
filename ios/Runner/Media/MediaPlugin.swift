@@ -360,10 +360,15 @@ final class MediaPlugin: NSObject, FlutterPlugin {
             ofItemAtPath: url.path
           )
         }
-        _ = try await VideoRenderer(context: context).render(
+        _ = try await VideoRenderer(context: context, progress: { [eventStream] stage, fraction in
+          eventStream.emit(["operationId": request.operationId, "type": "progress",
+            "stage": stage, "progress": fraction])
+        }).render(
           request: request, assets: assets, outputURL: output, cancellation: attempt
         )
         let dimensions = request.quality.dimensions
+        eventStream.emit(["operationId": request.operationId, "type": "progress",
+          "stage": "validating", "progress": 0.97])
         let validation = try await MediaValidator().validate(
           url: output, expectedWidth: dimensions.width, expectedHeight: dimensions.height,
           expectedOnsetSample: nil, expectedTotalSamples: request.arrangement.totalSamples,
@@ -377,11 +382,17 @@ final class MediaPlugin: NSObject, FlutterPlugin {
         guard !cancelled else { throw VideoRenderError.cancelled }
         return validation
       } catch {
+        // A visit to the background is not itself a retry reason. Only an
+        // expired lease, unavailable background Vision, or a failure while
+        // still backgrounded can be recovered by returning to the foreground.
         let interrupted = await activity.wasInterrupted
+          || context.wasInterrupted || context.usesSoftwareRenderer
         await activity.end()
         try? FileManager.default.removeItem(at: output)
         guard !cancellation.isCancelled else { throw VideoRenderError.cancelled }
         guard interrupted else { throw error }
+        eventStream.emit(["operationId": request.operationId, "type": "progress",
+          "stage": "waitingForeground", "progress": 0.0])
         // Keep the Flutter method pending and retain exclusive export ownership.
         // Reuse the exact request (including seed), never publish a partial movie.
         try await BackgroundRenderActivity.waitUntilActive(cancellation: cancellation)
@@ -478,7 +489,6 @@ final class BackgroundRenderActivity {
     self.endTask = endTask ?? { UIApplication.shared.endBackgroundTask($0) }
     let backgrounded = initiallyBackgrounded ?? (UIApplication.shared.applicationState != .active)
     context.setBackgrounded(backgrounded)
-    wasInterrupted = backgrounded
     let begin: BeginTask = beginTask ?? { name, expiration in
       UIApplication.shared.beginBackgroundTask(withName: name, expirationHandler: expiration)
     }
@@ -500,7 +510,6 @@ final class BackgroundRenderActivity {
     ) { [weak self] _ in
       MainActor.assumeIsolated {
         guard let self else { return }
-        self.wasInterrupted = true
         self.context.setBackgrounded(true)
         if self.identifier == .invalid { self.expire() }
       }

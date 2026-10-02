@@ -459,6 +459,8 @@ class _CreationFlowState extends State<CreationFlow> {
         clips: state.clips,
         thumbnails: state.thumbnails,
         seconds: state.durationSeconds,
+        progress: widget.controller.renderProgress,
+        stage: widget.controller.renderStage,
         onCancel: () => unawaited(widget.controller.cancelMaking()),
       );
     }

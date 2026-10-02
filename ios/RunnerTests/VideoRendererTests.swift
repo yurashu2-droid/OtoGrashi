@@ -8,7 +8,10 @@ final class VideoRendererTests: XCTestCase {
   func testBackgroundAttemptCancellationDoesNotCancelTheWholeExport() {
     let export = CancellationToken(operationId: "export")
     let expiredAttempt = CancellationToken(operationId: "export", parent: export)
-    VideoRenderContext(cancellation: expiredAttempt).cancelInterruptedAttempt()
+    let context = VideoRenderContext(cancellation: expiredAttempt)
+    XCTAssertFalse(context.wasInterrupted)
+    context.cancelInterruptedAttempt()
+    XCTAssertTrue(context.wasInterrupted)
     XCTAssertTrue(expiredAttempt.isCancelled)
     XCTAssertFalse(export.isCancelled)
     let retry = CancellationToken(operationId: "export", parent: export)

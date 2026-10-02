@@ -61,6 +61,10 @@ struct SoundEventPayload: Codable, Equatable {
     return "\(automation)|\(assetId)|\(sourceStartSample)|\(effectiveSourceDurationSamples)|\(durationSamples)|\(targetMidiNote.map(String.init(describing:)) ?? "dry")|\(isReversed)|\(effectivePitchSemitones)|\(role ?? "")|\(rate ?? 0)|\(glide ?? 0)|\(scratch ?? 0)|\(scratchPeriod ?? 0)|\(gate ?? 0)|\(stretch ?? 0)|\(refMidi ?? 0)"
   }
 
+  var preparedPitchCacheKey: String {
+    "\(assetId)|\(sourceStartSample)|\(effectiveSourceDurationSamples)|\(durationSamples)|\(isReversed)"
+  }
+
   /// Source read offset at one output sample, in closed form (the picture
   /// asks for single frames; the sound uses the array below).
   static func motionPosition(at i: Int, count: Int, rate: Double?, glide: Double?, scratch: Double?,
@@ -366,6 +370,7 @@ struct AudioRenderer {
   static let targetPeak: Float = 0.92
   static let loopCrossfadeSamples = 240
   private static let maximumCachedPitchSamples = 4_000_000
+  private static let maximumPreparedPitchSamples = 4_000_000
   private static let maximumCacheableEventSamples = 48_000
 
   private struct PitchedFragmentKey: Hashable {
@@ -394,7 +399,8 @@ struct AudioRenderer {
     arrangement: ArrangementPayload,
     assets: [String: URL],
     outputURL: URL,
-    cancellation: CancellationToken
+    cancellation: CancellationToken,
+    onProgress: ((Int, Int) -> Void)? = nil
   ) async throws -> AudioRenderReport {
     try checkCancellation(cancellation)
     var mix = Array(repeating: Float(0), count: arrangement.totalSamples)
@@ -406,9 +412,12 @@ struct AudioRenderer {
     var pitchedFragments: [PitchedFragmentKey: [Float]] = [:]
     var cachedPitchSamples = 0
     var musicalFragments: [String: [Float]] = [:]
+    var preparedPitch: [String: EverydayAudioDSP.PreparedSource] = [:]
+    var cachedPreparedPitchSamples = 0
 
     for index in arrangement.events.indices {
       try checkCancellation(cancellation)
+      onProgress?(index, arrangement.events.count)
       let event = arrangement.events[index]
       guard let url = assets[event.assetId] else { throw AudioRenderError.missingAsset }
       let loopMode = arrangement.videoEvents[index].loopMode
@@ -435,8 +444,10 @@ struct AudioRenderer {
             cancellation: cancellation)
           do {
             processed = try EverydayAudioDSP.renderStretched(EverydayAudioDSP.matchLevel(decoded.samples),
-              count: event.durationSamples, targetMidiNote: note, stretch: stretch, refMidi: event.refMidi)
-          } catch { throw AudioRenderError.pitchProcessingFailed }
+              count: event.durationSamples, targetMidiNote: note, stretch: stretch, refMidi: event.refMidi,
+              cancellationCheck: { try self.checkCancellation(cancellation) })
+          } catch let error as AudioRenderError { throw error }
+          catch { throw AudioRenderError.pitchProcessingFailed }
           if cachedPitchSamples <= Self.maximumCachedPitchSamples - processed.count {
             musicalFragments[key] = processed
             cachedPitchSamples += processed.count
@@ -456,11 +467,28 @@ struct AudioRenderer {
             cancellation: cancellation)
           let leveled = EverydayAudioDSP.matchLevel(decoded.samples)
           do {
+            var prepared: EverydayAudioDSP.PreparedSource?
+            if event.targetMidiNote != nil || !(event.pitchSteps?.isEmpty ?? true) {
+              let preparationKey = event.preparedPitchCacheKey
+              if let cached = preparedPitch[preparationKey] {
+                prepared = cached
+              } else {
+                let value = try EverydayAudioDSP.prepare(leveled,
+                  count: event.durationSamples, reverse: event.isReversed,
+                  cancellationCheck: { try self.checkCancellation(cancellation) })
+                prepared = value
+                if cachedPreparedPitchSamples <= Self.maximumPreparedPitchSamples - value.storageSampleCost {
+                  preparedPitch[preparationKey] = value
+                  cachedPreparedPitchSamples += value.storageSampleCost
+                }
+              }
+            }
             let shaped = try EverydayAudioDSP.render(leveled,
               count: event.durationSamples, targetMidiNote: event.targetMidiNote,
               reverse: event.isReversed, pitchSteps: event.pitchSteps ?? [],
               hardTune: arrangement.performanceMode == "neonTune" || arrangement.performanceMode == "mad"
-                || arrangement.performanceMode == "collect")
+                || arrangement.performanceMode == "collect", prepared: prepared,
+              cancellationCheck: { try self.checkCancellation(cancellation) })
             processed = event.targetMidiNote == nil && (event.pitchSteps?.isEmpty ?? true) && event.effectivePitchSemitones != 0
               ? try pitchPreservingDuration(shaped, semitones: event.effectivePitchSemitones,
                   cancellation: cancellation, latencyCache: &pitchLatencies) : shaped
@@ -577,6 +605,7 @@ struct AudioRenderer {
     try checkCancellation(cancellation)
     finalize(&mix)
     try checkCancellation(cancellation)
+    onProgress?(arrangement.events.count, arrangement.events.count)
     try write(samples: mix, to: outputURL)
     if cancellation.isCancelled {
       try? FileManager.default.removeItem(at: outputURL)

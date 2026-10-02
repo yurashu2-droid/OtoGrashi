@@ -188,6 +188,10 @@ final class CreationController extends ChangeNotifier {
   final MediaPresentationGateway presentation;
   final DemoAssetSource demo;
   final RenderController _render;
+  double? get renderProgress =>
+      _state.phase == CreationPhase.rendering ? _render.progress : null;
+  String? get renderStage =>
+      _state.phase == CreationPhase.rendering ? _render.stage : null;
 
   /// When true, song choices are only remembered; a song is made when the
   /// person presses つくる ([createPreview]), never on each choice.
@@ -494,7 +498,9 @@ final class CreationController extends ChangeNotifier {
 
   void selectPerformance(PerformanceMode mode) {
     if (_disposed || mode == _state.performanceMode) return;
-    if (_holdChoices) return _holdChoice(_state.copyWith(performanceMode: mode));
+    if (_holdChoices) {
+      return _holdChoice(_state.copyWith(performanceMode: mode));
+    }
     final regenerate =
         _state.phase != CreationPhase.collecting &&
         _state.phase != CreationPhase.readyToCreate;
@@ -1065,6 +1071,8 @@ final class CreationController extends ChangeNotifier {
         _set(_state.copyWith(phase: CreationPhase.failed, error: render.error));
       case RenderPhase.idle:
       case RenderPhase.rendering:
+        notifyListeners();
+        break;
       case RenderPhase.cancelled:
         break;
     }

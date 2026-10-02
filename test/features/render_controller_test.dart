@@ -8,6 +8,61 @@ import 'package:otogurashi/features/arrange/render_controller.dart';
 import 'package:otogurashi/media/media_gateway.dart';
 
 void main() {
+  test(
+    'render progress comes only from the current render operation',
+    () async {
+      final gateway = _FakeMediaGateway();
+      final controller = RenderController(
+        gateway: gateway,
+        operationIds: _ids(['old', 'current']),
+      )..open(_projectAtRevision(3));
+      controller.generate(RenderQuality.preview);
+      controller.generate(RenderQuality.preview);
+      await pumpEventQueue();
+      gateway.emit(
+        const MediaEvent(
+          operationId: 'old',
+          type: MediaEventType.progress,
+          progress: .8,
+          stage: 'video',
+        ),
+      );
+      gateway.emit(
+        const MediaEvent(
+          operationId: 'capture',
+          type: MediaEventType.progress,
+          progress: .9,
+          stage: 'audio',
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.state.progress, isNull);
+      gateway.emit(
+        const MediaEvent(
+          operationId: 'current',
+          type: MediaEventType.progress,
+          progress: .25,
+          stage: 'audio',
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.state.progress, .25);
+      expect(controller.state.stage, 'audio');
+      gateway.complete('current', revision: 3);
+      await pumpEventQueue();
+      gateway.emit(
+        const MediaEvent(
+          operationId: 'current',
+          type: MediaEventType.progress,
+          progress: .1,
+          stage: 'audio',
+        ),
+      );
+      await pumpEventQueue();
+      expect(controller.state.phase, RenderPhase.ready);
+      controller.dispose();
+    },
+  );
   test('render state changes are observable', () async {
     final gateway = _FakeMediaGateway();
     final controller = RenderController(
@@ -305,8 +360,10 @@ final class _FakeMediaGateway implements MediaGateway {
   Completer<void>? cancelGate;
   var cancelFailuresRemaining = 0;
 
+  final _events = StreamController<MediaEvent>.broadcast();
   @override
-  Stream<MediaEvent> get events => const Stream<MediaEvent>.empty();
+  Stream<MediaEvent> get events => _events.stream;
+  void emit(MediaEvent event) => _events.add(event);
 
   @override
   Future<CaptureHandle> prepareCapture() => throw UnimplementedError();
