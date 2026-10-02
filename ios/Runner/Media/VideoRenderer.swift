@@ -200,14 +200,50 @@ struct VideoRenderReport {
   let height: Int
 }
 
+/// Switching on willResignActive waits for any in-flight GPU draw to finish.
+/// Subsequent frames use the same image graph and color space on the CPU.
+final class VideoRenderContext: @unchecked Sendable {
+  private let lock = NSLock()
+  private var backgrounded = false
+  private lazy var hardware = CIContext(options: [.cacheIntermediates: false])
+  private lazy var software = CIContext(options: [
+    .cacheIntermediates: false, .useSoftwareRenderer: true,
+  ])
+
+  var usesSoftwareRenderer: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return backgrounded
+  }
+
+  func setBackgrounded(_ value: Bool) {
+    lock.lock()
+    backgrounded = value
+    lock.unlock()
+  }
+
+  func render(
+    _ image: CIImage, to buffer: CVPixelBuffer, bounds: CGRect, colorSpace: CGColorSpace?
+  ) {
+    lock.lock()
+    defer { lock.unlock() }
+    let renderer = backgrounded ? software : hardware
+    renderer.render(image, to: buffer, bounds: bounds, colorSpace: colorSpace)
+  }
+}
+
 struct VideoRenderer {
   static let frameCount = 450
   static let framesPerSecond = 30
   let audioRenderer: AudioRenderer
-  private let context = CIContext(options: [.cacheIntermediates: false])
+  private let context: VideoRenderContext
 
-  init(audioRenderer: AudioRenderer = AudioRenderer()) {
+  init(
+    audioRenderer: AudioRenderer = AudioRenderer(),
+    context: VideoRenderContext = VideoRenderContext()
+  ) {
     self.audioRenderer = audioRenderer
+    self.context = context
   }
 
   static func nearestFrame(forSample sample: Int) -> Int {
@@ -2107,7 +2143,7 @@ final class MadDirector {
 
   // MARK: drawing
 
-  func draw(frame: Int, width: Int, height: Int, into buffer: CVPixelBuffer, context: CIContext,
+  func draw(frame: Int, width: Int, height: Int, into buffer: CVPixelBuffer, context: VideoRenderContext,
             image: (MadVideoEvent, Int) async throws -> CIImage) async throws {
     let W = CGFloat(width), H = CGFloat(height)
     var s = frame * 1_600
@@ -2463,10 +2499,12 @@ final class MadDirector {
   /// largest: keep only the biggest subject, so a small sticker never carries
   /// a stray piece of someone at the edge of the frame.
   static func foregroundMask(_ picture: CIImage, largest: Bool = false) -> MadMask? {
-    let context = CIContext(options: [.cacheIntermediates: false])
+    // Cutout extraction must also avoid submitting GPU work while backgrounded.
+    let context = CIContext(options: [.cacheIntermediates: false, .useSoftwareRenderer: true])
     guard let cg = context.createCGImage(picture, from: picture.extent) else { return nil }
     let handler = VNImageRequestHandler(cgImage: cg, options: [:])
     let request = VNGenerateForegroundInstanceMaskRequest()
+    request.usesCPUOnly = true
     do {
       try handler.perform([request])
       guard let observation = request.results?.first else { return nil }

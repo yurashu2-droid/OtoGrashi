@@ -1489,7 +1489,8 @@ class _CompletedScreenState extends State<_CompletedScreen> {
     });
     try {
       final video = await _ensureFullVideo();
-      if (mounted) setState(() => _busyStage = '写真に保存しています');
+      if (!mounted) return;
+      setState(() => _busyStage = '写真に保存しています');
       await delivery.saveToPhotos(video.relativePath);
       if (mounted) {
         setState(() {
@@ -1526,7 +1527,8 @@ class _CompletedScreenState extends State<_CompletedScreen> {
     });
     try {
       final video = await _ensureFullVideo();
-      if (mounted) setState(() => _busyStage = '共有画面を開いています');
+      if (!mounted) return;
+      setState(() => _busyStage = '共有画面を開いています');
       await delivery.share(video.relativePath);
     } catch (_) {
       if (mounted) setState(() => _message = '共有できませんでした。もう一度お試しください。');

@@ -222,7 +222,7 @@ class _MakingScreenState extends State<MakingScreen> {
               ),
               const SizedBox(height: 14),
               const Text(
-                'できあがるまで、少しだけ待ってね',
+                'アプリを離れても作成を続けます\n長く離れた場合は、戻ると作成を再開します',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 12, color: AppTokens.mutedInk),
               ),

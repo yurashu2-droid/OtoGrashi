@@ -4,15 +4,17 @@ final class CancellationToken: @unchecked Sendable {
   let operationId: String
   private let lock = NSLock()
   private var cancelled = false
+  private let parent: CancellationToken?
 
-  init(operationId: String) {
+  init(operationId: String, parent: CancellationToken? = nil) {
     self.operationId = operationId
+    self.parent = parent
   }
 
   var isCancelled: Bool {
     lock.lock()
     defer { lock.unlock() }
-    return cancelled
+    return cancelled || parent?.isCancelled == true
   }
 
   func cancel() {

@@ -1,9 +1,146 @@
 import AVFoundation
 import CoreImage
+import UIKit
 import XCTest
 @testable import Runner
 
 final class VideoRendererTests: XCTestCase {
+  func testBackgroundAttemptCancellationDoesNotCancelTheWholeExport() {
+    let export = CancellationToken(operationId: "export")
+    let expiredAttempt = CancellationToken(operationId: "export", parent: export)
+    expiredAttempt.cancel()
+    XCTAssertTrue(expiredAttempt.isCancelled)
+    XCTAssertFalse(export.isCancelled)
+    let retry = CancellationToken(operationId: "export", parent: export)
+    XCTAssertFalse(retry.isCancelled)
+    export.cancel()
+    XCTAssertTrue(retry.isCancelled)
+    XCTAssertTrue(CancellationToken(operationId: "export", parent: export).isCancelled)
+  }
+
+  @MainActor
+  func testBackgroundExpirationEndsLeaseOnceAndCancelsOnlyTheAttempt() {
+    let export = CancellationToken(operationId: "export")
+    let attempt = CancellationToken(operationId: "export", parent: export)
+    let center = NotificationCenter()
+    let context = VideoRenderContext()
+    var expiration: (() -> Void)?
+    var ends: [UIBackgroundTaskIdentifier] = []
+    let id = UIBackgroundTaskIdentifier(rawValue: 42)
+    let activity = BackgroundRenderActivity(
+      operationId: "export", cancellation: attempt, context: context, center: center,
+      initiallyBackgrounded: false,
+      beginTask: { _, handler in expiration = handler; return id },
+      endTask: { ends.append($0) }
+    )
+    center.post(name: UIApplication.willResignActiveNotification, object: nil)
+    XCTAssertTrue(context.usesSoftwareRenderer)
+    center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+    XCTAssertFalse(context.usesSoftwareRenderer)
+    center.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+    XCTAssertTrue(context.usesSoftwareRenderer)
+    XCTAssertFalse(attempt.isCancelled)
+    expiration?()
+    activity.end()
+    expiration?()
+    XCTAssertEqual(ends, [id])
+    XCTAssertTrue(activity.wasInterrupted)
+    XCTAssertTrue(attempt.isCancelled)
+    XCTAssertFalse(export.isCancelled)
+    // End removes lifecycle observers, so a finished attempt cannot affect a retry.
+    center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+    XCTAssertTrue(context.usesSoftwareRenderer)
+  }
+
+  @MainActor
+  func testBackgroundLeaseDenialDefersOnlyWhenTheAppLeavesForeground() {
+    for initiallyBackgrounded in [false, true] {
+      let token = CancellationToken(operationId: "denied")
+      let center = NotificationCenter()
+      let activity = BackgroundRenderActivity(
+        operationId: "denied", cancellation: token, context: VideoRenderContext(),
+        center: center, initiallyBackgrounded: initiallyBackgrounded,
+        beginTask: { _, _ in .invalid }, endTask: { _ in XCTFail("Invalid lease must not be ended") }
+      )
+      XCTAssertEqual(token.isCancelled, initiallyBackgrounded)
+      if !initiallyBackgrounded {
+        center.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+      }
+      XCTAssertTrue(token.isCancelled)
+      XCTAssertTrue(activity.wasInterrupted)
+      activity.end()
+    }
+  }
+
+  @MainActor
+  func testCompletedBackgroundLeaseIsReleasedWithoutCancellingTheExport() {
+    let token = CancellationToken(operationId: "completed")
+    var expiration: (() -> Void)?
+    var ended = 0
+    let activity = BackgroundRenderActivity(
+      operationId: "completed", cancellation: token, context: VideoRenderContext(),
+      center: NotificationCenter(), initiallyBackgrounded: false,
+      beginTask: { _, handler in expiration = handler; return UIBackgroundTaskIdentifier(rawValue: 43) },
+      endTask: { _ in ended += 1 }
+    )
+    activity.end()
+    activity.end()
+    expiration?()
+    XCTAssertEqual(ended, 1)
+    XCTAssertFalse(token.isCancelled)
+    XCTAssertFalse(activity.wasInterrupted)
+  }
+
+  func testBackgroundSoftwareContextRendersTheSameMADImage() throws {
+    let context = VideoRenderContext()
+    let bounds = CGRect(x: 0, y: 0, width: 8, height: 8)
+    let colorSpace = try XCTUnwrap(CGColorSpace(name: CGColorSpace.itur_709))
+    let source = CIImage(color: CIColor(red: 0.45, green: 0.2, blue: 0.1, alpha: 1))
+      .cropped(to: bounds)
+    let image = MadDirector.encodedBrightness(source, factor: 0.7, whiteMix: 0.1)
+    func pixel(backgrounded: Bool) throws -> [UInt8] {
+      var buffer: CVPixelBuffer?
+      XCTAssertEqual(CVPixelBufferCreate(nil, 8, 8, kCVPixelFormatType_32BGRA,
+        [kCVPixelBufferIOSurfacePropertiesKey as String: [:]] as CFDictionary, &buffer), kCVReturnSuccess)
+      let output = try XCTUnwrap(buffer)
+      context.setBackgrounded(backgrounded)
+      context.render(image, to: output, bounds: bounds, colorSpace: colorSpace)
+      CVPixelBufferLockBaseAddress(output, .readOnly)
+      defer { CVPixelBufferUnlockBaseAddress(output, .readOnly) }
+      let bytes = try XCTUnwrap(CVPixelBufferGetBaseAddress(output)).assumingMemoryBound(to: UInt8.self)
+      return Array(UnsafeBufferPointer(start: bytes, count: 4))
+    }
+    let hardware = try pixel(backgrounded: false)
+    let software = try pixel(backgrounded: true)
+    XCTAssertEqual(software[3], 255)
+    for channel in 0..<3 {
+      XCTAssertGreaterThan(software[channel], 0)
+      XCTAssertLessThanOrEqual(abs(Int(hardware[channel]) - Int(software[channel])), 2)
+    }
+  }
+
+  func testBackgroundSoftwareRendererWritesAValidatedMovie() async throws {
+    let request = try decodeRequest(quality: "preview", layout: "buildUp")
+    let output = temporaryURL("background-software.mp4")
+    defer { try? FileManager.default.removeItem(at: output) }
+    let context = VideoRenderContext()
+    context.setBackgrounded(true)
+    let report = try await VideoRenderer(
+      audioRenderer: AudioRenderer(accompanimentGain: 0), context: context
+    ).render(
+      request: request,
+      assets: ["tap": fixtureURL("synthetic-tap.mp4"), "sustain": fixtureURL("synthetic-sustain.mp4"),
+        "texture": fixtureURL("synthetic-texture.mp4")],
+      outputURL: output, cancellation: CancellationToken(operationId: request.operationId)
+    )
+    XCTAssertEqual(report.frameCount, 450)
+    let validation = try await MediaValidator().validate(
+      url: output, expectedWidth: 360, expectedHeight: 640, expectedOnsetSample: nil
+    )
+    XCTAssertEqual(validation.durationUs, 15_000_000)
+    XCTAssertEqual(validation.audioTrackCount, 1)
+  }
+
   func testMadBrightnessMatchesEncodedRGBAndPreservesAlpha() throws {
     let rect = CGRect(x: 0, y: 0, width: 1, height: 1)
     let bt709 = try XCTUnwrap(CGColorSpace(name: CGColorSpace.itur_709))

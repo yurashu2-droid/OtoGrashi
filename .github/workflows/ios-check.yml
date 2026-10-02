@@ -52,6 +52,8 @@ jobs:
       OTO_FULL_CHECKS: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '[full-ci]')) && '1' || '0' }}
       # Focused follow-up after the full grouped check has isolated media failures.
       OTO_MEDIA_PARITY: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[media-parity]') && '1' || '0' }}
+      # UIKit background leases and CPU export need Xcode; Dart checks run locally.
+      OTO_BACKGROUND_RENDER: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[background-render]') && '1' || '0' }}
 
     steps:
       - name: Check out source
@@ -109,7 +111,7 @@ jobs:
           flutter analyze --fatal-infos 2>&1 | tee ci-logs/analyze.txt
 
       - name: Test
-        if: env.OTO_MEDIA_PARITY != '1'
+        if: env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1'
         shell: bash
         run: |
           set -o pipefail
@@ -142,7 +144,19 @@ jobs:
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b 2>&1 | tee -a ci-logs/simulator.txt
           echo "full_checks=$OTO_FULL_CHECKS" | tee -a ci-logs/simulator.txt
           TEST_SELECTION=()
-          if [[ "$OTO_MEDIA_PARITY" == 1 ]]; then
+          if [[ "$OTO_BACKGROUND_RENDER" == 1 ]]; then
+            TEST_SELECTION=(
+              -only-testing:RunnerTests/VideoRendererTests/testBackgroundAttemptCancellationDoesNotCancelTheWholeExport
+              -only-testing:RunnerTests/VideoRendererTests/testBackgroundExpirationEndsLeaseOnceAndCancelsOnlyTheAttempt
+              -only-testing:RunnerTests/VideoRendererTests/testBackgroundLeaseDenialDefersOnlyWhenTheAppLeavesForeground
+              -only-testing:RunnerTests/VideoRendererTests/testCompletedBackgroundLeaseIsReleasedWithoutCancellingTheExport
+              -only-testing:RunnerTests/VideoRendererTests/testBackgroundSoftwareContextRendersTheSameMADImage
+              -only-testing:RunnerTests/VideoRendererTests/testBackgroundSoftwareRendererWritesAValidatedMovie
+              -only-testing:RunnerTests/VideoRendererTests/testCancelAndWaitDoesNotReleaseOwnershipBeforeFinish
+              -only-testing:RunnerTests/VideoRendererTests/testCancelledJobCannotWinAtomicPublication
+              -only-testing:RunnerTests/VideoRendererTests/testValidatorStopsBeforeReadingAnAlreadyCancelledExport
+            )
+          elif [[ "$OTO_MEDIA_PARITY" == 1 ]]; then
             TEST_SELECTION=(
               -only-testing:RunnerTests/AudioRendererTests/testEverydayNoiseRetainsIdentityAndMovingVoiceIsRetuned
               -only-testing:RunnerTests/AudioRendererTests/testStretchedVoicedToneHasSteadyLevelAcrossAnalysisFrames

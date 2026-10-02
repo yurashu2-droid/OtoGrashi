@@ -229,25 +229,10 @@ final class MediaPlugin: NSObject, FlutterPlugin {
           let token = try await jobs.startExclusiveExport(operationId: request.operationId)
           var producedOutput: URL?
           do {
-            let assets = try store.resolveOriginals(
-              assetIds: request.arrangement.sourceAssetIds
-            )
             let output = try store.outputURL(for: request)
             producedOutput = output
-            _ = try await VideoRenderer().render(
-              request: request,
-              assets: assets,
-              outputURL: output,
-              cancellation: token
-            )
-            let dimensions = request.quality.dimensions
-            let validation = try await MediaValidator().validate(
-              url: output,
-              expectedWidth: dimensions.width,
-              expectedHeight: dimensions.height,
-              expectedOnsetSample: nil,
-              expectedTotalSamples: request.arrangement.totalSamples,
-              cancellation: token
+            let validation = try await renderWithBackgroundSupport(
+              request: request, output: output, cancellation: token
             )
             guard !token.isCancelled else {
               try? FileManager.default.removeItem(at: output)
@@ -291,53 +276,116 @@ final class MediaPlugin: NSObject, FlutterPlugin {
         succeed(result, value: nil)
       }
     case "saveRendered":
-      do {
-        guard let arguments = call.arguments as? [String: Any],
-          let path = arguments["relativePath"] as? String,
-          path.hasPrefix("renders/")
-        else { throw VideoRenderError.unsupportedContract }
-        let url = try store.resolvePlayable(relativePath: path)
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [self] status in
-          guard status == .authorized || status == .limited else {
-            fail(result, error: MediaDeliveryError.permissionDenied)
-            return
+      Task { @MainActor [self] in
+        do {
+          guard let arguments = call.arguments as? [String: Any],
+            let path = arguments["relativePath"] as? String,
+            path.hasPrefix("renders/")
+          else { throw VideoRenderError.unsupportedContract }
+          let url = try store.resolvePlayable(relativePath: path)
+          if PHPhotoLibrary.authorizationStatus(for: .addOnly) == .notDetermined {
+            try await BackgroundRenderActivity.waitUntilActive()
           }
-          PHPhotoLibrary.shared().performChanges {
-            let request = PHAssetCreationRequest.forAsset()
-            request.addResource(with: .video, fileURL: url, options: nil)
-          } completionHandler: { [self] saved, error in
-            if saved {
-              succeed(result, value: nil)
-            } else {
-              fail(result, error: error ?? MediaDeliveryError.unavailable)
+          PHPhotoLibrary.requestAuthorization(for: .addOnly) { [self] status in
+            guard status == .authorized || status == .limited else {
+              fail(result, error: MediaDeliveryError.permissionDenied)
+              return
+            }
+            PHPhotoLibrary.shared().performChanges {
+              let request = PHAssetCreationRequest.forAsset()
+              request.addResource(with: .video, fileURL: url, options: nil)
+            } completionHandler: { [self] saved, error in
+              if saved {
+                succeed(result, value: nil)
+              } else {
+                fail(result, error: error ?? MediaDeliveryError.unavailable)
+              }
             }
           }
-        }
-      } catch { fail(result, error: error) }
+        } catch { fail(result, error: error) }
+      }
     case "shareRendered":
-      do {
-        guard let arguments = call.arguments as? [String: Any],
-          let path = arguments["relativePath"] as? String,
-          path.hasPrefix("renders/"),
-          let presenter = Self.topViewController()
-        else { throw MediaDeliveryError.unavailable }
-        let url = try store.resolvePlayable(relativePath: path)
-        let activity = UIActivityViewController(
-          activityItems: [url], applicationActivities: nil
-        )
-        activity.popoverPresentationController?.sourceView = presenter.view
-        activity.popoverPresentationController?.sourceRect = CGRect(
-          x: presenter.view.bounds.midX, y: presenter.view.bounds.maxY - 40,
-          width: 1, height: 1
-        )
-        activity.completionWithItemsHandler = { [self] _, completed, _, error in
-          if let error { fail(result, error: error) }
-          else { succeed(result, value: completed) }
-        }
-        presenter.present(activity, animated: true)
-      } catch { fail(result, error: error) }
+      Task { @MainActor [self] in
+        do {
+          // A background export may finish before the user returns. Wait to
+          // present the share sheet rather than losing it behind another app.
+          try await BackgroundRenderActivity.waitUntilActive()
+          guard let arguments = call.arguments as? [String: Any],
+            let path = arguments["relativePath"] as? String,
+            path.hasPrefix("renders/"),
+            let presenter = Self.topViewController()
+          else { throw MediaDeliveryError.unavailable }
+          let url = try store.resolvePlayable(relativePath: path)
+          let activity = UIActivityViewController(
+            activityItems: [url], applicationActivities: nil
+          )
+          activity.popoverPresentationController?.sourceView = presenter.view
+          activity.popoverPresentationController?.sourceRect = CGRect(
+            x: presenter.view.bounds.midX, y: presenter.view.bounds.maxY - 40,
+            width: 1, height: 1
+          )
+          activity.completionWithItemsHandler = { [self] _, completed, _, error in
+            if let error { fail(result, error: error) }
+            else { succeed(result, value: completed) }
+          }
+          presenter.present(activity, animated: true)
+        } catch { fail(result, error: error) }
+      }
     default:
       result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private func renderWithBackgroundSupport(
+    request: VideoRenderRequestPayload, output: URL, cancellation: CancellationToken
+  ) async throws -> MediaValidationReport {
+    let context = VideoRenderContext()
+    while true {
+      guard !cancellation.isCancelled else { throw VideoRenderError.cancelled }
+      // The writer cancels its own token on producer failure. Keep that local to
+      // this attempt so an OS interruption cannot cancel the user's whole job.
+      let attempt = CancellationToken(operationId: request.operationId, parent: cancellation)
+      let activity = await MainActor.run {
+        BackgroundRenderActivity(
+          operationId: request.operationId, cancellation: attempt, context: context
+        )
+      }
+      do {
+        let assets = try store.resolveOriginals(assetIds: request.arrangement.sourceAssetIds)
+        // Existing clips may carry stricter protection inherited from an import.
+        // Keep them encrypted, but readable after screen lock during this export.
+        for url in Array(assets.values) + [output.deletingLastPathComponent()] {
+          try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: url.path
+          )
+        }
+        _ = try await VideoRenderer(context: context).render(
+          request: request, assets: assets, outputURL: output, cancellation: attempt
+        )
+        let dimensions = request.quality.dimensions
+        let validation = try await MediaValidator().validate(
+          url: output, expectedWidth: dimensions.width, expectedHeight: dimensions.height,
+          expectedOnsetSample: nil, expectedTotalSamples: request.arrangement.totalSamples,
+          cancellation: attempt
+        )
+        // Expiration can race with the last validator check.
+        let cancelled = await MainActor.run {
+          activity.end()
+          return attempt.isCancelled
+        }
+        guard !cancelled else { throw VideoRenderError.cancelled }
+        return validation
+      } catch {
+        let interrupted = await activity.wasInterrupted
+        await activity.end()
+        try? FileManager.default.removeItem(at: output)
+        guard !cancellation.isCancelled else { throw VideoRenderError.cancelled }
+        guard interrupted else { throw error }
+        // Keep the Flutter method pending and retain exclusive export ownership.
+        // Reuse the exact request (including seed), never publish a partial movie.
+        try await BackgroundRenderActivity.waitUntilActive(cancellation: cancellation)
+      }
     }
   }
 
@@ -400,6 +448,90 @@ final class MediaPlugin: NSObject, FlutterPlugin {
     var current = root
     while let presented = current?.presentedViewController { current = presented }
     return current
+  }
+}
+
+/// A finite UIKit lease, not an audio-background-mode workaround. All UIKit
+/// lifecycle state and lease cleanup is serialized on main.
+@MainActor
+final class BackgroundRenderActivity {
+  typealias BeginTask = (String, @escaping () -> Void) -> UIBackgroundTaskIdentifier
+  private let cancellation: CancellationToken
+  private let context: VideoRenderContext
+  private let center: NotificationCenter
+  private let endTask: (UIBackgroundTaskIdentifier) -> Void
+  private var identifier: UIBackgroundTaskIdentifier = .invalid
+  private var observers: [NSObjectProtocol] = []
+  private var ended = false
+  private(set) var wasInterrupted = false
+
+  init(
+    operationId: String, cancellation: CancellationToken, context: VideoRenderContext,
+    center: NotificationCenter = .default,
+    initiallyBackgrounded: Bool? = nil,
+    beginTask: BeginTask? = nil,
+    endTask: ((UIBackgroundTaskIdentifier) -> Void)? = nil
+  ) {
+    self.cancellation = cancellation
+    self.context = context
+    self.center = center
+    self.endTask = endTask ?? { UIApplication.shared.endBackgroundTask($0) }
+    let backgrounded = initiallyBackgrounded ?? (UIApplication.shared.applicationState != .active)
+    context.setBackgrounded(backgrounded)
+    wasInterrupted = backgrounded
+    let begin = beginTask ?? { name, expiration in
+      UIApplication.shared.beginBackgroundTask(withName: name, expirationHandler: expiration)
+    }
+    identifier = begin("OtoGrashi render \(operationId)") { [weak self] in
+      MainActor.assumeIsolated { self?.expire() }
+    }
+    observers.append(center.addObserver(
+      forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated { self?.context.setBackgrounded(true) }
+    })
+    observers.append(center.addObserver(
+      forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated { self?.context.setBackgrounded(false) }
+    })
+    observers.append(center.addObserver(
+      forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        self.wasInterrupted = true
+        self.context.setBackgrounded(true)
+        if self.identifier == .invalid { self.expire() }
+      }
+    })
+    if identifier == .invalid && backgrounded { expire() }
+  }
+
+  private func expire() {
+    guard !ended else { return }
+    wasInterrupted = true
+    cancellation.cancel()
+    // UIKit must be told immediately; asynchronous writer cleanup happens later.
+    end()
+  }
+
+  func end() {
+    guard !ended else { return }
+    ended = true
+    for observer in observers { center.removeObserver(observer) }
+    observers.removeAll()
+    let id = identifier
+    identifier = .invalid
+    if id != .invalid { endTask(id) }
+  }
+
+  static func waitUntilActive(cancellation: CancellationToken? = nil) async throws {
+    while UIApplication.shared.applicationState != .active {
+      guard cancellation?.isCancelled != true, !Task.isCancelled else { throw VideoRenderError.cancelled }
+      try await Task.sleep(nanoseconds: 250_000_000)
+    }
+    guard cancellation?.isCancelled != true, !Task.isCancelled else { throw VideoRenderError.cancelled }
   }
 }
 
