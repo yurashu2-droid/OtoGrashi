@@ -73,6 +73,23 @@ final class VideoRendererTests: XCTestCase {
   }
 
   @MainActor
+  func testReturningFromBackgroundDoesNotRetryAnOrdinaryRenderFailure() {
+    let token = CancellationToken(operationId: "ordinary-failure")
+    let center = NotificationCenter()
+    let activity = BackgroundRenderActivity(
+      operationId: token.operationId, cancellation: token, context: VideoRenderContext(),
+      center: center, initiallyBackgrounded: false,
+      beginTask: { _, _ in UIBackgroundTaskIdentifier(rawValue: 44) }, endTask: { _ in }
+    )
+    center.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+    center.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+    // A writer failure cancels the attempt too; cancellation alone is not an OS interruption.
+    token.cancel()
+    XCTAssertFalse(activity.wasInterrupted)
+    activity.end()
+  }
+
+  @MainActor
   func testCompletedBackgroundLeaseIsReleasedWithoutCancellingTheExport() {
     let token = CancellationToken(operationId: "completed")
     var expiration: (@MainActor @Sendable () -> Void)?
@@ -259,8 +276,9 @@ final class VideoRendererTests: XCTestCase {
   }
 
   func testPerformanceModesRenderWithProductionValidation() async throws {
+    let focused = ProcessInfo.processInfo.environment["OTO_PERFORMANCE_RENDER"] == "1"
     let directory = try evidenceDirectory()
-    let modes = fullChecks
+    let modes = focused ? ["sampler", "voiceLead", "neonTune", "loopStation"] : fullChecks
       ? ["mad", "collect", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"]
       : ["mad", "collect", "mosaic"]
     print("MAD_CHECK full=\(fullChecks) modes=\(modes)")

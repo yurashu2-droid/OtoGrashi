@@ -54,6 +54,7 @@ jobs:
       OTO_MEDIA_PARITY: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[media-parity]') && '1' || '0' }}
       # UIKit background leases and CPU export need Xcode; Dart checks run locally.
       OTO_BACKGROUND_RENDER: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[background-render]') && '1' || '0' }}
+      OTO_PERFORMANCE_RENDER: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[performance-render]') && '1' || '0' }}
 
     steps:
       - name: Check out source
@@ -117,7 +118,11 @@ jobs:
           set -o pipefail
           # expanded, not the GitHub reporter: its [E] lines feed the public
           # annotations below, so failures are readable without signing in
-          flutter test --reporter expanded 2>&1 | tee ci-logs/test.txt
+          if [[ "$OTO_PERFORMANCE_RENDER" == 1 ]]; then
+            flutter test test/domain/performance_modes_test.dart --reporter expanded 2>&1 | tee ci-logs/test.txt
+          else
+            flutter test --reporter expanded 2>&1 | tee ci-logs/test.txt
+          fi
 
       - name: Build unsigned iOS Simulator app
         shell: bash
@@ -144,7 +149,12 @@ jobs:
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b 2>&1 | tee -a ci-logs/simulator.txt
           echo "full_checks=$OTO_FULL_CHECKS" | tee -a ci-logs/simulator.txt
           TEST_SELECTION=()
-          if [[ "$OTO_BACKGROUND_RENDER" == 1 ]]; then
+          if [[ "$OTO_PERFORMANCE_RENDER" == 1 ]]; then
+            TEST_SELECTION=(
+              -only-testing:RunnerTests/VideoRendererTests/testPerformanceModesRenderWithProductionValidation
+              -only-testing:RunnerTests/VideoRendererTests/testReturningFromBackgroundDoesNotRetryAnOrdinaryRenderFailure
+            )
+          elif [[ "$OTO_BACKGROUND_RENDER" == 1 ]]; then
             TEST_SELECTION=(
               -only-testing:RunnerTests/VideoRendererTests/testBackgroundAttemptCancellationDoesNotCancelTheWholeExport
               -only-testing:RunnerTests/VideoRendererTests/testBackgroundExpirationEndsLeaseOnceAndCancelsOnlyTheAttempt
@@ -166,7 +176,7 @@ jobs:
               -only-testing:RunnerTests/VideoRendererTests/testMadBrightnessMatchesEncodedRGBAndPreservesAlpha
             )
           fi
-          TEST_RUNNER_OTO_FULL_CHECKS="$OTO_FULL_CHECKS" xcodebuild test \
+          TEST_RUNNER_OTO_FULL_CHECKS="$OTO_FULL_CHECKS" TEST_RUNNER_OTO_PERFORMANCE_RENDER="$OTO_PERFORMANCE_RENDER" xcodebuild test \
             -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Debug \
@@ -194,14 +204,14 @@ jobs:
           fi
 
       - name: Verify rendered audio evidence
-        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1'
+        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1' && env.OTO_PERFORMANCE_RENDER != '1'
         shell: bash
         run: |
           test -f ci-artifacts/audio-render-fixture.wav
           test -f ci-artifacts/audio-render-report.json
 
       - name: Verify rendered video evidence
-        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1'
+        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1' && env.OTO_PERFORMANCE_RENDER != '1'
         shell: bash
         run: |
           test -f ci-artifacts/video-render-preview.mp4
