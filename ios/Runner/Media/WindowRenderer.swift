@@ -331,6 +331,13 @@ final class WindowFrameRenderer {
     scene.rootNode.addChildNode(backdrop)
   }
 
+  private static let beatSamples = 22_500   // 128 BPM at 48 kHz
+  private static let grounds: [UIColor] = [
+    UIColor(red: 0.95, green: 0.95, blue: 0.97, alpha: 1), UIColor(red: 0.99, green: 0.89, blue: 0.88, alpha: 1),
+    UIColor(red: 0.92, green: 0.90, blue: 0.99, alpha: 1), UIColor(red: 0.89, green: 0.96, blue: 0.93, alpha: 1),
+    UIColor(red: 0.99, green: 0.94, blue: 0.86, alpha: 1), UIColor(red: 0.89, green: 0.93, blue: 0.99, alpha: 1),
+  ]
+
   /// Card centres and sizes on the z = 0 plane, plus how far the camera must stand back.
   static func layout(count: Int, aspect: CGFloat) -> (cards: [CGRect], distance: Float) {
     let columns = count <= 2 ? 1 : 2
@@ -357,9 +364,17 @@ final class WindowFrameRenderer {
   func draw(frame: Int, cards keyed: [(key: String, image: CGImage?, frameKey: String, playing: Bool, age: Int, punch: CGFloat)],
     into buffer: CVPixelBuffer) throws {
     let t = Float(frame) / 30
+    let sample = frame * 1600
     let plan = Self.layout(count: max(1, keyed.count), aspect: CGFloat(width) / CGFloat(height))
+    // a small push on every beat, and a new pastel ground every two bars
+    let intoBeat = Float(sample % Self.beatSamples) / 48_000
+    let push = exp(-intoBeat * 9)
+    camera.camera?.fieldOfView = CGFloat(30 - push * 1.1)
     camera.position = SCNVector3(sin(t * 0.35) * 0.6, 0.15 + sin(t * 0.23) * 0.2, plan.distance)
     camera.look(at: SCNVector3(0, 0, 0))
+    let ground = Self.grounds[(sample / (Self.beatSamples * 8)) % Self.grounds.count]
+    scene.background.contents = ground
+    backdrop.geometry?.firstMaterial?.diffuse.contents = ground
     // the light sweeps slowly from one side to the other and back
     sun.eulerAngles = SCNVector3(-0.55, sin(t * 0.9) * 0.75, 0)
     let live = Set(keyed.map(\.key))
@@ -380,8 +395,9 @@ final class WindowFrameRenderer {
       let p = Float(item.punch)
       let sway = item.playing ? sin(t * 2.3 + Float(index)) * 0.42 : sin(t * 0.7 + Float(index)) * 0.1
       card.tilt.eulerAngles = SCNVector3(-0.05, sway, item.playing ? sin(seconds * 9) * 0.03 * p : 0)
-      card.tilt.position = SCNVector3(0, p * 0.12, 0)
-      card.tilt.scale = SCNVector3(1 + 0.05 * p, 1 - 0.07 * p, 1)
+      let hop = item.playing ? max(0, sin(min(1, seconds / 0.22) * Float.pi)) : 0
+      card.tilt.position = SCNVector3(0, hop * 0.16, p * 0.08)
+      card.tilt.scale = SCNVector3(1 + 0.06 * p, 1 - 0.09 * p, 1)
       card.setDimmed(!item.playing)
     }
     // render into our texture, then copy into the writer's buffer
