@@ -273,6 +273,8 @@ final class WindowFrameRenderer {
   private let hasStencil: Bool
   private let heights: WindowHeightMaps
   private var cards: [String: WindowCard] = [:]
+  private var shotKey: String?
+  private var shotFrame = 0
 
   init?(width: Int, height: Int, ground: CGColor) {
     guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return nil }
@@ -331,7 +333,7 @@ final class WindowFrameRenderer {
 
     let wall = SCNPlane(width: 40, height: 40)
     wall.firstMaterial?.diffuse.contents = UIColor(cgColor: ground)
-    wall.firstMaterial?.lightingModel = .lambert
+    wall.firstMaterial?.lightingModel = .constant   // the ground keeps its exact colour
     backdrop = SCNNode(geometry: wall)
     backdrop.position = SCNVector3(0, 0, -0.35)
     scene.rootNode.addChildNode(backdrop)
@@ -375,10 +377,40 @@ final class WindowFrameRenderer {
     // a small push on every beat, and a new pastel ground every two bars
     let intoBeat = Float(sample % Self.beatSamples) / 48_000
     let push = exp(-intoBeat * 9)
-    camera.camera?.fieldOfView = CGFloat(30 - push * 1.1)
-    camera.position = SCNVector3(sin(t * 0.35) * 0.6, 0.15 + sin(t * 0.23) * 0.2, plan.distance)
-    camera.look(at: SCNVector3(0, 0, 0))
-    let ground = Self.grounds[(sample / (Self.beatSamples * 8)) % Self.grounds.count]
+    // The edit, bar by bar: everyone / follow the sound / follow / everyone, turning.
+    // Following means one card alone on its own colour, cutting when another sound
+    // takes over, but never sooner than 0.3 s after the last cut.
+    let bar = sample / (Self.beatSamples * 4)
+    let follow = keyed.count > 1 && (bar % 4 == 1 || bar % 4 == 2)
+    let lead = keyed.filter(\.playing).min(by: { $0.age < $1.age })?.key
+    if follow {
+      if let lead, lead != shotKey, shotKey == nil || frame - shotFrame >= 9 {
+        shotKey = lead
+        shotFrame = frame
+      } else if shotKey == nil || !keyed.contains(where: { $0.key == shotKey }) {
+        shotKey = keyed.first?.key
+        shotFrame = frame
+      }
+    } else if shotKey != nil {
+      shotKey = nil
+      shotFrame = frame
+    }
+    let sinceCut = Float(frame - shotFrame) / 30
+    let cutPunch = exp(-sinceCut * 7)
+    camera.camera?.fieldOfView = CGFloat(30 - push * 1.1 - cutPunch * 3)
+    var ground = Self.grounds[(sample / (Self.beatSamples * 8)) % Self.grounds.count]
+    if let shotKey, let index = keyed.firstIndex(where: { $0.key == shotKey }) {
+      let rect = plan.cards[min(index, plan.cards.count - 1)]
+      let close = Float(rect.height) * 1.75 / (2 * tan(15 * Float.pi / 180))
+      let side: Float = index % 2 == 0 ? -1 : 1
+      camera.position = SCNVector3(Float(rect.midX) + side * (0.35 + sinceCut * 0.12), Float(rect.midY) + 0.12, close + 0.2 - sinceCut * 0.15)
+      camera.look(at: SCNVector3(Float(rect.midX), Float(rect.midY) - 0.05, 0))
+      ground = Self.grounds[1 + index % (Self.grounds.count - 1)]
+    } else {
+      let turn: Float = bar % 4 == 3 ? sin(t * 0.9) * 1.4 : sin(t * 0.35) * 0.6
+      camera.position = SCNVector3(turn, 0.15 + sin(t * 0.23) * 0.2, plan.distance)
+      camera.look(at: SCNVector3(0, 0, 0))
+    }
     scene.background.contents = ground
     backdrop.geometry?.firstMaterial?.diffuse.contents = ground
     // the light sweeps slowly from one side to the other and back
@@ -405,6 +437,7 @@ final class WindowFrameRenderer {
       card.tilt.position = SCNVector3(0, hop * 0.16, p * 0.08)
       card.tilt.scale = SCNVector3(1 + 0.06 * p, 1 - 0.09 * p, 1)
       card.setDimmed(!item.playing)
+      card.root.isHidden = shotKey != nil && shotKey != item.key
     }
     // SceneKit draws the frame itself (with 4x multisampling); we only copy it into the video
     let shot = renderer.snapshot(atTime: TimeInterval(t), with: CGSize(width: width, height: height),
