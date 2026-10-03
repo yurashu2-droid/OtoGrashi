@@ -1,10 +1,8 @@
 import Flutter
 import AVFoundation
-import CoreML
 import Foundation
 import Photos
 import UIKit
-import Vision
 
 private enum MediaDeliveryError: Error {
   case permissionDenied
@@ -52,7 +50,6 @@ final class MediaPlugin: NSObject, FlutterPlugin {
   private let eventStream: MediaEventStreamHandler
   fileprivate let capture: CaptureService
   fileprivate let playback: PlaybackRegistry
-  private let depthProbe = DepthEstimateProbe()
 
   init(eventStream: MediaEventStreamHandler) {
     let store = ManagedMediaStore()
@@ -67,12 +64,17 @@ final class MediaPlugin: NSObject, FlutterPlugin {
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
-    case "probeDepth":
-      do {
-        let root = try store.prepareRoot()
-        depthProbe.run(root: root) { report in result(report) }
-      } catch {
-        result(["error": "\(error)"])
+    case "depthModelStatus":
+      result(DepthModelStore.shared.status())
+    case "downloadDepthModel":
+      DepthModelStore.shared.download { outcome in
+        DispatchQueue.main.async {
+          switch outcome {
+          case .success: result(DepthModelStore.shared.status())
+          case .failure(let error):
+            result(FlutterError(code: "depth_model_download_failed", message: error.localizedDescription, details: nil))
+          }
+        }
       }
     case "managedRoot":
       complete(result) {
@@ -1063,126 +1065,3 @@ struct ManagedMediaStore {
 /// depth at the same time? It runs its own short session (no microphone), records about
 /// 1.5 seconds, and reports which depth cameras exist, what was configured and how many
 /// depth frames arrived. Nothing it records is kept.
-
-/// Hidden measurement for the "window" look (long-press the wordmark): the depth model is not
-/// shipped with the app; it is fetched the first time (as a downloadable style would be),
-/// compiled on the phone, then run over the newest clip. Reports how long each step takes.
-final class DepthEstimateProbe: @unchecked Sendable {
-  private static let base =
-    "https://huggingface.co/apple/coreml-depth-anything-v2-small/resolve/main/DepthAnythingV2SmallF16.mlpackage/"
-  private static let files = [
-    "Manifest.json", "Data/com.apple.CoreML/model.mlmodel", "Data/com.apple.CoreML/weights/weight.bin",
-  ]
-  private var running = false
-  private let lock = NSLock()
-
-  func run(root: URL, completion: @escaping ([String: Any]) -> Void) {
-    lock.lock()
-    if running { lock.unlock(); completion(["error": "already running"]); return }
-    running = true
-    lock.unlock()
-    Task.detached(priority: .userInitiated) {
-      let report = await self.measure(root: root)
-      self.lock.lock(); self.running = false; self.lock.unlock()
-      DispatchQueue.main.async { completion(report) }
-    }
-  }
-
-  private func seconds(since start: Date) -> Double {
-    (Date().timeIntervalSince(start) * 100).rounded() / 100
-  }
-
-  private func measure(root: URL) async -> [String: Any] {
-    var report: [String: Any] = [:]
-    let fm = FileManager.default
-    do {
-      let cache = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        .appendingPathComponent("DepthModel", isDirectory: true)
-      let package = cache.appendingPathComponent("DepthAnythingV2SmallF16.mlpackage", isDirectory: true)
-      let compiled = cache.appendingPathComponent("DepthAnythingV2SmallF16.mlmodelc", isDirectory: true)
-      if fm.fileExists(atPath: compiled.path) {
-        report["model"] = "already downloaded"
-      } else {
-        var start = Date()
-        var bytes: Int64 = 0
-        for file in Self.files {
-          let target = package.appendingPathComponent(file)
-          try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-          guard let url = URL(string: Self.base + file) else { throw DepthEstimateError("bad url") }
-          let (temp, response) = try await URLSession.shared.download(from: url)
-          guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw DepthEstimateError("download failed: \(file)") }
-          try? fm.removeItem(at: target)
-          try fm.moveItem(at: temp, to: target)
-          bytes += (try? fm.attributesOfItem(atPath: target.path)[.size] as? Int64) ?? 0
-        }
-        report["downloadSeconds"] = seconds(since: start)
-        report["downloadMB"] = Double(bytes / 100_000) / 10
-        start = Date()
-        let temp = try await MLModel.compileModel(at: package)
-        try? fm.removeItem(at: compiled)
-        try fm.moveItem(at: temp, to: compiled)
-        try? fm.removeItem(at: package)
-        report["compileSeconds"] = seconds(since: start)
-      }
-      var start = Date()
-      let configuration = MLModelConfiguration()
-      configuration.computeUnits = .all
-      let model = try VNCoreMLModel(for: MLModel(contentsOf: compiled, configuration: configuration))
-      report["loadSeconds"] = seconds(since: start)
-
-      guard let video = Self.newestVideo(in: root) else {
-        report["error"] = "no recorded clip yet"
-        return report
-      }
-      report["clip"] = video.lastPathComponent
-      let asset = AVURLAsset(url: video)
-      let duration = try await asset.load(.duration).seconds
-      let generator = AVAssetImageGenerator(asset: asset)
-      generator.appliesPreferredTrackTransform = true
-      generator.requestedTimeToleranceBefore = .zero
-      generator.requestedTimeToleranceAfter = .zero
-      generator.maximumSize = CGSize(width: 720, height: 720)
-      let count = max(1, min(144, Int(duration * 24)))
-      var decode = 0.0, infer = 0.0, depthSize = ""
-      for index in 0..<count {
-        start = Date()
-        let (image, _) = try await generator.image(at: CMTime(seconds: Double(index) / 24, preferredTimescale: 600))
-        decode += Date().timeIntervalSince(start)
-        start = Date()
-        let request = VNCoreMLRequest(model: model)
-        request.imageCropAndScaleOption = .scaleFill
-        try VNImageRequestHandler(cgImage: image).perform([request])
-        infer += Date().timeIntervalSince(start)
-        if depthSize.isEmpty, let result = request.results?.first as? VNPixelBufferObservation {
-          depthSize = "\(CVPixelBufferGetWidth(result.pixelBuffer))x\(CVPixelBufferGetHeight(result.pixelBuffer))"
-        }
-      }
-      report["frames"] = count
-      report["clipSeconds"] = (duration * 100).rounded() / 100
-      report["decodeSeconds"] = (decode * 100).rounded() / 100
-      report["depthSeconds"] = (infer * 100).rounded() / 100
-      report["depthMsPerFrame"] = Int((infer / Double(count) * 1000).rounded())
-      report["depthSize"] = depthSize
-    } catch {
-      report["error"] = "\(error)"
-    }
-    return report
-  }
-
-  private static func newestVideo(in root: URL) -> URL? {
-    let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey]
-    guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys) else { return nil }
-    var best: (URL, Date)?
-    for case let url as URL in walker where ["mov", "mp4", "m4v"].contains(url.pathExtension.lowercased()) {
-      let values = try? url.resourceValues(forKeys: Set(keys))
-      guard values?.isRegularFile == true, let date = values?.contentModificationDate else { continue }
-      if best == nil || date > best!.1 { best = (url, date) }
-    }
-    return best?.0
-  }
-}
-
-private struct DepthEstimateError: Error, CustomStringConvertible {
-  let description: String
-  init(_ description: String) { self.description = description }
-}

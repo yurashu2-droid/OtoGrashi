@@ -8,6 +8,9 @@ enum PerformanceMode {
   mad,
   // あつめる: the sounds are collected one by one, then stacked into a beat
   collect,
+  // とびだす: the MAD song, drawn as 3D cards the subject leans out of
+  // (needs the downloadable depth model)
+  window,
   mosaic,
   vinyl,
   sampler,

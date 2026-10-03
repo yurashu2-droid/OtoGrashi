@@ -327,6 +327,9 @@ struct VideoRenderer {
       ? MadDirector(request: request, peaks: audioReport.eventPeaks, context: context) : nil
     // stills for the あつめる form, taken once per render
     let collectCache = CollectStillCache()
+    // the とびだす form draws a 3D scene; it is built once per render
+    let windowFrames = request.arrangement.performanceMode == "window"
+      ? WindowFrameRenderer(width: dimensions.width, height: dimensions.height, ground: Self.performanceGround("window")) : nil
     if FileManager.default.fileExists(atPath: outputURL.path) {
       try FileManager.default.removeItem(at: outputURL)
     }
@@ -455,7 +458,8 @@ struct VideoRenderer {
               into: buffer,
               width: dimensions.width,
               height: dimensions.height,
-              collectCache: collectCache
+              collectCache: collectCache,
+              windowFrames: windowFrames
             )
           }
         }, onCancel: {
@@ -781,9 +785,15 @@ struct VideoRenderer {
     into buffer: CVPixelBuffer,
     width: Int,
     height: Int,
-    collectCache: CollectStillCache? = nil
+    collectCache: CollectStillCache? = nil,
+    windowFrames: WindowFrameRenderer? = nil
   ) async throws {
     let sample = frame * 1_600
+    if request.arrangement.performanceMode == "window", let windowFrames {
+      try await drawWindowFrame(frame, request: request, providers: providers, eventPeaks: eventPeaks,
+        renderer: windowFrames, into: buffer, width: width, height: height)
+      return
+    }
     if request.arrangement.performanceMode == "collect" {
       try await drawCollectFrame(frame, request: request, providers: providers,
         cache: collectCache ?? CollectStillCache(), into: buffer, width: width, height: height)
@@ -1063,6 +1073,7 @@ struct VideoRenderer {
     case "voiceLead": return CGColor(red: 0.93, green: 0.96, blue: 0.99, alpha: 1)
     case "neonTune": return CGColor(red: 0.99, green: 0.94, blue: 0.95, alpha: 1)
     case "loopStation": return CGColor(red: 0.99, green: 0.97, blue: 0.90, alpha: 1)
+    case "window": return CGColor(red: 0.95, green: 0.95, blue: 0.97, alpha: 1)
     default: return CGColor(red: 0.976, green: 0.976, blue: 0.976, alpha: 1)
     }
   }
@@ -3605,6 +3616,59 @@ struct CollectFrameRenderer {
 }
 
 extension VideoRenderer {
+  /// とびだす: the same "who is sounding" rules as the other forms, drawn as 3D window cards.
+  fileprivate func drawWindowFrame(_ frame: Int, request: VideoRenderRequestPayload,
+    providers: [String: SourceProvider], eventPeaks: [[Float]], renderer: WindowFrameRenderer,
+    into buffer: CVPixelBuffer, width: Int, height: Int) async throws {
+    let sample = frame * 1600
+    let sorted = request.arrangement.videoEvents.enumerated().sorted {
+      $0.element.destinationStartSample == $1.element.destinationStartSample
+        ? $0.offset < $1.offset
+        : $0.element.destinationStartSample < $1.element.destinationStartSample
+    }.map(\.element)
+    var keys: [String] = []
+    for event in sorted where !keys.contains(event.assetId) { keys.append(event.assetId) }
+    keys = Array(keys.prefix(6))
+    let active = sorted.filter { sample >= $0.destinationStartSample && sample < $0.destinationStartSample + $0.durationSamples }
+    var cards: [(key: String, image: CGImage?, frameKey: String, playing: Bool, age: Int, punch: CGFloat)] = []
+    for key in keys {
+      let all = sorted.filter { $0.assetId == key }
+      let live = active.filter { $0.assetId == key }
+      guard let event = live.last ?? all.last(where: { $0.destinationStartSample <= sample }) ?? all.first,
+        let provider = providers[key] else { continue }
+      let audioIndex = request.arrangement.videoEvents.firstIndex(of: event)
+      let peaks = audioIndex.flatMap { $0 < eventPeaks.count ? eventPeaks[$0] : nil } ?? []
+      let localFrame = max(0, sample - event.destinationStartSample) / 1600
+      let audible = peaks.isEmpty || (localFrame < peaks.count && peaks[localFrame] > 0.0001)
+      let playing = !live.isEmpty && audible
+      let age = playing ? sample - event.destinationStartSample : 48_000
+      let punch = playing ? CGFloat(max(0, 1 - Double(age) / 6500)) : 0
+      let timeSample = event.destinationStartSample + min(max(0, sample - event.destinationStartSample), event.durationSamples - 1)
+      let time = Self.sourceTime(assetId: key, sample: timeSample, events: [event], duration: provider.duration)
+      var image = try await provider.image(at: time)
+      // fill a 3:4 window, keeping any crop the person chose
+      let full = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+      var area = full
+      if let crop = request.video.clipCrops.first(where: { $0.assetId == key })?.crop {
+        area = CGRect(x: CGFloat(crop.x) * full.width, y: CGFloat(crop.y) * full.height,
+          width: CGFloat(crop.width) * full.width, height: CGFloat(crop.height) * full.height)
+      }
+      let target: CGFloat = 3.0 / 4.0
+      if area.width / area.height > target {
+        let w = area.height * target
+        area = CGRect(x: area.midX - w / 2, y: area.minY, width: w, height: area.height)
+      } else {
+        let h = area.width / target
+        area = CGRect(x: area.minX, y: area.midY - h / 2, width: area.width, height: h)
+      }
+      if let cropped = image.cropping(to: area.integral) { image = cropped }
+      let frameKey = "\(key)@\(Int((CMTimeGetSeconds(time) * 30).rounded()))"
+      cards.append((key: key, image: Optional(image), frameKey: frameKey, playing: playing, age: age, punch: punch))
+    }
+    try renderer.draw(frame: frame, cards: cards, into: buffer)
+    try drawCaptions(request.video.captions.filter { sample >= $0.destinationStartSample && sample < $0.destinationStartSample + $0.durationSamples }, into: buffer, width: width, height: height)
+  }
+
   fileprivate func drawCollectFrame(_ frame: Int, request: VideoRenderRequestPayload,
     providers: [String: SourceProvider], cache: CollectStillCache,
     into buffer: CVPixelBuffer, width: Int, height: Int) async throws {

@@ -26,6 +26,7 @@ Arrangement arrangeMad({
   required MelodyTemplate melodyTemplate,
   required int seconds,
   bool collect = false,
+  bool window = false,
 }) {
   if (seconds != 15 && seconds != 30) {
     throw const MediaContractException('Choose a 15 or 30 second MAD.');
@@ -69,7 +70,11 @@ Arrangement arrangeMad({
   return builder.finish(
     style: style,
     melodyTemplate: melodyTemplate,
-    performanceMode: collect ? PerformanceMode.collect : PerformanceMode.mad,
+    performanceMode: collect
+        ? PerformanceMode.collect
+        : window
+        ? PerformanceMode.window
+        : PerformanceMode.mad,
   );
 }
 

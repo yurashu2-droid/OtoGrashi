@@ -1074,4 +1074,56 @@ final class VideoRendererTests: XCTestCase {
     attachment.lifetime = .keepAlways
     add(attachment)
   }
+
+  // MARK: とびだす
+
+  func testWindowHeightMapsRaiseTheNearSubjectAndKeepEdgesFlat() {
+    let width = 120, height = 160
+    var values = [Float](repeating: 0.1, count: width * height)
+    for y in 0..<height {
+      for x in 0..<width {
+        let dx = Float(x - width / 2) / 30, dy = Float(y - height / 2) / 36
+        values[y * width + x] += max(0, 1 - dx * dx - dy * dy)
+      }
+    }
+    let grid = WindowHeightMaps.shape(values, width: width, height: height)
+    let columns = WindowHeightMaps.columns, rows = WindowHeightMaps.rows
+    XCTAssertEqual(grid.count, columns * rows)
+    XCTAssertGreaterThan(grid[rows / 2 * columns + columns / 2], 0.4)
+    XCTAssertLessThan(grid[2 * columns + 2], 0.02)
+  }
+
+  func testWindowCardsRenderIntoTheFrame() throws {
+    guard let renderer = WindowFrameRenderer(width: 360, height: 640, ground: CGColor(gray: 0.95, alpha: 1)) else {
+      throw XCTSkip("Metal is not available")
+    }
+    let space = CGColorSpaceCreateDeviceRGB()
+    guard let context = CGContext(data: nil, width: 90, height: 120, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return XCTFail("no context") }
+    context.setFillColor(CGColor(red: 0.9, green: 0.1, blue: 0.1, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: 90, height: 120))
+    guard let image = context.makeImage() else { return XCTFail("no image") }
+    var made: CVPixelBuffer?
+    CVPixelBufferCreate(nil, 360, 640, kCVPixelFormatType_32BGRA,
+      [kCVPixelBufferIOSurfacePropertiesKey as String: [:]] as CFDictionary, &made)
+    guard let buffer = made else { return XCTFail("no buffer") }
+    try renderer.draw(frame: 12, cards: [
+      (key: "a", image: image, frameKey: "a@1", playing: true, age: 2_000, punch: 0.6),
+      (key: "b", image: image, frameKey: "b@1", playing: false, age: 48_000, punch: 0),
+    ], into: buffer)
+    CVPixelBufferLockBaseAddress(buffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+    let base = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+    let row = CVPixelBufferGetBytesPerRow(buffer)
+    var red = 0, white = 0
+    for y in stride(from: 0, to: 640, by: 4) {
+      for x in stride(from: 0, to: 360, by: 4) {
+        let p = base + y * row + x * 4
+        if p[2] > 140 && p[1] < 110 { red += 1 }
+        if p[0] > 235 && p[1] > 235 && p[2] > 235 { white += 1 }
+      }
+    }
+    XCTAssertGreaterThan(red, 200, "the pictures are drawn")
+    XCTAssertGreaterThan(white, 20, "the white window frames are drawn")
+  }
 }

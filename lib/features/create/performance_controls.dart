@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../domain/arrangement.dart';
 import '../../design/tokens.dart';
+import '../../media/depth_model.dart';
 
 class PerformanceControls extends StatelessWidget {
   const PerformanceControls({
@@ -25,6 +26,11 @@ class PerformanceControls extends StatelessWidget {
       'あつめる',
       Icons.collections_rounded,
       '音が1つずつ登場して集まり、ビートに積み上がってから曲になる。',
+    ),
+    PerformanceMode.window: (
+      'とびだす',
+      Icons.view_in_ar_rounded,
+      '撮った顔や物が、窓から飛び出す3D。はじめに約50MBのダウンロードが必要です。',
     ),
     PerformanceMode.natural: (
       '原声を楽しむ',
@@ -101,6 +107,15 @@ class PerformanceControls extends StatelessWidget {
           child: Row(
             children: [
               for (final option in PerformanceMode.values)
+                if (option == PerformanceMode.window)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: _WindowChip(
+                      selected: mode == option,
+                      onSelected: () => onMode(option),
+                    ),
+                  )
+                else
                 Padding(
                   padding: const EdgeInsets.only(right: 6),
                   child: ChoiceChip(
@@ -169,5 +184,109 @@ final class _LengthPill extends StatelessWidget {
         ),
       ),
     ),
+  );
+}
+
+/// とびだす is added by downloading its depth model once; until then the chip
+/// shows a download mark and asks before fetching about 50 MB.
+final class _WindowChip extends StatefulWidget {
+  const _WindowChip({required this.selected, required this.onSelected});
+
+  final bool selected;
+  final VoidCallback onSelected;
+
+  @override
+  State<_WindowChip> createState() => _WindowChipState();
+}
+
+final class _WindowChipState extends State<_WindowChip> {
+  final _model = DepthModel.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_model.value.phase == DepthModelPhase.unknown) _model.refresh();
+  }
+
+  Future<void> _tap() async {
+    if (_model.isReady) {
+      widget.onSelected();
+      return;
+    }
+    if (_model.value.phase == DepthModelPhase.downloading) return;
+    final agreed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('「とびだす」を追加'),
+        content: const Text(
+          '撮った顔や物を立体にするためのデータ（約${DepthModel.megabytes}MB）を'
+          'ダウンロードします。Wi-Fi でのダウンロードがおすすめです。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('やめる'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('ダウンロード'),
+          ),
+        ],
+      ),
+    );
+    if (agreed != true || !mounted) return;
+    final ready = await _model.download();
+    if (!mounted) return;
+    if (ready) {
+      widget.onSelected();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'ダウンロードできませんでした。${_model.value.message ?? ''}',
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<DepthModelState>(
+    valueListenable: _model,
+    builder: (context, state, _) {
+      final label = PerformanceControls.labels[PerformanceMode.window]!;
+      final downloading = state.phase == DepthModelPhase.downloading;
+      final ready = state.phase == DepthModelPhase.ready;
+      final on = widget.selected && ready;
+      return ChoiceChip(
+        label: Text(
+          downloading
+              ? '${label.$1} ${(state.progress * 100).round()}%'
+              : label.$1,
+        ),
+        avatar: downloading
+            ? const SizedBox(
+                width: 15,
+                height: 15,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(
+                ready ? label.$2 : Icons.download_rounded,
+                size: 17,
+                color: on ? Colors.white : AppTokens.ink,
+              ),
+        selected: on,
+        onSelected: (_) => _tap(),
+        shape: const StadiumBorder(),
+        side: BorderSide.none,
+        backgroundColor: AppTokens.tile,
+        selectedColor: AppTokens.ink,
+        showCheckmark: false,
+        labelStyle: TextStyle(
+          fontWeight: FontWeight.w800,
+          color: on ? Colors.white : AppTokens.ink,
+        ),
+      );
+    },
   );
 }

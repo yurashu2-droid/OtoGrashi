@@ -269,7 +269,7 @@ struct ArrangementPayload: Decodable, Equatable {
     guard schemaVersion == Self.supportedSchemaVersion,
       sampleRate == Self.sampleRate,
       [Self.totalSamples, Self.maximumTotalSamples].contains(totalSamples),
-      ["natural", "mad", "collect", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"].contains(performanceMode),
+      ["natural", "mad", "collect", "window", "mosaic", "vinyl", "sampler", "voiceLead", "neonTune", "loopStation"].contains(performanceMode),
       templateVersion == 1,
       analysisVersion == 1,
       rendererVersion == 1,
@@ -487,7 +487,7 @@ struct AudioRenderer {
               count: event.durationSamples, targetMidiNote: event.targetMidiNote,
               reverse: event.isReversed, pitchSteps: event.pitchSteps ?? [],
               hardTune: arrangement.performanceMode == "neonTune" || arrangement.performanceMode == "mad"
-                || arrangement.performanceMode == "collect", prepared: prepared,
+                || arrangement.performanceMode == "collect" || arrangement.performanceMode == "window", prepared: prepared,
               cancellationCheck: { try self.checkCancellation(cancellation) })
             processed = event.targetMidiNote == nil && (event.pitchSteps?.isEmpty ?? true) && event.effectivePitchSemitones != 0
               ? try pitchPreservingDuration(shaped, semitones: event.effectivePitchSemitones,

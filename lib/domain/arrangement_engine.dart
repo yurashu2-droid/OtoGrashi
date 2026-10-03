@@ -13,7 +13,8 @@ Arrangement arrange({
   int durationSeconds = 15,
 }) {
   if (performanceMode == PerformanceMode.mad ||
-      performanceMode == PerformanceMode.collect) {
+      performanceMode == PerformanceMode.collect ||
+      performanceMode == PerformanceMode.window) {
     return arrangeMad(
       clips: clips,
       style: style,
@@ -21,6 +22,7 @@ Arrangement arrange({
       melodyTemplate: melodyTemplate,
       seconds: durationSeconds,
       collect: performanceMode == PerformanceMode.collect,
+      window: performanceMode == PerformanceMode.window,
     );
   }
   if (performanceMode != PerformanceMode.natural ||

@@ -51,7 +51,8 @@ void main() {
       if (mode == PerformanceMode.natural ||
           mode == PerformanceMode.loopStation ||
           mode == PerformanceMode.mad ||
-          mode == PerformanceMode.collect) {
+          mode == PerformanceMode.collect ||
+          mode == PerformanceMode.window) {
         continue;
       }
       final a = arrange(

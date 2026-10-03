@@ -29,6 +29,7 @@
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		A82400010000000000000001 /* EverydayAudioDSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = A82400020000000000000002 /* EverydayAudioDSP.swift */; };
+		A90000030000000000000003 /* WindowRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A90000040000000000000004 /* WindowRenderer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -85,6 +86,7 @@
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A82400020000000000000002 /* EverydayAudioDSP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EverydayAudioDSP.swift; sourceTree = "<group>"; };
+		A90000040000000000000004 /* WindowRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRenderer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -123,6 +125,7 @@
 				A60000040000000000000004 /* VideoRenderer.swift */,
 				A60000060000000000000006 /* MediaValidator.swift */,
 				A60000080000000000000008 /* MediaPlugin.swift */,
+				A90000040000000000000004 /* WindowRenderer.swift */,
 			);
 			path = Media;
 			sourceTree = "<group>";
@@ -341,6 +344,7 @@
 				A60000030000000000000003 /* VideoRenderer.swift in Sources */,
 				A60000050000000000000005 /* MediaValidator.swift in Sources */,
 				A60000070000000000000007 /* MediaPlugin.swift in Sources */,
+				A90000030000000000000003 /* WindowRenderer.swift in Sources */,
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,
