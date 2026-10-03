@@ -266,6 +266,7 @@ final class WindowFrameRenderer {
   private let sun = SCNNode()
   private let backdrop: SCNNode
   private let color: MTLTexture, samples: MTLTexture, depth: MTLTexture
+  private var textures: CVMetalTextureCache?
   private let heights: WindowHeightMaps
   private var cards: [String: WindowCard] = [:]
 
@@ -278,7 +279,7 @@ final class WindowFrameRenderer {
     renderer = SCNRenderer(device: device, options: nil)
     let target = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: width, height: height, mipmapped: false)
     target.usage = [.renderTarget, .shaderRead]
-    target.storageMode = .shared
+    target.storageMode = .private
     guard let color = device.makeTexture(descriptor: target) else { return nil }
     let multi = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: width, height: height, mipmapped: false)
     multi.textureType = .type2DMultisample
@@ -295,6 +296,7 @@ final class WindowFrameRenderer {
     self.samples = samples
     self.depth = depth
     heights = WindowHeightMaps(model: DepthModelStore.shared.loadedModel())
+    CVMetalTextureCacheCreate(nil, nil, device, nil, &textures)
 
     scene.background.contents = UIColor(cgColor: ground)
     let lens = SCNCamera()
@@ -400,10 +402,17 @@ final class WindowFrameRenderer {
       card.tilt.scale = SCNVector3(1 + 0.06 * p, 1 - 0.09 * p, 1)
       card.setDimmed(!item.playing)
     }
-    // render into our texture, then copy into the writer's buffer
+    // Render straight into the writer's buffer when it is GPU-shareable; otherwise render
+    // into our own texture and copy the pixels across.
+    var direct: CVMetalTexture?
+    if let textures {
+      CVMetalTextureCacheCreateTextureFromImage(nil, textures, buffer, nil, .bgra8Unorm_srgb,
+        width, height, 0, &direct)
+    }
+    let target = direct.flatMap(CVMetalTextureGetTexture) ?? color
     let pass = MTLRenderPassDescriptor()
     pass.colorAttachments[0].texture = samples
-    pass.colorAttachments[0].resolveTexture = color
+    pass.colorAttachments[0].resolveTexture = target
     pass.colorAttachments[0].loadAction = .clear
     pass.colorAttachments[0].storeAction = .multisampleResolve
     pass.depthAttachment.texture = depth
@@ -413,13 +422,26 @@ final class WindowFrameRenderer {
     guard let commands = queue.makeCommandBuffer() else { throw VideoRenderError.writerFailed }
     renderer.render(atTime: TimeInterval(t), viewport: CGRect(x: 0, y: 0, width: width, height: height),
       commandBuffer: commands, passDescriptor: pass)
+    let row = CVPixelBufferGetBytesPerRow(buffer)
+    var staging: MTLBuffer?
+    if target === color, let copy = device.makeBuffer(length: row * height, options: .storageModeShared),
+      let blit = commands.makeBlitCommandEncoder() {
+      blit.copy(from: color, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+        sourceSize: MTLSize(width: width, height: height, depth: 1), to: copy, destinationOffset: 0,
+        destinationBytesPerRow: row, destinationBytesPerImage: row * height)
+      blit.endEncoding()
+      staging = copy
+    }
     commands.commit()
     commands.waitUntilCompleted()
-    CVPixelBufferLockBaseAddress(buffer, [])
-    defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
-    guard let base = CVPixelBufferGetBaseAddress(buffer) else { throw VideoRenderError.writerFailed }
-    color.getBytes(base, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-      from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+    if let error = commands.error { NSLog("WINDOW_STAGE gpu_error %@", error.localizedDescription) }
+    if let staging {
+      CVPixelBufferLockBaseAddress(buffer, [])
+      defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+      guard let base = CVPixelBufferGetBaseAddress(buffer) else { throw VideoRenderError.writerFailed }
+      memcpy(base, staging.contents(), row * height)
+    }
+    if let textures { CVMetalTextureCacheFlush(textures, 0) }
   }
 }
 
