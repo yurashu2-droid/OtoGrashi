@@ -257,7 +257,7 @@ jobs:
             [ -z "$caught" ] || echo "::warning title=dart test exception::${caught//$'\n'/'%0A'}"
           fi
           summarize ios-simulator-build 'error:|Error'
-          summarize xctest 'error:|failed|Executed|TEST SUCCEEDED|TEST FAILED|XCTAssert|MAD_CHECK'
+          summarize xctest 'error:|failed|Executed|TEST SUCCEEDED|TEST FAILED|XCTAssert|MAD_CHECK|WINDOW_'
           # the slowest native tests, so the check can be kept short
           if [ -f ci-logs/xctest.txt ]; then
             slow="$( (grep -oE "Test Case '-\[RunnerTests\.[A-Za-z]+ [A-Za-z0-9_]+\]' (passed|skipped|failed) \([0-9.]+ seconds\)" ci-logs/xctest.txt || true) \
