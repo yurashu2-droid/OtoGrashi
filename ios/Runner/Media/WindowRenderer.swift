@@ -265,8 +265,10 @@ final class WindowFrameRenderer {
   private let camera = SCNNode()
   private let sun = SCNNode()
   private let backdrop: SCNNode
-  private let color: MTLTexture, samples: MTLTexture, depth: MTLTexture
-  private var textures: CVMetalTextureCache?
+  private let color: MTLTexture, depth: MTLTexture
+  private let images: CIContext
+  /// what went wrong in the last frame, for tests and logs
+  private(set) var lastProblem: String?
   private let heights: WindowHeightMaps
   private var cards: [String: WindowCard] = [:]
 
@@ -277,26 +279,20 @@ final class WindowFrameRenderer {
     self.device = device
     self.queue = queue
     renderer = SCNRenderer(device: device, options: nil)
-    let target = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: width, height: height, mipmapped: false)
+    // drawn at twice the size and scaled down: smooth edges without multisampling,
+    // which SceneKit's offscreen renderer does not accept
+    let target = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: width * 2, height: height * 2, mipmapped: false)
     target.usage = [.renderTarget, .shaderRead]
     target.storageMode = .private
     guard let color = device.makeTexture(descriptor: target) else { return nil }
-    let multi = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: width, height: height, mipmapped: false)
-    multi.textureType = .type2DMultisample
-    multi.sampleCount = 4
-    multi.usage = .renderTarget
-    multi.storageMode = .private
-    let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: width, height: height, mipmapped: false)
-    depthDescriptor.textureType = .type2DMultisample
-    depthDescriptor.sampleCount = 4
+    let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: width * 2, height: height * 2, mipmapped: false)
     depthDescriptor.usage = .renderTarget
     depthDescriptor.storageMode = .private
-    guard let samples = device.makeTexture(descriptor: multi), let depth = device.makeTexture(descriptor: depthDescriptor) else { return nil }
+    guard let depth = device.makeTexture(descriptor: depthDescriptor) else { return nil }
     self.color = color
-    self.samples = samples
     self.depth = depth
+    images = CIContext(mtlDevice: device, options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any])
     heights = WindowHeightMaps(model: DepthModelStore.shared.loadedModel())
-    CVMetalTextureCacheCreate(nil, nil, device, nil, &textures)
 
     scene.background.contents = UIColor(cgColor: ground)
     let lens = SCNCamera()
@@ -402,46 +398,30 @@ final class WindowFrameRenderer {
       card.tilt.scale = SCNVector3(1 + 0.06 * p, 1 - 0.09 * p, 1)
       card.setDimmed(!item.playing)
     }
-    // Render straight into the writer's buffer when it is GPU-shareable; otherwise render
-    // into our own texture and copy the pixels across.
-    var direct: CVMetalTexture?
-    if let textures {
-      CVMetalTextureCacheCreateTextureFromImage(nil, textures, buffer, nil, .bgra8Unorm_srgb,
-        width, height, 0, &direct)
-    }
-    let target = direct.flatMap(CVMetalTextureGetTexture) ?? color
     let pass = MTLRenderPassDescriptor()
-    pass.colorAttachments[0].texture = samples
-    pass.colorAttachments[0].resolveTexture = target
+    pass.colorAttachments[0].texture = color
     pass.colorAttachments[0].loadAction = .clear
-    pass.colorAttachments[0].storeAction = .multisampleResolve
+    pass.colorAttachments[0].storeAction = .store
     pass.depthAttachment.texture = depth
     pass.depthAttachment.loadAction = .clear
     pass.depthAttachment.storeAction = .dontCare
     pass.depthAttachment.clearDepth = 1
     guard let commands = queue.makeCommandBuffer() else { throw VideoRenderError.writerFailed }
-    renderer.render(atTime: TimeInterval(t), viewport: CGRect(x: 0, y: 0, width: width, height: height),
+    renderer.render(atTime: TimeInterval(t), viewport: CGRect(x: 0, y: 0, width: width * 2, height: height * 2),
       commandBuffer: commands, passDescriptor: pass)
-    let row = CVPixelBufferGetBytesPerRow(buffer)
-    var staging: MTLBuffer?
-    if target === color, let copy = device.makeBuffer(length: row * height, options: .storageModeShared),
-      let blit = commands.makeBlitCommandEncoder() {
-      blit.copy(from: color, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-        sourceSize: MTLSize(width: width, height: height, depth: 1), to: copy, destinationOffset: 0,
-        destinationBytesPerRow: row, destinationBytesPerImage: row * height)
-      blit.endEncoding()
-      staging = copy
-    }
     commands.commit()
     commands.waitUntilCompleted()
-    if let error = commands.error { NSLog("WINDOW_STAGE gpu_error %@", error.localizedDescription) }
-    if let staging {
-      CVPixelBufferLockBaseAddress(buffer, [])
-      defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
-      guard let base = CVPixelBufferGetBaseAddress(buffer) else { throw VideoRenderError.writerFailed }
-      memcpy(base, staging.contents(), row * height)
+    lastProblem = commands.error.map { "gpu: \($0.localizedDescription)" }
+    if let lastProblem { NSLog("WINDOW_STAGE %@", lastProblem) }
+    guard let drawn = CIImage(mtlTexture: color, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any]) else {
+      lastProblem = "no image from texture"
+      throw VideoRenderError.writerFailed
     }
-    if let textures { CVMetalTextureCacheFlush(textures, 0) }
+    // textures start at the top, Core Image at the bottom
+    let upright = drawn.oriented(.downMirrored)
+    let small = upright.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: 0.5, kCIInputAspectRatioKey: 1])
+    images.render(small, to: buffer, bounds: CGRect(x: 0, y: 0, width: width, height: height),
+      colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
   }
 }
 
