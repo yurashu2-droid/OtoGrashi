@@ -406,34 +406,15 @@ final class WindowFrameRenderer {
       card.tilt.scale = SCNVector3(1 + 0.06 * p, 1 - 0.09 * p, 1)
       card.setDimmed(!item.playing)
     }
-    let pass = MTLRenderPassDescriptor()
-    pass.colorAttachments[0].texture = color
-    pass.colorAttachments[0].loadAction = .clear
-    pass.colorAttachments[0].storeAction = .store
-    pass.depthAttachment.texture = depth
-    pass.depthAttachment.loadAction = .clear
-    pass.depthAttachment.storeAction = .dontCare
-    pass.depthAttachment.clearDepth = 1
-    if hasStencil {
-      pass.stencilAttachment.texture = depth
-      pass.stencilAttachment.loadAction = .clear
-      pass.stencilAttachment.storeAction = .dontCare
-    }
-    guard let commands = queue.makeCommandBuffer() else { throw VideoRenderError.writerFailed }
-    renderer.render(atTime: TimeInterval(t), viewport: CGRect(x: 0, y: 0, width: width * 2, height: height * 2),
-      commandBuffer: commands, passDescriptor: pass)
-    commands.commit()
-    commands.waitUntilCompleted()
-    lastProblem = commands.error.map { "gpu: \($0.localizedDescription)" }
-    if let lastProblem { NSLog("WINDOW_STAGE %@", lastProblem) }
-    guard let drawn = CIImage(mtlTexture: color, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any]) else {
-      lastProblem = "no image from texture"
+    // SceneKit draws the frame itself (with 4x multisampling); we only copy it into the video
+    let shot = renderer.snapshot(atTime: TimeInterval(t), with: CGSize(width: width, height: height),
+      antialiasingMode: .multisampling4X)
+    guard let picture = shot.cgImage else {
+      lastProblem = "snapshot had no image"
       throw VideoRenderError.writerFailed
     }
-    // textures start at the top, Core Image at the bottom
-    let upright = drawn.oriented(.downMirrored)
-    let small = upright.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: 0.5, kCIInputAspectRatioKey: 1])
-    images.render(small, to: buffer, bounds: CGRect(x: 0, y: 0, width: width, height: height),
+    lastProblem = nil
+    images.render(CIImage(cgImage: picture), to: buffer, bounds: CGRect(x: 0, y: 0, width: width, height: height),
       colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
   }
 }
