@@ -269,6 +269,8 @@ final class WindowFrameRenderer {
   private let images: CIContext
   /// what went wrong in the last frame, for tests and logs
   private(set) var lastProblem: String?
+  let formats: String
+  private let hasStencil: Bool
   private let heights: WindowHeightMaps
   private var cards: [String: WindowCard] = [:]
 
@@ -278,19 +280,25 @@ final class WindowFrameRenderer {
     self.height = height
     self.device = device
     self.queue = queue
-    renderer = SCNRenderer(device: device, options: nil)
+    let scn = SCNRenderer(device: device, options: nil)
+    renderer = scn
     // drawn at twice the size and scaled down: smooth edges without multisampling,
     // which SceneKit's offscreen renderer does not accept
-    let target = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: width * 2, height: height * 2, mipmapped: false)
+    // use exactly the formats SceneKit's pipelines are built for
+    let colorFormat = scn.colorPixelFormat == .invalid ? MTLPixelFormat.bgra8Unorm_srgb : scn.colorPixelFormat
+    let depthFormat = scn.depthPixelFormat == .invalid ? MTLPixelFormat.depth32Float : scn.depthPixelFormat
+    let target = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: colorFormat, width: width * 2, height: height * 2, mipmapped: false)
     target.usage = [.renderTarget, .shaderRead]
     target.storageMode = .private
     guard let color = device.makeTexture(descriptor: target) else { return nil }
-    let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: width * 2, height: height * 2, mipmapped: false)
+    let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: depthFormat, width: width * 2, height: height * 2, mipmapped: false)
     depthDescriptor.usage = .renderTarget
     depthDescriptor.storageMode = .private
     guard let depth = device.makeTexture(descriptor: depthDescriptor) else { return nil }
     self.color = color
     self.depth = depth
+    formats = "color=\(colorFormat.rawValue) depth=\(depthFormat.rawValue)"
+    hasStencil = depthFormat == .depth32Float_stencil8
     images = CIContext(mtlDevice: device, options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB) as Any])
     heights = WindowHeightMaps(model: DepthModelStore.shared.loadedModel())
 
@@ -406,6 +414,11 @@ final class WindowFrameRenderer {
     pass.depthAttachment.loadAction = .clear
     pass.depthAttachment.storeAction = .dontCare
     pass.depthAttachment.clearDepth = 1
+    if hasStencil {
+      pass.stencilAttachment.texture = depth
+      pass.stencilAttachment.loadAction = .clear
+      pass.stencilAttachment.storeAction = .dontCare
+    }
     guard let commands = queue.makeCommandBuffer() else { throw VideoRenderError.writerFailed }
     renderer.render(atTime: TimeInterval(t), viewport: CGRect(x: 0, y: 0, width: width * 2, height: height * 2),
       commandBuffer: commands, passDescriptor: pass)

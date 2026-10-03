@@ -1124,9 +1124,9 @@ final class VideoRendererTests: XCTestCase {
       }
     }
     let centre = base + 320 * row + 180 * 4
-    let note = "problem=\(renderer.lastProblem ?? "none") centre=\(centre[2]),\(centre[1]),\(centre[0]),\(centre[3]) corner=\(base[2]),\(base[1]),\(base[0])"
+    let note = "\(renderer.formats) problem=\(renderer.lastProblem ?? "none") centre=\(centre[2]),\(centre[1]),\(centre[0]),\(centre[3]) corner=\(base[2]),\(base[1]),\(base[0])"
     print("WINDOW_TEST \(note) red=\(red) white=\(white)")
-    XCTAssertGreaterThan(red, 200, "the pictures are drawn; \(note)")
-    XCTAssertGreaterThan(white, 20, "the white window frames are drawn; \(note)")
+    XCTAssertGreaterThan(red, 200, "\(note) (pictures)")
+    XCTAssertGreaterThan(white, 20, "\(note) (frames)")
   }
 }
