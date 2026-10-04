@@ -3665,7 +3665,7 @@ extension VideoRenderer {
       let frameKey = "\(key)@\(Int((CMTimeGetSeconds(time) * 30).rounded()))"
       cards.append((key: key, image: Optional(image), frameKey: frameKey, playing: playing, age: age, punch: punch))
     }
-    try renderer.draw(frame: frame, cards: cards, into: buffer)
+    try renderer.draw(frame: frame, arrangement: request.arrangement, cards: cards, into: buffer)
     try drawCaptions(request.video.captions.filter { sample >= $0.destinationStartSample && sample < $0.destinationStartSample + $0.durationSamples }, into: buffer, width: width, height: height)
   }
 
