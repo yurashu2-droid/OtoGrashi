@@ -30,8 +30,19 @@ class SharedFoldersScreen extends StatefulWidget {
 
 class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
   List<SharedFolderMembership> _folders = [];
+  SharedAccount? _account;
   String? _error;
   bool _loading = true;
+  bool _authBusy = false;
+  int get _ownedCount => _account == null
+      ? 0
+      : _folders
+            .where(
+              (folder) => folder.isOwner && folder.accountId == _account!.id,
+            )
+            .length;
+  bool get _atLimit =>
+      _account != null && _ownedCount >= _account!.maxOwnedFolders;
   @override
   void initState() {
     super.initState();
@@ -45,10 +56,12 @@ class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
 
   Future<void> _load() async {
     try {
+      final account = await widget.service.account();
       final folders = await widget.service.listMemberships();
       if (mounted) {
         setState(() {
           _folders = folders;
+          _account = account;
           _error = null;
           _loading = false;
         });
@@ -60,6 +73,61 @@ class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
           _loading = false;
         });
       }
+    }
+  }
+
+  Future<void> _refresh() async {
+    try {
+      if (await widget.service.account() != null) {
+        await widget.service.restoreMemberships();
+      }
+      await _load();
+    } catch (e) {
+      await _load();
+      if (mounted) setState(() => _error = _message(e));
+    }
+  }
+
+  Future<void> _signIn() async {
+    if (_authBusy) return;
+    setState(() => _authBusy = true);
+    try {
+      if (await widget.service.configuredServer() == null) {
+        if (!mounted) return;
+        final server = await showDialog<String>(
+          context: context,
+          builder: (_) => const _ServerDialog(),
+        );
+        if (server == null) return;
+        await widget.service.configureServer(server);
+      }
+      await widget.service.signIn();
+    } catch (e) {
+      if (mounted) _notice(context, _message(e));
+    } finally {
+      await _load();
+      if (mounted) setState(() => _authBusy = false);
+    }
+  }
+
+  Future<void> _signOut() async {
+    if (_authBusy ||
+        !await _confirm(
+          context,
+          '共有アカウントからログアウト',
+          '共有フォルダは、同じパスキーでログインすると戻せます。端末のストックや作品はそのまま残ります。',
+        )) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _authBusy = true);
+    try {
+      await widget.service.signOut();
+    } catch (e) {
+      if (mounted) _notice(context, _message(e));
+    } finally {
+      await _load();
+      if (mounted) setState(() => _authBusy = false);
     }
   }
 
@@ -82,8 +150,8 @@ class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
         ownerName: widget.ownerName,
       ),
     );
+    await _load();
     if (result != null) {
-      await _load();
       final matches = _folders.where((m) => m.folderId == result.id);
       if (mounted && matches.isNotEmpty) await _open(matches.first);
     }
@@ -109,7 +177,7 @@ class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
     appBar: AppBar(title: const Text('友だちと音を集める')),
     body: _page(
       RefreshIndicator(
-        onRefresh: _load,
+        onRefresh: _refresh,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(24),
@@ -131,20 +199,69 @@ class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          _account == null
+                              ? Icons.key_outlined
+                              : Icons.verified_user_outlined,
+                          color: AppTokens.lavender,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _account?.displayName ?? '共有するときだけ、ログイン',
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _account == null
+                          ? 'パスキーで登録・ログインできます。Face IDなど、いつもの端末認証で続けます。'
+                          : '無料アカウントは、自分の共有フォルダを${_account!.maxOwnedFolders}つ作れます。友だちのフォルダにも参加できます。',
+                    ),
+                    if (_atLimit) ...[
+                      const SizedBox(height: 8),
+                      const Text('新しくつくるときは、今のフォルダを閉じてください。'),
+                    ],
+                    const SizedBox(height: 8),
+                    if (_authBusy) const LinearProgressIndicator(),
+                    TextButton.icon(
+                      onPressed: _authBusy
+                          ? null
+                          : (_account == null ? _signIn : _signOut),
+                      icon: Icon(_account == null ? Icons.login : Icons.logout),
+                      label: Text(_account == null ? 'パスキーで続ける' : 'ログアウト'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
             FilledButton.icon(
-              onPressed: () => _form(join: false),
+              onPressed: _authBusy || _atLimit
+                  ? null
+                  : () => _form(join: false),
               icon: const Icon(Icons.create_new_folder_outlined),
               label: const Text('共有フォルダをつくる'),
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
-              onPressed: () => _form(join: true),
+              onPressed: _authBusy ? null : () => _form(join: true),
               icon: const Icon(Icons.link),
               label: const Text('招待リンクで参加する'),
             ),
             const SizedBox(height: 32),
             if (_loading) const Center(child: CircularProgressIndicator()),
-            if (_error != null) _retry(_error!, _load),
+            if (_error != null) _retry(_error!, _refresh),
             if (!_loading && _error == null && _folders.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(24),
@@ -174,6 +291,59 @@ class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
   );
 }
 
+class _ServerDialog extends StatefulWidget {
+  const _ServerDialog();
+  @override
+  State<_ServerDialog> createState() => _ServerDialogState();
+}
+
+class _ServerDialogState extends State<_ServerDialog> {
+  final _server = TextEditingController();
+  String? _error;
+  @override
+  void dispose() {
+    _server.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('共有サービスに接続'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('管理者から受け取ったサービスのアドレスを入力してください。友だちの招待リンクからも接続できます。'),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _server,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(labelText: 'サービスのアドレス（HTTPS）'),
+        ),
+        if (_error != null)
+          Text(_error!, style: const TextStyle(color: Colors.red)),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('キャンセル'),
+      ),
+      TextButton(
+        onPressed: () {
+          try {
+            final server = sharedOrigin(_server.text);
+            Navigator.pop(context, server.toString());
+          } catch (e) {
+            setState(() => _error = _message(e));
+          }
+        },
+        child: const Text('接続する'),
+      ),
+    ],
+  );
+}
+
 class _ConnectionDialog extends StatefulWidget {
   const _ConnectionDialog({
     required this.service,
@@ -198,11 +368,69 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   bool _busy = false;
   String? _error;
   Uri? _invitationServer;
+  SharedAccount? _account;
+  bool _accountLoading = true;
   @override
   void initState() {
     super.initState();
     _parse();
     _link.addListener(_parse);
+    _loadAccount();
+  }
+
+  Future<void> _loadAccount() async {
+    try {
+      final account = await widget.service.account();
+      if (mounted) {
+        setState(() {
+          _account = account;
+          if (_name.text.trim().isEmpty && account != null) {
+            _name.text = account.displayName;
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = _message(e));
+    } finally {
+      if (mounted) setState(() => _accountLoading = false);
+    }
+  }
+
+  Future<void> _prepareServer() async {
+    if (widget.join) {
+      final link = SharedInvitation.parse(_link.text);
+      final current = await widget.service.configuredServer();
+      if (current != null && current != link.server) {
+        throw const SharedFolderException('招待リンクのサーバーが設定と異なります。');
+      }
+      if (current == null) {
+        await widget.service.configureServer(link.server.toString());
+      }
+    } else if (widget.server == null) {
+      await widget.service.configureServer(_server.text);
+    }
+  }
+
+  Future<void> _signIn() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await _prepareServer();
+      final account = await widget.service.signIn();
+      if (mounted) {
+        setState(() {
+          _account = account;
+          if (_name.text.trim().isEmpty) _name.text = account.displayName;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = _message(e));
+    } finally {
+      await _loadAccount();
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   void _parse() {
@@ -238,10 +466,8 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
             _title.text.trim().runes.length > 40) {
           throw const FormatException('フォルダ名を1〜40文字で入力してください。');
         }
-        if (widget.server == null) {
-          await widget.service.configureServer(_server.text);
-        }
       }
+      await _prepareServer();
       final folder = widget.join
           ? await widget.service.joinFolder(
               _link.text.trim(),
@@ -254,6 +480,8 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       if (mounted) Navigator.pop(context, folder);
     } catch (e) {
       if (mounted) {
+        await _loadAccount();
+        if (!mounted) return;
         setState(() {
           _error = _message(e);
           _busy = false;
@@ -272,6 +500,12 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text(
+              _account == null
+                  ? 'はじめにパスキーで登録・ログインします。ログインだけではフォルダは作成・参加されません。'
+                  : '${_account!.displayName}さんとして共有します。自分で作れるフォルダは${_account!.maxOwnedFolders}つまでです。',
+            ),
+            const SizedBox(height: 16),
             TextField(
               controller: widget.join ? _link : _title,
               enabled: !_busy,
@@ -325,10 +559,19 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
         child: const Text('キャンセル'),
       ),
       TextButton(
-        onPressed: _busy || (widget.join && _invitationServer == null)
+        onPressed:
+            _busy ||
+                _accountLoading ||
+                (widget.join && _invitationServer == null)
             ? null
-            : _submit,
-        child: Text(widget.join ? 'この接続先に参加する' : 'つくる'),
+            : (_account == null ? _signIn : _submit),
+        child: Text(
+          _account == null
+              ? 'パスキーで続ける'
+              : widget.join
+              ? 'この接続先に参加する'
+              : 'つくる',
+        ),
       ),
     ],
   );
@@ -931,6 +1174,15 @@ void _notice(BuildContext context, String text) =>
 String _message(Object error) {
   if (error is SharedFolderException) return error.message;
   if (error is FormatException) return error.message;
+  if (error is PlatformException &&
+      const {
+        'auth_cancelled',
+        'auth_failed',
+        'auth_in_progress',
+        'auth_unavailable',
+      }.contains(error.code)) {
+    return error.message ?? 'ログインを完了できませんでした。';
+  }
   return '通信できませんでした。接続を確認して、もう一度試してください。';
 }
 

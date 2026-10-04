@@ -4,12 +4,66 @@
   "main": "src/index.ts",
   "compatibility_date": "2025-10-11",
   "workers_dev": true,
-  "durable_objects": { "bindings": [{ "name": "FOLDERS", "class_name": "SharedFolder" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SharedFolder"] }],
-  "r2_buckets": [{ "binding": "FILES", "bucket_name": "otograshi-shared-folders-private" }],
-  "ratelimits": [
-    { "name": "ENTRY_LIMIT", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
-    { "name": "API_LIMIT", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } }
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "FOLDERS",
+        "class_name": "SharedFolder"
+      },
+      {
+        "name": "AUTH_ACCOUNTS",
+        "class_name": "AuthAccounts"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "SharedFolder"
+      ]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
+        "AuthAccounts"
+      ]
+    }
   ],
-  "observability": { "enabled": false }
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "otograshi-shared-folders-private"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "ENTRY_LIMIT",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    },
+    {
+      "name": "API_LIMIT",
+      "namespace_id": "1002",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    }
+  ],
+  "observability": {
+    "enabled": false
+  },
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.txt"
+      ],
+      "fallthrough": true
+    }
+  ]
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -10,6 +11,8 @@ import '../domain/clip_asset.dart';
 import '../storage/asset_repository.dart';
 import '../storage/project_database.dart';
 import 'shared_models.dart';
+import 'shared_account_browser.dart';
+export 'shared_account_browser.dart';
 export 'shared_models.dart';
 
 abstract interface class SharedSecureStore {
@@ -93,9 +96,11 @@ final class SharedFolderService {
     SharedSecureStore? secureStore,
     SharedHttpTransport? client,
     this._initialServer,
+    SharedAccountBrowser? browser,
   }) : _database = database,
        _store = secureStore ?? PluginSharedSecureStore(),
-       _client = client ?? IoSharedHttpTransport() {
+       _client = client ?? IoSharedHttpTransport(),
+       _browser = browser ?? const NativeSharedAccountBrowser() {
     database.connection.execute(
       'CREATE TABLE IF NOT EXISTS shared_memberships (folder_id TEXT PRIMARY KEY, metadata TEXT NOT NULL)',
     );
@@ -105,6 +110,9 @@ final class SharedFolderService {
   final SharedSecureStore _store;
   final SharedHttpTransport _client;
   final Uri? _initialServer;
+  final SharedAccountBrowser _browser;
+  Future<SharedAccount>? _signingIn;
+  final Map<String, Future<String>> _creationIds = {};
   final Map<String, Future<ClipAsset>> _downloads = {};
   static const _environment = String.fromEnvironment('OTO_SHARED_API_URL');
   Future<Uri?> configuredServer() async {
@@ -123,6 +131,243 @@ final class SharedFolderService {
       throw const SharedFolderException('参加中のフォルダと異なるサーバーには変更できません。');
     }
     await _store.write('shared.server', server.toString());
+  }
+
+  String _sessionKey(Uri server) =>
+      'shared.session.${Uri.encodeComponent(server.toString())}';
+  String _creationKey(Uri server, String id) =>
+      'shared.creation.${Uri.encodeComponent(server.toString())}.$id';
+  Future<Map<String, dynamic>?> _session(Uri server) async {
+    final raw = await _store.read(_sessionKey(server));
+    if (raw == null) return null;
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      SharedAccount.fromJson(j['account'] as Map<String, dynamic>);
+      if (j['server'] != server.toString() ||
+          !_hex(j['token']) ||
+          !DateTime.parse(j['expiresAt'] as String).isAfter(DateTime.now())) {
+        throw const FormatException();
+      }
+      return j;
+    } catch (_) {
+      await _clearSession(server);
+      return null;
+    }
+  }
+
+  Future<SharedAccount?> account() async {
+    final server = await configuredServer();
+    if (server == null) return null;
+    final j = await _session(server);
+    return j == null ? null : SharedAccount.fromJson(j['account']);
+  }
+
+  Future<void> _clearSession(Uri server) async {
+    await _store.delete(_sessionKey(server));
+    for (final m in await listMemberships()) {
+      if (m.server == server && m.accountId != null) {
+        final key = _creationKey(server, m.accountId!);
+        await _store.delete(key);
+        _creationIds.remove(key);
+        await _forget(m);
+      }
+    }
+  }
+
+  Future<Map<String, dynamic>> _requireSession(Uri server) async {
+    final session = await _session(server);
+    if (session == null) {
+      throw const SharedFolderException(
+        '共有フォルダを使うにはログインしてください。',
+        code: 'login_required',
+      );
+    }
+    return session;
+  }
+
+  Future<SharedAccount> signIn() => _signingIn ??= _signIn().whenComplete(() {
+    _signingIn = null;
+  });
+  Future<SharedAccount> _signIn() async {
+    final server = await configuredServer();
+    if (server == null) throw const SharedFolderException('共有サーバーを設定してください。');
+    final saved = await _session(server);
+    if (saved != null && saved['restorePending'] == true) {
+      await restoreMemberships();
+      return SharedAccount.fromJson(saved['account']);
+    }
+    final state = _randomHex();
+    final verifier = _randomHex();
+    final start = await _json(
+      'POST',
+      server.resolve('/v1/auth/start'),
+      data: {
+        'state': state,
+        'codeChallenge': sha256.convert(utf8.encode(verifier)).toString(),
+      },
+    );
+    late Uri url;
+    try {
+      url = Uri.parse(start['authorizeUrl'] as String);
+      final fragment = Uri.splitQueryString(url.fragment);
+      if (url.origin != server.origin ||
+          url.userInfo.isNotEmpty ||
+          url.path != '/auth' ||
+          url.hasQuery ||
+          fragment.length != 1 ||
+          !_hex(fragment['request'])) {
+        throw const FormatException();
+      }
+    } catch (_) {
+      throw const SharedFolderException('認証サーバーの応答が正しくありません。');
+    }
+    final callback = await _browser.authenticate(url);
+    late Map<String, List<String>> query;
+    try {
+      query = callback.queryParametersAll;
+      if (callback.scheme != 'otograshi' ||
+          callback.host != 'auth' ||
+          callback.path.isNotEmpty ||
+          callback.userInfo.isNotEmpty ||
+          callback.hasFragment ||
+          callback.hasPort ||
+          query.length != 2 ||
+          query['state']?.length != 1 ||
+          query['code']?.length != 1 ||
+          query['state']!.single != state ||
+          !_hex(query['code']!.single)) {
+        throw const FormatException();
+      }
+    } catch (_) {
+      throw const SharedFolderException('ログインの確認情報が一致しません。');
+    }
+    final result = await _json(
+      'POST',
+      server.resolve('/v1/auth/exchange'),
+      data: {
+        'state': state,
+        'code': query['code']!.single,
+        'codeVerifier': verifier,
+      },
+    );
+    late SharedAccount next;
+    try {
+      next = SharedAccount.fromJson(result['account']);
+      if (!_hex(result['token']) ||
+          !DateTime.parse(result['expiresAt']).isAfter(DateTime.now())) {
+        throw const FormatException();
+      }
+    } catch (_) {
+      throw const SharedFolderException('アカウントの応答が正しくありません。');
+    }
+    final previous = await _session(server);
+    if (previous != null && previous['account']['id'] != next.id) {
+      final key = _creationKey(server, previous['account']['id']);
+      await _store.delete(key);
+      _creationIds.remove(key);
+      await _clearSession(server);
+    }
+    await _store.write(
+      _sessionKey(server),
+      jsonEncode({
+        'server': server.toString(),
+        'token': result['token'],
+        'expiresAt': result['expiresAt'],
+        'account': next.toJson(),
+        'restorePending': true,
+      }),
+    );
+    await restoreMemberships();
+    return next;
+  }
+
+  Future<void> signOut() async {
+    final server = await configuredServer();
+    if (server == null) return;
+    final session = await _session(server);
+    try {
+      if (session != null) {
+        await _json(
+          'POST',
+          server.resolve('/v1/auth/logout'),
+          session: session,
+        );
+      }
+    } finally {
+      if (session != null) {
+        final key = _creationKey(server, session['account']['id']);
+        await _store.delete(key);
+        _creationIds.remove(key);
+      }
+      await _clearSession(server);
+    }
+  }
+
+  Future<void> restoreMemberships() async {
+    final server = await configuredServer();
+    if (server == null) throw const SharedFolderException('共有サーバーを設定してください。');
+    final session = await _requireSession(server);
+    final response = await _json(
+      'GET',
+      server.resolve('/v1/account/folders'),
+      session: session,
+    );
+    final folders = response['folders'];
+    if (folders is! List) {
+      throw const SharedFolderException('サーバーの応答が正しくありません。');
+    }
+    final accountId = session['account']['id'] as String;
+    final entries = <Map<String, dynamic>>[];
+    final ids = <String>{};
+    // Validate the entire response before replacing credentials or forgetting rows.
+    for (final entry in folders) {
+      if (entry is! Map<String, dynamic>) {
+        throw const SharedFolderException('サーバーの応答が正しくありません。');
+      }
+      final value = _validateMembership(entry, server, accountId: accountId);
+      if (!ids.add(value.membership.folderId)) {
+        throw const SharedFolderException('サーバーの応答が正しくありません。');
+      }
+      entries.add(entry);
+    }
+    for (final entry in entries) {
+      await _save(entry, server, accountId: accountId);
+    }
+    for (final m in await listMemberships()) {
+      if (m.server == server &&
+          m.accountId == accountId &&
+          !ids.contains(m.folderId)) {
+        await _forget(m);
+      }
+    }
+    if (session['restorePending'] == true) {
+      await _store.write(
+        _sessionKey(server),
+        jsonEncode({...session, 'restorePending': false}),
+      );
+    }
+  }
+
+  Future<String> _creationId(Uri server, String accountId) {
+    final key = _creationKey(server, accountId);
+    return _creationIds.putIfAbsent(key, () async {
+      final existing = await _store.read(key);
+      if (existing != null &&
+          RegExp(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          ).hasMatch(existing)) {
+        return existing;
+      }
+      final random = Random.secure();
+      final bytes = List.generate(16, (_) => random.nextInt(256));
+      bytes[6] = (bytes[6] & 15) | 64;
+      bytes[8] = (bytes[8] & 63) | 128;
+      final h = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final id =
+          '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
+      await _store.write(key, id);
+      return id;
+    });
   }
 
   Future<List<SharedFolderMembership>> listMemberships() async => _database
@@ -144,17 +389,22 @@ final class SharedFolderService {
 
   String _key(SharedFolderMembership m) =>
       'shared.token.${Uri.encodeComponent(m.server.toString())}.${m.folderId}.${m.memberId}';
-  Future<SharedFolder> _save(
+  ({SharedFolderMembership membership, SharedFolder folder, String token})
+  _validateMembership(
     Map<String, dynamic> j,
     Uri server, {
     String? expectedFolderId,
     String? expectedRole,
-  }) async {
+    String? accountId,
+  }) {
     late SharedFolderMembership m;
     late SharedFolder folder;
     late String token;
     try {
-      m = SharedFolderMembership.fromJson(j['membership'], server);
+      m = SharedFolderMembership.fromJson({
+        ...j['membership'] as Map<String, dynamic>,
+        'accountId': ?accountId,
+      }, server);
       folder = SharedFolder.fromJson(j['folder']);
       token = j['membership']['token'] as String;
       _id(m.folderId);
@@ -172,7 +422,32 @@ final class SharedFolderService {
     } catch (_) {
       throw const SharedFolderException('サーバーの応答が正しくありません。');
     }
+    return (membership: m, folder: folder, token: token);
+  }
+
+  Future<SharedFolder> _save(
+    Map<String, dynamic> j,
+    Uri server, {
+    String? expectedFolderId,
+    String? expectedRole,
+    String? accountId,
+  }) async {
+    final validated = _validateMembership(
+      j,
+      server,
+      expectedFolderId: expectedFolderId,
+      expectedRole: expectedRole,
+      accountId: accountId,
+    );
+    final m = validated.membership;
+    final folder = validated.folder;
+    final token = validated.token;
     await _store.write(_key(m), token);
+    for (final previous in await listMemberships()) {
+      if (previous.folderId == m.folderId && _key(previous) != _key(m)) {
+        await _store.delete(_key(previous));
+      }
+    }
     _database.connection.execute(
       'INSERT OR REPLACE INTO shared_memberships VALUES (?,?)',
       [m.folderId, jsonEncode(m.toJson())],
@@ -183,15 +458,28 @@ final class SharedFolderService {
   Future<SharedFolder> createFolder(String title, String displayName) async {
     final server = await configuredServer();
     if (server == null) throw const SharedFolderException('共有サーバーを設定してください。');
-    return _save(
+    final session = await _requireSession(server);
+    final accountId = session['account']['id'] as String;
+    final creationId = await _creationId(server, accountId);
+    final folder = await _save(
       await _json(
         'POST',
         server.resolve('/v1/folders'),
-        data: {'title': title, 'displayName': displayName},
+        session: session,
+        data: {
+          'title': title,
+          'displayName': displayName,
+          'creationId': creationId,
+        },
       ),
       server,
       expectedRole: 'owner',
+      accountId: accountId,
     );
+    final key = _creationKey(server, accountId);
+    await _store.delete(key);
+    _creationIds.remove(key);
+    return folder;
   }
 
   Future<SharedFolder> joinFolder(String invitation, String displayName) async {
@@ -203,6 +491,7 @@ final class SharedFolderService {
     if ((await listMemberships()).any((m) => m.server != link.server)) {
       throw const SharedFolderException('招待リンクのサーバーが参加中のフォルダと異なります。');
     }
+    final session = await _requireSession(link.server);
     final joined = (await listMemberships()).where(
       (m) => m.folderId == link.folderId && m.server == link.server,
     );
@@ -220,8 +509,14 @@ final class SharedFolderService {
       'POST',
       link.server.resolve('/v1/folders/${link.folderId}/join'),
       data: {'inviteToken': link.token, 'displayName': displayName},
+      session: session,
     );
-    final folder = await _save(j, link.server, expectedFolderId: link.folderId);
+    final folder = await _save(
+      j,
+      link.server,
+      expectedFolderId: link.folderId,
+      accountId: session['account']['id'],
+    );
     if (current == null) await configureServer(link.server.toString());
     return folder;
   }
@@ -230,11 +525,18 @@ final class SharedFolderService {
     String method,
     Uri uri, {
     SharedFolderMembership? membership,
+    Map<String, dynamic>? session,
     Map<String, String> headers = const {},
     Stream<List<int>>? body,
     int? length,
   }) async {
     final actual = {...headers};
+    if (session != null) {
+      if (uri.origin != session['server'] || uri.userInfo.isNotEmpty) {
+        throw const SharedFolderException('認証サーバーが一致しません。');
+      }
+      actual['X-Oto-Session'] = session['token'] as String;
+    }
     if (membership != null) {
       if (uri.origin != membership.server.origin) {
         throw const SharedFolderException('共有サーバーが一致しません。');
@@ -254,7 +556,15 @@ final class SharedFolderService {
         final error = decodeSharedJson(bytes)['error'];
         code = error['code'];
       } catch (_) {}
+      if (session != null && response.statusCode == 401) {
+        await _clearSession(sharedOrigin(session['server']));
+      }
       message = switch (code) {
+        'account_required' ||
+        'session_expired' => 'ログインの有効期限が切れました。もう一度ログインしてください。',
+        'owned_folder_limit' =>
+          '無料アカウントでつくれる共有フォルダは1つです。既存のフォルダを閉じてからつくってください。',
+
         'unauthorized' => '参加情報が無効になりました。新しい招待リンクで参加し直してください。',
         'folder_not_found' => 'この共有フォルダは閉じられたか、見つかりません。',
         'invalid_invite' => '招待リンクの期限が切れたか、更新されています。新しいリンクを受け取ってください。',
@@ -293,6 +603,7 @@ final class SharedFolderService {
     String method,
     Uri uri, {
     SharedFolderMembership? membership,
+    Map<String, dynamic>? session,
     Map<String, dynamic>? data,
   }) async {
     final bytes = data == null ? null : utf8.encode(jsonEncode(data));
@@ -300,6 +611,7 @@ final class SharedFolderService {
       method,
       uri,
       membership: membership,
+      session: session,
       headers: bytes == null ? {} : {'Content-Type': 'application/json'},
       body: bytes == null ? null : Stream.value(bytes),
       length: bytes?.length,
@@ -600,4 +912,14 @@ Future<List<int>> _collect(Stream<List<int>> stream, int limit) async {
     bytes.addAll(chunk);
   }
   return bytes;
+}
+
+bool _hex(dynamic value) =>
+    value is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(value);
+String _randomHex() {
+  final random = Random.secure();
+  return List.generate(
+    32,
+    (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+  ).join();
 }

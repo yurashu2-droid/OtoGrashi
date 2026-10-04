@@ -51,9 +51,11 @@ final class SharedFolderMembership {
     required this.role,
     required this.title,
     required this.server,
+    this.accountId,
   });
   final String folderId, memberId, role, title;
   final Uri server;
+  final String? accountId;
   bool get isOwner => role == 'owner';
   factory SharedFolderMembership.fromJson(Map<String, dynamic> j, Uri server) =>
       SharedFolderMembership(
@@ -62,6 +64,7 @@ final class SharedFolderMembership {
         role: j['role'],
         title: j['title'],
         server: server,
+        accountId: j['accountId'] as String?,
       );
   Map<String, dynamic> toJson() => {
     'folderId': folderId,
@@ -69,6 +72,7 @@ final class SharedFolderMembership {
     'role': role,
     'title': title,
     'server': server.toString(),
+    if (accountId != null) 'accountId': accountId,
   };
 }
 
@@ -139,3 +143,39 @@ class SharedFolderException implements Exception {
 
 Map<String, dynamic> decodeSharedJson(List<int> bytes) =>
     jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+
+final class SharedAccount {
+  const SharedAccount({
+    required this.id,
+    required this.displayName,
+    required this.plan,
+    required this.maxOwnedFolders,
+  });
+  final String id, displayName, plan;
+  final int maxOwnedFolders;
+  factory SharedAccount.fromJson(Map<String, dynamic> j) {
+    final id = j['id'];
+    final name = j['displayName'];
+    if (id is! String ||
+        !RegExp(r'^[a-zA-Z0-9-]{1,100}$').hasMatch(id) ||
+        name is! String ||
+        name.trim().isEmpty ||
+        name.length > 100 ||
+        j['plan'] != 'free' ||
+        j['maxOwnedFolders'] != 1) {
+      throw const FormatException('アカウント情報が正しくありません。');
+    }
+    return SharedAccount(
+      id: id,
+      displayName: name,
+      plan: 'free',
+      maxOwnedFolders: 1,
+    );
+  }
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'displayName': displayName,
+    'plan': plan,
+    'maxOwnedFolders': maxOwnedFolders,
+  };
+}

@@ -1,6 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
+import { AuthAccounts, authAsset } from './auth';
+export { AuthAccounts };
 
-interface Env {
+export interface Env {
+  AUTH_ACCOUNTS: DurableObjectNamespace<AuthAccounts>;
   FOLDERS: DurableObjectNamespace<SharedFolder>;
   FILES: R2Bucket;
   ENTRY_LIMIT: RateLimit;
@@ -10,7 +13,7 @@ export const LIMITS = { maxClipBytes: 52428800, maxFolderBytes: 1073741824, maxC
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
 const TEN_MINUTES = 600000;
-interface Member { id: string; displayName: string; role: 'owner' | 'member'; hash: string }
+interface Member { id: string; displayName: string; role: 'owner' | 'member'; hash: string; hashes?: string[]; accountId?: string }
 interface Metadata {
   label: string; sha256: string; sizeBytes: number; durationUs: number; width: number; height: number;
   rotation: number; audioTrackStartUs: number; selectionStartUs: number; selectionDurationUs: number; extension: string;
@@ -26,18 +29,18 @@ interface FolderState {
 class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
 }
-function fail(status: number, code: string, message: string): never { throw new ApiError(status, code, message); }
-function json(value: unknown, status = 200): Response {
+export function fail(status: number, code: string, message: string): never { throw new ApiError(status, code, message); }
+export function json(value: unknown, status = 200): Response {
   return Response.json(value, { status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 }
-function errorResponse(error: unknown): Response {
+export function errorResponse(error: unknown): Response {
   return error instanceof ApiError ? json({ error: { code: error.code, message: error.message } }, error.status)
     : json({ error: { code: 'internal', message: 'The service could not complete the request. Please retry.' } }, 500);
 }
 function hex(bytes: Uint8Array): string { return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join(''); }
-function token(): string { return hex(crypto.getRandomValues(new Uint8Array(32))); }
-async function hash(value: string): Promise<string> { return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))); }
-function text(value: unknown, maximum: number): string {
+export function token(): string { return hex(crypto.getRandomValues(new Uint8Array(32))); }
+export async function hash(value: string): Promise<string> { return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))); }
+export function text(value: unknown, maximum: number): string {
   if (typeof value !== 'string' || !value.trim() || [...value].length > maximum || /[\u0000-\u001f\u007f]/.test(value))
     fail(400, 'invalid_text', `Text must contain 1 to ${maximum} characters.`);
   return value;
@@ -71,7 +74,7 @@ async function timedRead(reader: ReadableStreamDefaultReader<Uint8Array>): Promi
     })]);
   } finally { if (timer !== undefined) clearTimeout(timer); }
 }
-async function bodyJson(request: Request): Promise<Record<string, unknown>> {
+export async function bodyJson(request: Request): Promise<Record<string, unknown>> {
   try {
     const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(await boundedBytes(request, 8192)));
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
@@ -131,6 +134,9 @@ export default {
         return landing();
       }
       if (url.search) fail(400, 'invalid_path', 'Query parameters are not supported.');
+      if (request.method === 'GET') { const asset = authAsset(url.pathname); if (asset) return asset; }
+      const accountRoute = url.pathname.startsWith('/v1/auth/') || url.pathname === '/v1/account' || url.pathname === '/v1/account/folders';
+      if (accountRoute) return await env.AUTH_ACCOUNTS.get(env.AUTH_ACCOUNTS.idFromName('accounts')).fetch(request);
       const create = request.method === 'POST' && url.pathname === '/v1/folders';
       const parts = url.pathname.split('/');
       if (!create && (parts[1] !== 'v1' || parts[2] !== 'folders')) fail(404, 'not_found', 'Route not found.');
@@ -139,6 +145,7 @@ export default {
       if (create || (request.method === 'POST' && parts[4] === 'join')) {
         if (!(await env.ENTRY_LIMIT.limit({ key: actor })).success) fail(429, 'rate_limited', 'Please wait before creating or joining another folder.');
       }
+      if (create || (request.method === 'POST' && parts[4] === 'join')) return await env.AUTH_ACCOUNTS.get(env.AUTH_ACCOUNTS.idFromName('accounts')).fetch(request);
       if (create) url.pathname = `/v1/folders/${id}/create`;
       // Internal create route cannot be reached by the public API.
       else if (parts[4] === 'create') fail(404, 'not_found', 'Route not found.');
@@ -168,11 +175,31 @@ export class SharedFolder extends DurableObject<Env> {
       members: s.members.map(({ id, displayName, role }) => ({ id, displayName, role })),
       clips: Object.values(s.clips).map(c => c.clip), limits: LIMITS };
   }
+  async isInitialized(): Promise<boolean> { return this.load() !== undefined; }
+  async isClosed(): Promise<boolean> { return this.load()?.closed === true; }
+  async accountAccess(input: { accountId: string; displayName: string; create?: {id:string;title:string}; inviteToken?:string }): Promise<{folder: ReturnType<SharedFolder['view']>;membership:{folderId:string;memberId:string;token:string;role:string;title:string}} | {rpcError:{status:number;code:string;message:string}} | null> {
+    return this.exclusive(async () => {
+      let s=this.load();
+      if(!s && input.create) { s={id:input.create.id,title:input.create.title,createdAt:new Date().toISOString(),closed:false,members:[],clips:{},pending:{},garbage:[]}; this.save(s); }
+      if(!s || s.closed) return null;
+      let m=s.members.find(m=>m.accountId===input.accountId);
+      if(!m) {
+        if(!input.create) {
+          if(typeof input.inviteToken!=='string'||!HASH.test(input.inviteToken)||!s.invite||Date.parse(s.invite.expiresAt)<=Date.now()||await hash(input.inviteToken)!==s.invite.hash) fail(403,'invalid_invite','Invitation has expired or been replaced.');
+          if(s.members.length>=LIMITS.maxMembers) fail(409,'member_limit','Folder has reached its member limit.');
+        } else if(s.members.length) fail(403,'owner_required','Folder belongs to another account.');
+        m={id:crypto.randomUUID(),displayName:input.displayName,role:input.create?'owner':'member',hash:'',accountId:input.accountId};s.members.push(m);
+      }
+      const t=token();
+      const digest=await hash(t); const hashes=m.hashes??(m.hash?[m.hash]:[]); if(!hashes.includes(digest)) hashes.push(digest); m.hashes=hashes.slice(-10);m.hash=m.hashes[0];this.save(s);
+      return {folder:this.view(s),membership:{folderId:s.id,memberId:m.id,token:t,role:m.role,title:s.title}};
+    }).catch(e => { if(e instanceof ApiError) return {rpcError:{status:e.status,code:e.code,message:e.message}}; throw e; });
+  }
   private async member(s: FolderState, request: Request): Promise<Member> {
     const bearer = request.headers.get('Authorization') ?? '';
     if (!/^Bearer [0-9a-f]{64}$/.test(bearer)) fail(401, 'unauthorized', 'Membership credentials are required.');
     const digest = await hash(bearer.slice(7));
-    const member = s.members.find(m => m.hash === digest);
+    const member = s.members.find(m => m.hash === digest || m.hashes?.includes(digest));
     if (!member) fail(401, 'unauthorized', 'Membership has expired or been revoked.');
     return member;
   }
@@ -217,27 +244,9 @@ export class SharedFolder extends DurableObject<Env> {
   private async route(request: Request): Promise<Response> {
     const url = new URL(request.url); const p = url.pathname.split('/'); const id = p[3];
     let s = this.load();
-    if (request.method === 'POST' && p[4] === 'create' && p.length === 5) {
-      if (s) fail(409, 'already_exists', 'Folder already exists.');
-      const b = await bodyJson(request); const t = token();
-      const m: Member = { id: crypto.randomUUID(), displayName: text(b.displayName, 30), role: 'owner', hash: await hash(t) };
-      s = { id, title: text(b.title, 40), createdAt: new Date().toISOString(), closed: false, members: [m], clips: {}, pending: {}, garbage: [] };
-      this.save(s);
-      return json({ membership: { folderId: id, memberId: m.id, token: t, role: m.role, title: s.title }, folder: this.view(s) }, 201);
-    }
     if (!s || s.closed) fail(404, 'folder_not_found', 'Folder is unavailable.');
     if (s.id !== id) fail(400, 'invalid_id', 'Invalid folder ID.');
     if (Object.values(s.pending).some(r => r.expires <= Date.now())) await this.cleanup(s);
-    if (request.method === 'POST' && p[4] === 'join' && p.length === 5) {
-      const b = await bodyJson(request);
-      if (typeof b.inviteToken !== 'string' || !HASH.test(b.inviteToken)) fail(400, 'invalid_invite', 'Invalid invitation.');
-      if (!s.invite || Date.parse(s.invite.expiresAt) <= Date.now() || await hash(b.inviteToken) !== s.invite.hash)
-        fail(403, 'invalid_invite', 'Invitation has expired or been replaced.');
-      if (s.members.length >= LIMITS.maxMembers) fail(409, 'member_limit', 'Folder has reached its member limit.');
-      const t = token(); const m: Member = { id: crypto.randomUUID(), displayName: text(b.displayName, 30), role: 'member', hash: await hash(t) };
-      s.members.push(m); this.save(s);
-      return json({ membership: { folderId: id, memberId: m.id, token: t, role: m.role, title: s.title }, folder: this.view(s) });
-    }
     const m = await this.member(s, request);
     if (p.length === 4) {
       if (request.method === 'GET') return json({ folder: this.view(s) });

@@ -1,4 +1,5 @@
 import Flutter
+import AuthenticationServices
 import AVFoundation
 import Foundation
 import Photos
@@ -16,7 +17,7 @@ private enum MediaDeliveryError: Error {
   }
 }
 
-final class MediaPlugin: NSObject, FlutterPlugin {
+final class MediaPlugin: NSObject, FlutterPlugin, ASWebAuthenticationPresentationContextProviding {
   static let channelName = "dev.otogurashi/media"
   static let eventChannelName = "dev.otogurashi/media/events"
   static let previewViewType = "dev.otogurashi/capture-preview"
@@ -45,6 +46,7 @@ final class MediaPlugin: NSObject, FlutterPlugin {
     )
   }
 
+  private var sharedAuthenticationSession: ASWebAuthenticationSession?
   private let jobs = JobRegistry()
   private let store: ManagedMediaStore
   private let eventStream: MediaEventStreamHandler
@@ -62,8 +64,46 @@ final class MediaPlugin: NSObject, FlutterPlugin {
     super.init()
   }
 
+  func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+    return Self.topViewController()?.view.window ?? UIWindow()
+  }
+
+  private func authenticateSharedAccount(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard sharedAuthenticationSession == nil else {
+      result(FlutterError(code: "auth_in_progress", message: "ログイン処理中です。", details: nil)); return
+    }
+    guard let arguments = call.arguments as? [String: Any],
+      let value = arguments["url"] as? String, let url = URL(string: value),
+      url.scheme == "https", url.host != nil, url.user == nil, url.password == nil,
+      url.path == "/auth", url.query == nil,
+      Self.topViewController()?.view.window != nil else {
+      result(FlutterError(code: "auth_unavailable", message: "ログイン画面を開けませんでした。", details: nil)); return
+    }
+    let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "otograshi") { [weak self] callback, error in
+      DispatchQueue.main.async {
+        self?.sharedAuthenticationSession = nil
+        if let error = error as? ASWebAuthenticationSessionError, error.code == .canceledLogin {
+          result(FlutterError(code: "auth_cancelled", message: "ログインをキャンセルしました。", details: nil))
+        } else if error != nil || callback == nil {
+          // Never propagate authentication URLs/codes or browser error details.
+          result(FlutterError(code: "auth_failed", message: "ログインを完了できませんでした。", details: nil))
+        } else {
+          result(callback!.absoluteString)
+        }
+      }
+    }
+    session.presentationContextProvider = self
+    sharedAuthenticationSession = session
+    if !session.start() {
+      sharedAuthenticationSession = nil
+      result(FlutterError(code: "auth_unavailable", message: "ログイン画面を開けませんでした。", details: nil))
+    }
+  }
+
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
+    case "authenticateSharedAccount":
+      authenticateSharedAccount(call, result: result)
     case "depthModelStatus":
       result(DepthModelStore.shared.status())
     case "downloadDepthModel":

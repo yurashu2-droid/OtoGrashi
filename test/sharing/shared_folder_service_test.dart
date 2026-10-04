@@ -116,6 +116,18 @@ void main() {
   });
   Future<void> join() async {
     store = MemoryStore();
+    store.values['shared.server'] = 'https://share.example';
+    store.values['shared.session.https%3A%2F%2Fshare.example'] = jsonEncode({
+      'server': 'https://share.example',
+      'token': token,
+      'expiresAt': '2099-01-01T00:00:00Z',
+      'account': {
+        'id': 'account',
+        'displayName': 'Name',
+        'plan': 'free',
+        'maxOwnedFolders': 1,
+      },
+    });
     transport = FakeTransport();
     transport.respond = (method, uri) async => jsonResponse({
       'membership': {

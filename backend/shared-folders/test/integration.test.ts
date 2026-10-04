@@ -1,6 +1,6 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { build } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
@@ -14,6 +14,7 @@ before(async () => {
   const compiled = await build({ stdin: { resolveDir: process.cwd(), contents: `
     import worker, { SharedFolder as Base } from './src/index.ts';
     export default worker;
+    export { AuthAccounts } from './src/index.ts';
     export class SharedFolder extends Base {
       fetch(request) {
         if (request.headers.get('X-Test-Truncated') === 'yes') {
@@ -21,16 +22,25 @@ before(async () => {
         }
         return super.fetch(request);
       }
-    }` }, bundle: true, write: false, format: 'esm', external: ['cloudflare:workers'], target: 'es2022' });
+    }` }, bundle: true, write: false, format: 'esm', external: ['cloudflare:workers'], target: 'es2022', loader: {'.txt':'text'} });
   mf = new Miniflare({ ...convertV4MiniflareOptions({ name: 'sharing', modules: true, script: compiled.outputFiles[0].text, compatibilityDate: '2025-10-11',
-    durableObjects: { FOLDERS: { className: 'SharedFolder', useSQLite: true } }, r2Buckets: ['FILES'],
+    durableObjects: { AUTH_ACCOUNTS: { className: 'AuthAccounts', useSQLite: true }, FOLDERS: { className: 'SharedFolder', useSQLite: true } }, r2Buckets: ['FILES'],
     ratelimits: { API_LIMIT: { namespace_id: '1002', simple: { limit: 120, period: 60 } }, ENTRY_LIMIT: { namespace_id: '1001', simple: { limit: 10, period: 60 } } } }), unsafeInspectDurableObjects: true });
   await mf.ready;
 });
 after(async () => { await mf?.dispose(); });
 async function call(path: string, method = 'GET', token?: string, body?: unknown, headers: Record<string, string> = {}) {
+  if(method==='POST' && (path==='/v1/folders'||path.endsWith('/join'))) { headers['X-Oto-Session']??=await seedSession(); if(path==='/v1/folders') body={...(body as object),creationId:randomUUID()}; }
   return mf.dispatchFetch(origin + path, { method, headers: { 'CF-Connecting-IP': `test-${++sequence}`, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+}
+async function seedSession() {
+  const t=randomBytes(32).toString('hex'), id=randomUUID();
+  // Verified fixture data is inserted through test-only inspector, never a public auth bypass.
+  const storage=await mf.unsafeGetDurableObjectStorage('sharing','AuthAccounts',{name:'accounts'});
+  await storage.exec('INSERT INTO auth_records(kind,id,data) VALUES(?,?,?)','account',id,JSON.stringify({id,displayName:'Verified fixture',plan:'free',maxOwnedFolders:1}));
+  await storage.exec('INSERT INTO auth_records(kind,id,data) VALUES(?,?,?)','session',digest(Buffer.from(t)),JSON.stringify({accountId:id,expires:Date.now()+86400000}));
+  return t;
 }
 async function data(response: Response | any, status = 200) {
   const value = await response.json(); assert.equal(response.status, status, JSON.stringify(value)); return value;
@@ -161,7 +171,7 @@ test('origin, IDs, internal initialization and secret-free fragment landing', as
 test('real rate-limit bindings enforce entry and general limits', async () => {
   const req = (path: string, method = 'GET', body?: string) => mf.dispatchFetch(origin + path, {
     method, headers: { 'CF-Connecting-IP': 'rate-limit-test' }, ...(body ? { body } : {}) });
-  for (let n = 0; n < 10; n++) assert.equal((await req('/v1/folders', 'POST', JSON.stringify({ title: 'test', displayName: 'test' }))).status, 201);
+  for (let n = 0; n < 10; n++) { const t=await seedSession(); assert.equal((await mf.dispatchFetch(origin+'/v1/folders',{method:'POST',headers:{'CF-Connecting-IP':'rate-limit-test','X-Oto-Session':t},body:JSON.stringify({title:'test',displayName:'test',creationId:randomUUID()})})).status,201); }
   await data(await req('/v1/folders', 'POST', '{}'), 429);
   for (let n = 0; n < 109; n++) assert.equal((await req('/missing')).status, 404);
   await data(await req('/missing'), 429);
