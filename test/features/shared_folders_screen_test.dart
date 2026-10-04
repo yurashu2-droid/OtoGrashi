@@ -182,11 +182,20 @@ void main() {
       of: find.byType(AlertDialog),
       matching: find.text('パスキーで続ける'),
     );
-    await tester.tap(loginButton);
-    // Re-enabling the focused text field starts its repeating cursor animation.
-    // Wait for the requested state, rather than waiting for every animation to stop.
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 500));
+    final login =
+        tester
+                .widget<TextButton>(
+                  find.ancestor(
+                    of: loginButton,
+                    matching: find.byType(TextButton),
+                  ),
+                )
+                .onPressed!
+            as Future<void> Function();
+    // The streamed HTTP fixture uses real asynchronous work. Await the UI action
+    // in the real zone so the widget test's fake clock cannot stall the response.
+    await tester.runAsync(login);
+    await tester.pumpAndSettle();
     expect(
       transport.requests.where((r) => r.uri.path == '/v1/folders'),
       isEmpty,
@@ -197,7 +206,17 @@ void main() {
       reason:
           'Login requests: ${transport.requests.map((r) => r.uri.path).join(', ')}',
     );
-    await tester.tap(find.text('つくる'));
+    final submit =
+        tester
+                .widget<TextButton>(
+                  find.ancestor(
+                    of: find.text('つくる'),
+                    matching: find.byType(TextButton),
+                  ),
+                )
+                .onPressed!
+            as Future<void> Function();
+    await tester.runAsync(submit);
     await tester.pumpAndSettle();
     final create = transport.requests.singleWhere(
       (r) => r.uri.path == '/v1/folders',
