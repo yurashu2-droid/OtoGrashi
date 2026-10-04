@@ -30,7 +30,7 @@ Flutter/Dart IO, flutter_secure_storage, app_links, existing SQLite repositories
   shared folders list/detail/picker/invitation/member actions. Match existing
   themes and reuse thumbnails/sound preview/local asset selection. Owner actions
   are role-gated and destructive actions explain shared-only deletion.
-- [ ] Integration (parent): inspect both deliverables against the API contract,
+- [x] Integration (parent): inspect both deliverables against the API contract,
   run narrow backend/client checks and Flutter analyze + affected UI tests. Add
   one CI job for backend checks. Make one coherent push/build if needed for iOS
   plugin integration; do not claim cloud deployment or multi-phone verification
@@ -52,7 +52,22 @@ integration. Shared workspace, disjoint owned file paths; no worker commits/push
 ## Verification status
 
 Flutter analyze passes. Local Flutter test execution is blocked by Windows
-Application Control on flutter_tester.exe, so affected tests and one iOS plugin
-build run as a grouped macOS CI check. Backend focused workerd checks are added
-to a separate CI job. Live Cloudflare deployment and two-device use remain
-unverified until a target account/bucket/Worker is available.
+Application Control on flutter_tester.exe, so verification ran on macOS CI.
+
+- Backend: 9 workerd integration tests, TypeScript check and deployment dry-run
+  passed in https://github.com/yurashu2-droid/OtoGrashi/actions/runs/37216638037.
+- Client/app: 14 sharing and startup tests, Flutter analyze and unsigned iOS
+  simulator build passed for 998ebb2 in
+  https://github.com/yurashu2-droid/OtoGrashi/actions/runs/37217052023.
+- The first grouped run also passed 44 existing creation/library/folder checks;
+  these were not repeated after the bounded sharing/home follow-up.
+- The first run exposed a self-await in download cleanup and a narrow-screen
+  wordmark overflow. Both were fixed; existing download/retry tests and the new
+  invitation startup test then passed.
+- Release IPA: https://github.com/yurashu2-droid/OtoGrashi/actions/runs/37217052026.
+  Consult this run's status/artifacts; do not infer completion from this link.
+
+Live Cloudflare deployment and two-device use remain unverified. Wrangler whoami
+confirmed this machine is not authenticated; no account, bucket or production
+Worker has been created by this implementation. See ../../shared-folders-setup.md
+for the operator setup and in-app flow.
