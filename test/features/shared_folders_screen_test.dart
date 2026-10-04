@@ -183,12 +183,20 @@ void main() {
       matching: find.text('パスキーで続ける'),
     );
     await tester.tap(loginButton);
-    await tester.pumpAndSettle();
+    // Re-enabling the focused text field starts its repeating cursor animation.
+    // Wait for the requested state, rather than waiting for every animation to stop.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
     expect(
       transport.requests.where((r) => r.uri.path == '/v1/folders'),
       isEmpty,
     );
-    expect(find.text('つくる'), findsOneWidget);
+    expect(
+      find.text('つくる'),
+      findsOneWidget,
+      reason:
+          'Login requests: ${transport.requests.map((r) => r.uri.path).join(', ')}',
+    );
     await tester.tap(find.text('つくる'));
     await tester.pumpAndSettle();
     final create = transport.requests.singleWhere(

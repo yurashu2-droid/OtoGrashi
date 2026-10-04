@@ -56,6 +56,8 @@ jobs:
       OTO_BACKGROUND_RENDER: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[background-render]') && '1' || '0' }}
       OTO_PERFORMANCE_RENDER: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[performance-render]') && '1' || '0' }}
       OTO_SHARED_FOLDERS: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[shared-folders]') && '1' || '0' }}
+      # Test-only follow-ups reuse the already archived native code without rebuilding it.
+      OTO_TESTS_ONLY: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[tests-only]') && '1' || '0' }}
 
     steps:
       - name: Check out source
@@ -132,13 +134,14 @@ jobs:
           fi
 
       - name: Build unsigned iOS Simulator app
+        if: env.OTO_TESTS_ONLY != '1'
         shell: bash
         run: |
           set -o pipefail
           flutter build ios --simulator --debug 2>&1 | tee ci-logs/ios-simulator-build.txt
 
       - name: Run native tests on an installed iPhone simulator
-        if: env.OTO_SHARED_FOLDERS != '1'
+        if: env.OTO_SHARED_FOLDERS != '1' && env.OTO_TESTS_ONLY != '1'
         shell: bash
         run: |
           set -o pipefail
