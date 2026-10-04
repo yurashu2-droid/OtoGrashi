@@ -377,11 +377,13 @@ final class WindowFrameRenderer {
     // a small push on every beat, and a new pastel ground every two bars
     let intoBeat = Float(sample % Self.beatSamples) / 48_000
     let push = exp(-intoBeat * 9)
-    // The edit, bar by bar: everyone / follow the sound / follow / everyone, turning.
-    // Following means one card alone on its own colour, cutting when another sound
-    // takes over, but never sooner than 0.3 s after the last cut.
+    // The edit, eight bars around: everyone / follow ×2 / the equator carousel ×2 /
+    // follow ×2 / everyone, turning. Following means one card alone on its own colour,
+    // cutting when another sound takes over, never sooner than 0.3 s after the last cut.
     let bar = sample / (Self.beatSamples * 4)
-    let follow = keyed.count > 1 && (bar % 4 == 1 || bar % 4 == 2)
+    let phase = bar % 8
+    let follow = keyed.count > 1 && [1, 2, 5, 6].contains(phase)
+    let carousel = keyed.count > 1 && (phase == 3 || phase == 4)
     let lead = keyed.filter(\.playing).min(by: { $0.age < $1.age })?.key
     if follow {
       if let lead, lead != shotKey, shotKey == nil || frame - shotFrame >= 9 {
@@ -406,8 +408,15 @@ final class WindowFrameRenderer {
       camera.position = SCNVector3(Float(rect.midX) + side * (0.35 + sinceCut * 0.12), Float(rect.midY) + 0.12, close + 0.2 - sinceCut * 0.15)
       camera.look(at: SCNVector3(Float(rect.midX), Float(rect.midY) - 0.05, 0))
       ground = Self.grounds[1 + index % (Self.grounds.count - 1)]
+    } else if carousel {
+      // every window stands on a turning globe's equator, facing out; seen from a little above
+      let cardW = Float(plan.cards.first?.width ?? 1.2)
+      let radius = max(1.3, Float(keyed.count) * (cardW + 0.4) / (2 * Float.pi))
+      let fit = (radius * 2 + cardW * 1.25) / (2 * tan(15 * Float.pi / 180) * Float(width) / Float(height)) * 1.02
+      camera.position = SCNVector3(0, -0.2 + fit * sin(0.3), fit * cos(0.3))
+      camera.look(at: SCNVector3(0, -0.2, 0))
     } else {
-      let turn: Float = bar % 4 == 3 ? sin(t * 0.9) * 1.4 : sin(t * 0.35) * 0.6
+      let turn: Float = phase == 7 ? sin(t * 0.9) * 1.4 : sin(t * 0.35) * 0.6
       camera.position = SCNVector3(turn, 0.15 + sin(t * 0.23) * 0.2, plan.distance)
       camera.look(at: SCNVector3(0, 0, 0))
     }
@@ -425,13 +434,21 @@ final class WindowFrameRenderer {
         cards[item.key] = made
         return made
       }()
-      card.root.position = SCNVector3(Float(rect.midX), Float(rect.midY), 0)
+      if carousel {
+        let radius = max(1.3, Float(keyed.count) * (Float(rect.width) + 0.4) / (2 * Float.pi))
+        let angle = Float(index) / Float(keyed.count) * 2 * Float.pi - t * 0.55
+        card.root.position = SCNVector3(sin(angle) * radius, -0.2, cos(angle) * radius)
+        card.root.eulerAngles = SCNVector3(0, angle, 0)
+      } else {
+        card.root.position = SCNVector3(Float(rect.midX), Float(rect.midY), 0)
+        card.root.eulerAngles = SCNVector3(0, 0, 0)
+      }
       if let image = item.image {
         card.show(image: image, heights: heights.heights(for: image, key: item.frameKey))
       }
       let seconds = Float(item.age) / 48_000
       let p = Float(item.punch)
-      let sway = item.playing ? sin(t * 2.3 + Float(index)) * 0.42 : sin(t * 0.7 + Float(index)) * 0.1
+      let sway = carousel ? 0 : item.playing ? sin(t * 2.3 + Float(index)) * 0.42 : sin(t * 0.7 + Float(index)) * 0.1
       card.tilt.eulerAngles = SCNVector3(-0.05, sway, item.playing ? sin(seconds * 9) * 0.03 * p : 0)
       let hop = item.playing ? max(0, sin(min(1, seconds / 0.22) * Float.pi)) : 0
       card.tilt.position = SCNVector3(0, hop * 0.16, p * 0.08)
