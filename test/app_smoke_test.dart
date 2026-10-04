@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -11,8 +12,74 @@ import 'package:otogurashi/media/platform_media_gateway.dart';
 import 'package:otogurashi/storage/asset_repository.dart';
 import 'package:otogurashi/storage/project_database.dart';
 import 'package:otogurashi/storage/project_repository.dart';
+import 'package:otogurashi/sharing/shared_folder_service.dart';
 
 void main() {
+  testWidgets(
+    'a cold-start invitation waits for onboarding and never auto joins',
+    (tester) async {
+      final setup = await tester.runAsync(() async {
+        final root = await Directory.systemTemp.createTemp(
+          'otogurashi-invite-',
+        );
+        final base = await _testDependencies(root);
+        final transport = _NoJoinTransport();
+        final sharing = SharedFolderService(
+          database: base.database,
+          assets: base.assets,
+          secureStore: _InvitationStore(),
+          client: transport,
+        );
+        return (
+          root,
+          AppDependencies(
+            database: base.database,
+            media: base.media,
+            presentation: base.presentation,
+            projects: base.projects,
+            assets: base.assets,
+            sharedFolders: sharing,
+          ),
+          transport,
+        );
+      });
+      final (root, dependencies, transport) = setup!;
+      final links = StreamController<Uri>.broadcast();
+      addTearDown(() async {
+        await links.close();
+        if (await root.exists()) await root.delete(recursive: true);
+      });
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        OtogurashiApp(
+          dependenciesLoader: () async => dependencies,
+          invitationLinks: links.stream,
+        ),
+      );
+      await tester.pumpAndSettle();
+      final invitation =
+          'https://share.example/invite/11111111-1111-4111-8111-111111111111#${'a' * 64}';
+      links.add(
+        Uri(
+          scheme: 'otograshi',
+          host: 'invite',
+          queryParameters: {'url': invitation},
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      await tester.ensureVisible(find.text('自分の音でつくる'));
+      await tester.tap(find.text('自分の音でつくる'));
+      await tester.pumpAndSettle();
+      expect(find.text('友だちのフォルダに参加'), findsOneWidget);
+      expect(find.text('接続先：https://share.example'), findsOneWidget);
+      expect(transport.requests, 0);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
   testWidgets('first launch starts with personal recording', (tester) async {
     final setup = await tester.runAsync(() async {
       final root = await Directory.systemTemp.createTemp('otogurashi-first-');
@@ -171,4 +238,37 @@ final class _FakeInspector implements AssetInspector {
     height: 1920,
     rotation: 0,
   );
+}
+
+final class _InvitationStore implements SharedSecureStore {
+  final _values = <String, String>{};
+  @override
+  Future<String?> read(String key) async => _values[key];
+  @override
+  Future<void> write(String key, String value) async {
+    _values[key] = value;
+  }
+
+  @override
+  Future<void> delete(String key) async {
+    _values.remove(key);
+  }
+}
+
+final class _NoJoinTransport implements SharedHttpTransport {
+  var requests = 0;
+  @override
+  Future<SharedHttpResponse> send(
+    String method,
+    Uri uri, {
+    Map<String, String> headers = const {},
+    Stream<List<int>>? body,
+    int? contentLength,
+  }) async {
+    requests++;
+    throw StateError('An invitation must wait for an explicit join action.');
+  }
+
+  @override
+  void close() {}
 }

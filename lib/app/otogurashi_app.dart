@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:app_links/app_links.dart';
 
 import 'package:otogurashi/design/tokens.dart';
 
@@ -11,14 +12,20 @@ import '../features/create/creation_flow.dart';
 import '../features/onboarding/onboarding_screen.dart';
 import '../storage/profile_store.dart';
 import '../storage/project_repository.dart';
+import '../sharing/shared_folder_service.dart';
 import 'app_dependencies.dart';
 
 typedef DependenciesLoader = Future<AppDependencies> Function();
 
 class OtogurashiApp extends StatelessWidget {
-  const OtogurashiApp({this.dependenciesLoader, super.key});
+  const OtogurashiApp({
+    this.dependenciesLoader,
+    this.invitationLinks,
+    super.key,
+  });
 
   final DependenciesLoader? dependenciesLoader;
+  final Stream<Uri>? invitationLinks;
 
   @override
   Widget build(BuildContext context) {
@@ -31,14 +38,22 @@ class OtogurashiApp extends StatelessWidget {
       theme: buildOtogurashiTheme(),
       home: _CreationHost(
         dependenciesLoader: dependenciesLoader ?? AppDependencies.bootstrap,
+        invitationLinks: invitationLinks,
+        enableAppLinks: dependenciesLoader == null,
       ),
     );
   }
 }
 
 class _CreationHost extends StatefulWidget {
-  const _CreationHost({required this.dependenciesLoader});
+  const _CreationHost({
+    required this.dependenciesLoader,
+    required this.enableAppLinks,
+    this.invitationLinks,
+  });
   final DependenciesLoader dependenciesLoader;
+  final bool enableAppLinks;
+  final Stream<Uri>? invitationLinks;
 
   @override
   State<_CreationHost> createState() => _CreationHostState();
@@ -53,10 +68,26 @@ class _CreationHostState extends State<_CreationHost> {
   bool _startInLibrary = false;
   String? _ownerName;
   Object? _error;
+  StreamSubscription<Uri>? _invitationSubscription;
+  String? _pendingInvitation;
 
   @override
   void initState() {
     super.initState();
+    final links =
+        widget.invitationLinks ??
+        (widget.enableAppLinks ? AppLinks().uriLinkStream : null);
+    _invitationSubscription = links?.listen((uri) {
+      if (uri.scheme != 'otograshi' || uri.host != 'invite') return;
+      final invitation = uri.queryParameters['url'];
+      if (invitation == null || !mounted) return;
+      try {
+        SharedInvitation.parse(invitation);
+        setState(() => _pendingInvitation = invitation);
+      } on FormatException {
+        // Ignore malformed links; valid invitations are presented, never auto-joined.
+      }
+    }, onError: (Object _) {});
     unawaited(_load(resume: true));
   }
 
@@ -154,6 +185,7 @@ class _CreationHostState extends State<_CreationHost> {
 
   @override
   void dispose() {
+    unawaited(_invitationSubscription?.cancel());
     _controller?.dispose();
     _dependencies?.close();
     super.dispose();
@@ -170,6 +202,13 @@ class _CreationHostState extends State<_CreationHost> {
         startWithCapture: _startWithCapture,
         startInLibrary: _startInLibrary,
         folders: dependencies.folders,
+        sharedFolders: dependencies.sharedFolders,
+        pendingInvitation: _pendingInvitation,
+        onInvitationOpened: (invitation) {
+          if (_pendingInvitation == invitation) {
+            setState(() => _pendingInvitation = null);
+          }
+        },
         startAtHome: true,
       );
     }

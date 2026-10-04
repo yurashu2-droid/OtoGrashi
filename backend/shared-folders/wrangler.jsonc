@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "otograshi-shared-folders",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-10-11",
+  "workers_dev": true,
+  "durable_objects": { "bindings": [{ "name": "FOLDERS", "class_name": "SharedFolder" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SharedFolder"] }],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "otograshi-shared-folders-private" }],
+  "ratelimits": [
+    { "name": "ENTRY_LIMIT", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+    { "name": "API_LIMIT", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } }
+  ],
+  "observability": { "enabled": false }
+}

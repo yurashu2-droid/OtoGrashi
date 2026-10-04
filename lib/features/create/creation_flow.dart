@@ -14,6 +14,8 @@ import '../../domain/video_recipe.dart';
 import '../arrange/adjustments_sheet.dart';
 import '../home/folder_screen.dart';
 import '../home/home_screen.dart';
+import '../sharing/shared_folders_screen.dart';
+import '../../sharing/shared_folder_service.dart';
 import '../library/library_screen.dart';
 import '../settings/settings_screen.dart';
 import '../songs/songs_screen.dart';
@@ -41,6 +43,9 @@ class CreationFlow extends StatefulWidget {
     this.startWithCapture = false,
     this.startInLibrary = false,
     this.folders,
+    this.sharedFolders,
+    this.pendingInvitation,
+    this.onInvitationOpened,
     this.startAtHome = false,
     super.key,
   });
@@ -51,6 +56,9 @@ class CreationFlow extends StatefulWidget {
   final bool startWithCapture;
   final bool startInLibrary;
   final FolderRepository? folders;
+  final SharedFolderService? sharedFolders;
+  final String? pendingInvitation;
+  final ValueChanged<String>? onInvitationOpened;
 
   /// Open on Home rather than inside the song in progress.
   final bool startAtHome;
@@ -134,11 +142,61 @@ class _CreationFlowState extends State<CreationFlow> {
   var _capturing = false;
   // the folder the last recording went into, offered first next time
   String? _destinationId;
+  var _sharingOpen = false;
+  String? _openedInvitation;
+
+  @override
+  void didUpdateWidget(CreationFlow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.pendingInvitation != widget.pendingInvitation) {
+      _openedInvitation = null;
+      _scheduleInvitation();
+    }
+  }
+
+  void _scheduleInvitation() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _sharingOpen) return;
+      final invitation = widget.pendingInvitation;
+      if (invitation == null || invitation == _openedInvitation ||
+          widget.sharedFolders == null) {
+        return;
+      }
+      _openedInvitation = invitation;
+      widget.onInvitationOpened?.call(invitation);
+      unawaited(_openSharedFolders(invitation: invitation));
+    });
+  }
+
+  Future<void> _openSharedFolders({String? invitation}) async {
+    final service = widget.sharedFolders;
+    if (service == null || _sharingOpen) return;
+    _sharingOpen = true;
+    try {
+      await Navigator.of(context).push<void>(MaterialPageRoute(
+        builder: (_) => SharedFoldersScreen(
+          service: service,
+          assets: widget.controller.assets,
+          presentation: widget.controller.presentation,
+          ownerName: widget.controller.ownerName,
+          initialInvitation: invitation,
+          onMakeSong: _makeSongFrom,
+        ),
+      ));
+    } finally {
+      _sharingOpen = false;
+      if (mounted) {
+        setState(() {});
+        _scheduleInvitation();
+      }
+    }
+  }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (widget.startWithCapture && !_captureOpened) {
+    _scheduleInvitation();
+    if (widget.startWithCapture && !_captureOpened && widget.pendingInvitation == null) {
       _captureOpened = true;
       WidgetsBinding.instance.addPostFrameCallback((_) => _openCapture());
     }
@@ -480,6 +538,8 @@ class _CreationFlowState extends State<CreationFlow> {
         onOpenCurrent: () => setState(() => _folderOpen = true),
         folders: widget.folders,
         onOpenFolder: _openFolder,
+        onOpenSharedFolders: widget.sharedFolders == null
+            ? null : () => unawaited(_openSharedFolders()),
         onAssetSelected: (asset) => unawaited(_reuseAsset(asset)),
         onSettings: _openSettings,
       );

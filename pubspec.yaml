@@ -28,11 +28,13 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+  app_links: 7.2.1
   crypto: 3.0.7
   flutter:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
+  flutter_secure_storage: 11.2.0
   path: 1.9.1
   sqlite3: 3.6.0
 

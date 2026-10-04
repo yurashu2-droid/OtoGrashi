@@ -55,6 +55,7 @@ jobs:
       # UIKit background leases and CPU export need Xcode; Dart checks run locally.
       OTO_BACKGROUND_RENDER: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[background-render]') && '1' || '0' }}
       OTO_PERFORMANCE_RENDER: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[performance-render]') && '1' || '0' }}
+      OTO_SHARED_FOLDERS: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[shared-folders]') && '1' || '0' }}
 
     steps:
       - name: Check out source
@@ -118,7 +119,13 @@ jobs:
           set -o pipefail
           # expanded, not the GitHub reporter: its [E] lines feed the public
           # annotations below, so failures are readable without signing in
-          if [[ "$OTO_PERFORMANCE_RENDER" == 1 ]]; then
+          if [[ "$OTO_SHARED_FOLDERS" == 1 ]]; then
+            SHARING_TESTS=(test/sharing test/app_smoke_test.dart test/features/creation_flow_test.dart test/features/library_test.dart test/storage/folder_repository_test.dart)
+            if [[ -f test/features/shared_folders_screen_test.dart ]]; then
+              SHARING_TESTS+=(test/features/shared_folders_screen_test.dart)
+            fi
+            flutter test "${SHARING_TESTS[@]}" --reporter expanded 2>&1 | tee ci-logs/test.txt
+          elif [[ "$OTO_PERFORMANCE_RENDER" == 1 ]]; then
             flutter test test/domain/performance_modes_test.dart --reporter expanded 2>&1 | tee ci-logs/test.txt
           else
             flutter test --reporter expanded 2>&1 | tee ci-logs/test.txt
@@ -131,6 +138,7 @@ jobs:
           flutter build ios --simulator --debug 2>&1 | tee ci-logs/ios-simulator-build.txt
 
       - name: Run native tests on an installed iPhone simulator
+        if: env.OTO_SHARED_FOLDERS != '1'
         shell: bash
         run: |
           set -o pipefail
@@ -196,7 +204,7 @@ jobs:
             2>&1 | tee ci-logs/xctest.txt
 
       - name: Summarize native test result bundle
-        if: always()
+        if: always() && env.OTO_SHARED_FOLDERS != '1'
         shell: bash
         run: |
           if [[ -d ci-artifacts/RunnerTests.xcresult ]]; then
@@ -211,14 +219,14 @@ jobs:
           fi
 
       - name: Verify rendered audio evidence
-        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1' && env.OTO_PERFORMANCE_RENDER != '1'
+        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1' && env.OTO_PERFORMANCE_RENDER != '1' && env.OTO_SHARED_FOLDERS != '1'
         shell: bash
         run: |
           test -f ci-artifacts/audio-render-fixture.wav
           test -f ci-artifacts/audio-render-report.json
 
       - name: Verify rendered video evidence
-        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1' && env.OTO_PERFORMANCE_RENDER != '1'
+        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1' && env.OTO_PERFORMANCE_RENDER != '1' && env.OTO_SHARED_FOLDERS != '1'
         shell: bash
         run: |
           test -f ci-artifacts/video-render-preview.mp4

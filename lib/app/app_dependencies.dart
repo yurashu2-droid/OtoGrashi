@@ -7,6 +7,7 @@ import '../storage/folder_repository.dart';
 import '../storage/profile_store.dart';
 import '../storage/project_database.dart';
 import '../storage/project_repository.dart';
+import '../sharing/shared_folder_service.dart';
 
 final class AppDependencies {
   AppDependencies({
@@ -17,6 +18,7 @@ final class AppDependencies {
     required this.assets,
     this.profile,
     this.folders,
+    this.sharedFolders,
   });
 
   final ProjectDatabase database;
@@ -26,24 +28,30 @@ final class AppDependencies {
   final AssetRepository assets;
   final ProfileStore? profile;
   final FolderRepository? folders;
+  final SharedFolderService? sharedFolders;
 
   static Future<AppDependencies> bootstrap() async {
     final media = PlatformMediaGateway();
     final root = await media.managedRoot();
     final database = await ProjectDatabase.open(Directory(root));
+    final assets = SqliteAssetRepository(
+      database,
+      inspector: NativeAssetInspector(media),
+    );
     return AppDependencies(
       database: database,
       media: media,
       presentation: PlatformMediaPresentationGateway(),
       projects: SqliteProjectRepository(database),
-      assets: SqliteAssetRepository(
-        database,
-        inspector: NativeAssetInspector(media),
-      ),
+      assets: assets,
       profile: ProfileStore(File('$root/owner_name.txt')),
       folders: SqliteFolderRepository(database),
+      sharedFolders: SharedFolderService(database: database, assets: assets),
     );
   }
 
-  void close() => database.close();
+  void close() {
+    sharedFolders?.close();
+    database.close();
+  }
 }

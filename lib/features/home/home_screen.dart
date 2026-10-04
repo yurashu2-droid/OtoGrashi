@@ -21,6 +21,7 @@ final class HomeScreen extends StatefulWidget {
     required this.onOpenCurrent,
     this.folders,
     this.onOpenFolder,
+    this.onOpenSharedFolders,
     this.ownerName,
     this.presentation,
     this.onAssetSelected,
@@ -36,6 +37,7 @@ final class HomeScreen extends StatefulWidget {
 
   /// Opens a folder; completes when the person comes back to Home.
   final Future<void> Function(SoundFolder folder)? onOpenFolder;
+  final VoidCallback? onOpenSharedFolders;
   final String? ownerName;
   final MediaPresentationGateway? presentation;
   final ValueChanged<ClipAsset>? onAssetSelected;
@@ -203,6 +205,30 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                 ),
+                if (widget.onOpenSharedFolders != null) ...[
+                  const SizedBox(height: 20),
+                  Card(
+                    color: AppTokens.blushSoft,
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 10,
+                      ),
+                      leading: const Icon(
+                        Icons.people_alt_outlined,
+                        color: AppTokens.ink,
+                        size: 30,
+                      ),
+                      title: const Text(
+                        'みんなの音',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: const Text('友だちとひとつのフォルダに集めよう'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: widget.onOpenSharedFolders,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 28),
                 const _SectionLabel('さいきんの音'),
                 const SizedBox(height: 10),
@@ -245,9 +271,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ? null
                                 : IconButton(
                                     tooltip: 'つくりかけの曲に入れる',
-                                    onPressed: () => widget.onAssetSelected!(
-                                      data.recent[i],
-                                    ),
+                                    onPressed: () =>
+                                        widget.onAssetSelected!(data.recent[i]),
                                     icon: const Icon(Icons.add_rounded),
                                   ),
                           ),

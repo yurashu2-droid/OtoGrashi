@@ -87,7 +87,7 @@ final class _SettingsScreenState extends State<SettingsScreen> {
         const ListTile(
           contentPadding: EdgeInsets.zero,
           title: Text('オトグラシについて'),
-          subtitle: Text('撮った音と動画はこの端末の中で編集します。'),
+          subtitle: Text('曲づくりと編集は端末の中で行います。共有フォルダに追加した素材は、参加した友だちと共有されます。'),
         ),
       ],
     ),
@@ -115,14 +115,17 @@ final class _SettingsScreenState extends State<SettingsScreen> {
     await widget.clearCache();
     if (!mounted) return;
     setState(() => _usage = widget.usageLoader());
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('キャッシュを整理しました')),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('キャッシュを整理しました')));
   }
 }
 
 final class _UsageRow extends StatelessWidget {
-  const _UsageRow({required this.label, required this.value, required this.icon});
+  const _UsageRow({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
 
   final String label;
   final int value;

@@ -1,0 +1,34 @@
+name: Shared folders backend
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ['backend/shared-folders/**', '.github/workflows/shared-folders-check.yml']
+  pull_request:
+    paths: ['backend/shared-folders/**', '.github/workflows/shared-folders-check.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-folders-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend/shared-folders
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/shared-folders/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
