@@ -1093,6 +1093,26 @@ final class VideoRendererTests: XCTestCase {
     XCTAssertLessThan(grid[2 * columns + 2], 0.02)
   }
 
+  func testWindowHeightMapsRaiseEverySubjectNotOnlyTheNearest() {
+    // two subjects side by side; the right one is further away
+    let width = 160, height = 160
+    var values = [Float](repeating: 0.1, count: width * height)
+    for y in 0..<height {
+      for x in 0..<width {
+        for (cx, peak) in [(40, Float(1.0)), (120, Float(0.6))] {
+          let dx = Float(x - cx) / 26, dy = Float(y - height / 2) / 40
+          values[y * width + x] += max(0, 1 - dx * dx - dy * dy) * peak
+        }
+      }
+    }
+    let grid = WindowHeightMaps.shape(values, width: width, height: height)
+    let columns = WindowHeightMaps.columns, rows = WindowHeightMaps.rows
+    let left = grid[rows / 2 * columns + columns / 4]
+    let right = grid[rows / 2 * columns + columns * 3 / 4]
+    XCTAssertGreaterThan(left, 0.3)
+    XCTAssertGreaterThan(right, 0.3, "the further subject stands out too")
+  }
+
   func testWindowCardsRenderIntoTheFrame() throws {
     guard let renderer = WindowFrameRenderer(width: 360, height: 640, ground: CGColor(gray: 0.95, alpha: 1)) else {
       throw XCTSkip("Metal is not available")

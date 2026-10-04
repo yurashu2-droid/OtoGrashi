@@ -227,11 +227,32 @@ final class WindowHeightMaps {
     }
     let cut = Float(best)
     func ramp(_ v: Float) -> Float { let c = min(1, max(0, v)); return c * c * (3 - 2 * c) }
+    // Each subject is measured against its own nearest point (the highest depth within
+    // about a third of the frame), so two people, or a cup and a hand, both stand out
+    // instead of only the closest one.
+    let reach = gw / 3
+    var nearest = grid
+    for j in 0..<gh {   // separable max filter: rows, then columns
+      for i in 0..<gw {
+        var m: Float = 0
+        for k in max(0, i - reach)...min(gw - 1, i + reach) { m = max(m, grid[j * gw + k]) }
+        nearest[j * gw + i] = m
+      }
+    }
+    var local = nearest
+    for j in 0..<gh {
+      for i in 0..<gw {
+        var m: Float = 0
+        for k in max(0, j - reach)...min(gh - 1, j + reach) { m = max(m, nearest[k * gw + i]) }
+        local[j * gw + i] = m
+      }
+    }
     for j in 0..<gh {
       for i in 0..<gw {
         let u = Float(i) / Float(gw - 1), v = Float(j) / Float(gh - 1)
         let border = ramp(u / 0.2) * ramp((1 - u) / 0.2) * ramp(v / 0.16) * ramp((1 - v) / 0.2)
-        let rise = min(1, max(0, (grid[j * gw + i] - cut) / max(1e-3, 1 - cut)))
+        let top = max(cut + 0.08, local[j * gw + i])
+        let rise = min(1, max(0, (grid[j * gw + i] - cut) / max(1e-3, top - cut)))
         let face = min(1, max(0, (rise - 0.3) / 0.7))
         grid[j * gw + i] = face * border
       }
