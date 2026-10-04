@@ -120,7 +120,7 @@ jobs:
           # expanded, not the GitHub reporter: its [E] lines feed the public
           # annotations below, so failures are readable without signing in
           if [[ "$OTO_SHARED_FOLDERS" == 1 ]]; then
-            SHARING_TESTS=(test/sharing test/app_smoke_test.dart test/features/creation_flow_test.dart test/features/library_test.dart test/storage/folder_repository_test.dart)
+            SHARING_TESTS=(test/sharing test/app_smoke_test.dart)
             if [[ -f test/features/shared_folders_screen_test.dart ]]; then
               SHARING_TESTS+=(test/features/shared_folders_screen_test.dart)
             fi

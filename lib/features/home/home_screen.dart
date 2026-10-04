@@ -148,7 +148,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const OtoWordmark(),
+                          const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: OtoWordmark(),
+                          ),
                           const SizedBox(height: 4),
                           Text(
                             owner == null || owner.isEmpty

@@ -440,11 +440,11 @@ final class SharedFolderService {
     final key = '$folderId/${clip.sha256}';
     return _downloads.putIfAbsent(
       key,
-      () => _download(
-        folderId,
-        clip,
-        onProgress,
-      ).whenComplete(() => _downloads.remove(key)),
+      () => _download(folderId, clip, onProgress).whenComplete(() {
+        // Returning remove(key) returns this pending Future itself. Cleanup must
+        // complete synchronously, otherwise success and failure both self-await.
+        _downloads.remove(key);
+      }),
     );
   }
 
