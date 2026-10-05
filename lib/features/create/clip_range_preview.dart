@@ -89,7 +89,11 @@ class _ClipRangePreviewState extends State<ClipRangePreview> {
       _initialized = true;
       unawaited(_scrub(_shownUs));
     }
-    if (!_scrubbing) _shownUs = _playback.position.inMicroseconds;
+    // Attaching a view reports position zero before it is ready. Preserve the
+    // chosen beginning until the initial seek has actually been issued.
+    if (_initialized && !_scrubbing) {
+      _shownUs = _playback.position.inMicroseconds;
+    }
     _publishPosition();
     if (_rangePlaying &&
         !_stopping &&
@@ -226,8 +230,7 @@ class _ClipRangePreviewState extends State<ClipRangePreview> {
         const SizedBox(height: 6),
         LinearProgressIndicator(
           value: (_shownUs / widget.clip.durationUs).clamp(0.0, 1.0),
-          semanticsLabel: '元の動画の再生位置',
-          semanticsValue: '${(_shownUs / 1e6).toStringAsFixed(1)}秒',
+          semanticsLabel: '元の動画の再生位置 ${(_shownUs / 1e6).toStringAsFixed(1)}秒',
         ),
         Row(
           children: [

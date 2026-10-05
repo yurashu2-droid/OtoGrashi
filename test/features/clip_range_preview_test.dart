@@ -39,6 +39,7 @@ void main() {
       final gateway = _RangePlayer();
       var saves = 0;
       await _openTrim(tester, gateway, onSave: (_, _) async => saves++);
+      expect(gateway.currentUs, 500000);
       gateway.seeks.clear();
       final delayedSeek = Completer<void>();
       gateway.nextSeek = delayedSeek;
