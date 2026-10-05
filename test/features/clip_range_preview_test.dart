@@ -15,7 +15,6 @@ void main() {
 
   setUp(() {
     createdViews = 0;
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     binding.defaultBinaryMessenger.setMockMethodCallHandler(
       SystemChannels.platform_views,
       (call) async {
@@ -26,7 +25,6 @@ void main() {
   });
 
   tearDown(() {
-    debugDefaultTargetPlatformOverride = null;
     binding.defaultBinaryMessenger.setMockMethodCallHandler(
       SystemChannels.platform_views,
       null,
@@ -68,6 +66,7 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },
+    variant: const TargetPlatformVariant(<TargetPlatform>{TargetPlatform.iOS}),
   );
 
   testWidgets(
@@ -94,27 +93,30 @@ void main() {
       expect(createdViews, 1);
       await tester.pumpWidget(const SizedBox.shrink());
     },
+    variant: const TargetPlatformVariant(<TargetPlatform>{TargetPlatform.iOS}),
   );
 
-  testWidgets('closing during a pending play silences late native completion', (
-    tester,
-  ) async {
-    final gateway = _RangePlayer();
-    await _openTrim(tester, gateway);
-    final delayedPlay = Completer<void>();
-    gateway.nextPlay = delayedPlay;
-    await tester.tap(find.text('選んだ範囲を再生'));
-    await tester.pump();
-    expect(gateway.commands.last, 'play');
+  testWidgets(
+    'closing during a pending play silences late native completion',
+    (tester) async {
+      final gateway = _RangePlayer();
+      await _openTrim(tester, gateway);
+      final delayedPlay = Completer<void>();
+      gateway.nextPlay = delayedPlay;
+      await tester.tap(find.text('選んだ範囲を再生'));
+      await tester.pump();
+      expect(gateway.commands.last, 'play');
 
-    await tester.pumpWidget(const SizedBox.shrink());
-    expect(gateway.commands.last, 'pause');
-    delayedPlay.complete();
-    await tester.pump();
-    expect(gateway.playing, isFalse);
-    expect(gateway.commands.last, 'pause');
-    expect(tester.takeException(), isNull);
-  });
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(gateway.commands.last, 'pause');
+      delayedPlay.complete();
+      await tester.pump();
+      expect(gateway.playing, isFalse);
+      expect(gateway.commands.last, 'pause');
+      expect(tester.takeException(), isNull);
+    },
+    variant: const TargetPlatformVariant(<TargetPlatform>{TargetPlatform.iOS}),
+  );
 }
 
 Future<void> _openTrim(

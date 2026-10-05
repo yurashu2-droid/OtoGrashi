@@ -57,6 +57,7 @@ jobs:
       OTO_PERFORMANCE_RENDER: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[performance-render]') && '1' || '0' }}
       OTO_SHARED_FOLDERS: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[shared-folders]') && '1' || '0' }}
       OTO_TRIM_PREVIEW: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[trim-preview]') && '1' || '0' }}
+      OTO_TRIM_REGRESSION: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[trim-regression]') && '1' || '0' }}
       # Test-only follow-ups reuse the already archived native code without rebuilding it.
       OTO_TESTS_ONLY: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[tests-only]') && '1' || '0' }}
 
@@ -122,7 +123,9 @@ jobs:
           set -o pipefail
           # expanded, not the GitHub reporter: its [E] lines feed the public
           # annotations below, so failures are readable without signing in
-          if [[ "$OTO_TRIM_PREVIEW" == 1 ]]; then
+          if [[ "$OTO_TRIM_REGRESSION" == 1 ]]; then
+            flutter test test/features/clip_range_preview_test.dart --reporter expanded 2>&1 | tee ci-logs/test.txt
+          elif [[ "$OTO_TRIM_PREVIEW" == 1 ]]; then
             TRIM_TESTS=(test/media/playback_race_test.dart test/features/creation_flow_test.dart test/features/library_test.dart test/app_smoke_test.dart)
             if [[ -f test/features/clip_range_preview_test.dart ]]; then
               TRIM_TESTS+=(test/features/clip_range_preview_test.dart)
