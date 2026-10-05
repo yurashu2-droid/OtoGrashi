@@ -8,7 +8,7 @@ Cloudflare の管理 API トークンを GitHub の Repository secret に登録�
 2. 対象アカウントだけに範囲を絞った **API Token** を作ります。権限は Account → **Account Settings: Read**、**Workers Scripts: Edit**、**Workers R2 Storage: Edit**。Account Settings Read はアカウントの検出・確認に使用します。ゾーン権限は現在の `workers.dev` 公開では不要です。
 3. GitHub リポジトリの Settings → Secrets and variables → Actions に `CLOUDFLARE_API_TOKEN` を Repository secret として登録します。R2 の S3 access key / secret や Global API Key とは別の資格情報です。アプリやソースコードには保存しません。
 4. トークンから見えるアカウントが 1 つなら自動選択します。複数ある場合は同じ画面の Repository variable（または secret）`CLOUDFLARE_ACCOUNT_ID` に対象アカウントの 32 桁 ID を設定してください。複数候補から勝手に選択しません。
-5. Actions → **Deploy shared folders** → **Run workflow** で公開するブランチを選び、実行します。push / pull request からは公開されません。workflow ファイルは GitHub のデフォルトブランチに存在する必要があります。
+5. Actions → **Deploy shared folders** → **Run workflow** を開き、**source_ref** に公開するコードのブランチまたはコミットを指定します。現在の開発ブランチは `claude/video-styles` です。実行入口の workflow はデフォルトブランチの `main` にも置き、バックエンドのコードは source_ref から取得します。push / pull request からは公開されません。Summary に実際に取得したコミットが残ります。
 
 成功すると Actions の Summary と `shared-folders-deployment-info` artifact 内の `deployment-info.json` に HTTPS URL が出ます。アプリの「みんなの音」から、この URL をサービスのアドレスに設定してください。ビルド時に固定する場合の変数名は `OTO_SHARED_API_URL` です。artifact にトークンは含まれません。
 

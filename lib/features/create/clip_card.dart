@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../design/tokens.dart';
 import '../../domain/clip_asset.dart';
 import '../../media/media_presentation_gateway.dart';
+import 'clip_range_preview.dart';
 
 enum _ClipAction { moveUp, moveDown }
 
@@ -442,12 +443,14 @@ class _ClipWaveformPainter extends CustomPainter {
     required this.selectionStartUs,
     required this.selectionDurationUs,
     required this.accent,
+    this.playheadUs,
   });
 
   final AudioWaveform waveform;
   final int selectionStartUs;
   final int selectionDurationUs;
   final Color accent;
+  final int? playheadUs;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -495,6 +498,14 @@ class _ClipWaveformPainter extends CustomPainter {
     for (final x in [rangeStart, rangeEnd]) {
       canvas.drawLine(Offset(x, 4), Offset(x, size.height - 4), handlePaint);
     }
+    if (playheadUs case final position?) {
+      final x = (position / waveform.durationUs).clamp(0.0, 1.0) * size.width;
+      final playheadPaint = Paint()
+        ..color = AppTokens.ink
+        ..strokeWidth = 2;
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), playheadPaint);
+      canvas.drawCircle(Offset(x, 3), 3, playheadPaint);
+    }
   }
 
   @override
@@ -502,6 +513,7 @@ class _ClipWaveformPainter extends CustomPainter {
       oldDelegate.waveform != waveform ||
       oldDelegate.selectionStartUs != selectionStartUs ||
       oldDelegate.selectionDurationUs != selectionDurationUs ||
+      oldDelegate.playheadUs != playheadUs ||
       oldDelegate.accent != accent;
 }
 
@@ -509,10 +521,11 @@ Future<void> showClipTrimSheet(
   BuildContext context, {
   required ClipAsset clip,
   required Future<AudioWaveform> waveform,
+  required MediaPresentationGateway presentation,
   required int selectionStartUs,
   required int selectionDurationUs,
   required Future<void> Function(int startUs, int durationUs) onSave,
-  required Future<void> Function(int startUs, int durationUs) onAudition,
+  Future<void> Function(int startUs, int durationUs)? onAudition,
 }) => showModalBottomSheet<void>(
   context: context,
   isScrollControlled: true,
@@ -520,6 +533,7 @@ Future<void> showClipTrimSheet(
   builder: (_) => _ClipTrimSheet(
     clip: clip,
     waveform: waveform,
+    presentation: presentation,
     selectionStartUs: selectionStartUs,
     selectionDurationUs: selectionDurationUs,
     onSave: onSave,
@@ -531,10 +545,11 @@ class _ClipTrimSheet extends StatefulWidget {
   const _ClipTrimSheet({
     required this.clip,
     required this.waveform,
+    required this.presentation,
     required this.selectionStartUs,
     required this.selectionDurationUs,
     required this.onSave,
-    required this.onAudition,
+    this.onAudition,
   });
 
   final ClipAsset clip;
@@ -542,7 +557,8 @@ class _ClipTrimSheet extends StatefulWidget {
   final int selectionStartUs;
   final int selectionDurationUs;
   final Future<void> Function(int startUs, int durationUs) onSave;
-  final Future<void> Function(int startUs, int durationUs) onAudition;
+  final Future<void> Function(int startUs, int durationUs)? onAudition;
+  final MediaPresentationGateway presentation;
 
   @override
   State<_ClipTrimSheet> createState() => _ClipTrimSheetState();
@@ -552,6 +568,13 @@ class _ClipTrimSheetState extends State<_ClipTrimSheet> {
   late int _startUs = widget.selectionStartUs;
   late int _endUs = widget.selectionStartUs + widget.selectionDurationUs;
   bool _saving = false;
+  late final _playhead = ValueNotifier<int>(_startUs);
+
+  @override
+  void dispose() {
+    _playhead.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -572,10 +595,19 @@ class _ClipTrimSheetState extends State<_ClipTrimSheet> {
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 12),
-            const Text('左右のつまみで、曲に使う音の始まりと終わりを決めます。'),
-            const SizedBox(height: 16),
+            ClipRangePreview(
+              clip: widget.clip,
+              presentation: widget.presentation,
+              startUs: _startUs,
+              endUs: _endUs,
+              enabled: !_saving,
+              onAudition: widget.onAudition,
+              positionNotifier: _playhead,
+            ),
+            const Text('左右のつまみを動かすと、その位置の動画が見られます。'),
+            const SizedBox(height: 8),
             SizedBox(
-              height: 88,
+              height: 56,
               child: FutureBuilder<AudioWaveform>(
                 future: widget.waveform,
                 builder: (context, snapshot) {
@@ -592,14 +624,23 @@ class _ClipTrimSheetState extends State<_ClipTrimSheet> {
                       color: const Color(0xFFFFFFFF),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: CustomPaint(
-                      painter: _ClipWaveformPainter(
-                        waveform: waveform,
-                        selectionStartUs: _startUs,
-                        selectionDurationUs: _endUs - _startUs,
-                        accent: AppTokens.coral,
+                    child: ValueListenableBuilder<int>(
+                      valueListenable: _playhead,
+                      builder: (context, positionUs, _) => Semantics(
+                        label:
+                            '波形上の動画位置 ${(positionUs / 1e6).toStringAsFixed(1)}秒',
+                        child: CustomPaint(
+                          key: const ValueKey('trim-waveform-playhead'),
+                          painter: _ClipWaveformPainter(
+                            waveform: waveform,
+                            selectionStartUs: _startUs,
+                            selectionDurationUs: _endUs - _startUs,
+                            accent: AppTokens.coral,
+                            playheadUs: positionUs,
+                          ),
+                          child: const SizedBox.expand(),
+                        ),
                       ),
-                      child: const SizedBox.expand(),
                     ),
                   );
                 },
@@ -613,33 +654,65 @@ class _ClipTrimSheetState extends State<_ClipTrimSheet> {
                 '${(_startUs / 1e6).toStringAsFixed(1)}秒',
                 '${(_endUs / 1e6).toStringAsFixed(1)}秒',
               ),
-              onChanged: (values) => setState(() {
-                final start = values.start.round().clamp(0, maxUs - 1);
-                final end = values.end.round().clamp(start + 1, maxUs);
-                _startUs = start;
-                _endUs = end - start > 6000000 ? start + 6000000 : end;
-              }),
+              onChanged: _saving
+                  ? null
+                  : (values) => setState(() {
+                      final start = values.start.round().clamp(0, maxUs - 1);
+                      final end = values.end.round().clamp(start + 1, maxUs);
+                      _startUs = start;
+                      _endUs = end - start > 6000000 ? start + 6000000 : end;
+                    }),
+            ),
+            FutureBuilder<AudioWaveform>(
+              future: widget.waveform,
+              builder: (context, snapshot) {
+                final suggestedStart = snapshot.data?.strongestWindowStart(
+                  _endUs - _startUs,
+                );
+                if (suggestedStart == null || suggestedStart == _startUs) {
+                  return const SizedBox.shrink();
+                }
+                return Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: _saving
+                        ? null
+                        : () => setState(() {
+                            final durationUs = _endUs - _startUs;
+                            _startUs = suggestedStart.clamp(
+                              0,
+                              maxUs - durationUs,
+                            );
+                            _endUs = _startUs + durationUs;
+                          }),
+                    icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+                    label: const Text('大きい音へ移動'),
+                  ),
+                );
+              },
             ),
             Text(
-              '${(_startUs / 1e6).toStringAsFixed(1)}秒 〜 ${(_endUs / 1e6).toStringAsFixed(1)}秒 ・ ${((_endUs - _startUs) / 1e6).toStringAsFixed(1)}秒を使う',
+              '開始 ${(_startUs / 1e6).toStringAsFixed(1)}秒 ・ 終了 ${(_endUs / 1e6).toStringAsFixed(1)}秒\n${((_endUs - _startUs) / 1e6).toStringAsFixed(1)}秒を使う',
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 20),
-            OutlinedButton.icon(
-              onPressed: _saving
-                  ? null
-                  : () async => widget.onAudition(_startUs, _endUs - _startUs),
-              icon: const Icon(Icons.play_arrow_rounded),
-              label: const Text('この範囲を聴く'),
-            ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             FilledButton(
               onPressed: _saving
                   ? null
                   : () async {
                       setState(() => _saving = true);
-                      await widget.onSave(_startUs, _endUs - _startUs);
-                      if (context.mounted) Navigator.pop(context);
+                      try {
+                        await widget.onSave(_startUs, _endUs - _startUs);
+                        if (context.mounted) Navigator.pop(context);
+                      } catch (_) {
+                        if (!context.mounted) return;
+                        setState(() => _saving = false);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('範囲を保存できませんでした。もう一度お試しください。'),
+                          ),
+                        );
+                      }
                     },
               child: const Text('この範囲を使う'),
             ),

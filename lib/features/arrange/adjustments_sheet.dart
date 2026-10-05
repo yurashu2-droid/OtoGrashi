@@ -7,6 +7,7 @@ import '../../domain/clip_asset.dart';
 import '../../domain/video_recipe.dart';
 import '../../media/media_presentation_gateway.dart';
 import '../create/creation_controller.dart';
+import '../create/clip_card.dart' show showClipTrimSheet;
 import '../export/media_playback.dart';
 
 Future<void> showAdjustmentsSheet(
@@ -181,153 +182,38 @@ final class _AdjustmentsSheetState extends State<AdjustmentsSheet> {
   Widget _trimControls() {
     final clip = _selectedClip;
     if (clip == null) return const Text('素材を選んでください');
-    final maxUs = clip.durationUs;
-    final endUs = (_trimStartUs + _trimDurationUs).clamp(1, maxUs);
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        FutureBuilder<AudioWaveform>(
-          future: _waveforms.putIfAbsent(
-            clip.id,
-            () => widget.controller.presentation.waveform(clip.relativePath),
-          ),
-          builder: (context, snapshot) {
-            final waveform = snapshot.data;
-            if (waveform == null) {
-              return SizedBox(
-                height: 84,
-                child: Center(
-                  child: Text(
-                    snapshot.hasError ? '波形を表示できません' : '波形を読み込んでいます…',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-              );
-            }
-            final suggestedStart = waveform.strongestWindowStart(
-              _trimDurationUs,
-            );
-            return Column(
-              children: [
-                Container(
-                  height: 72,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF4EEF9),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: CustomPaint(
-                    painter: _WaveformPainter(
-                      waveform: waveform,
-                      selectionStartUs: _trimStartUs,
-                      selectionEndUs: endUs,
-                    ),
-                    child: const SizedBox.expand(),
-                  ),
-                ),
-                if (suggestedStart != null && suggestedStart != _trimStartUs)
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton.icon(
-                      onPressed: () {
-                        final start = suggestedStart.clamp(
-                          0,
-                          (maxUs - _trimDurationUs).clamp(0, maxUs),
-                        );
-                        setState(() => _trimStartUs = start);
-                        unawaited(
-                          widget.controller.setTrim(
-                            clip.id,
-                            start,
-                            _trimDurationUs,
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.auto_awesome_rounded, size: 18),
-                      label: const Text('大きい音へ移動'),
-                    ),
-                  ),
-              ],
-            );
-          },
-        ),
-        RangeSlider(
-          values: RangeValues(
-            _trimStartUs.toDouble().clamp(0, maxUs.toDouble()),
-            endUs.toDouble().clamp(1, maxUs.toDouble()),
-          ),
-          min: 0,
-          max: maxUs.toDouble(),
-          labels: RangeLabels(
-            '${(_trimStartUs / 1e6).toStringAsFixed(1)}秒',
-            '${(endUs / 1e6).toStringAsFixed(1)}秒',
-          ),
-          onChanged: (value) => setState(() {
-            _trimStartUs = value.start.round();
-            _trimStartUs = _trimStartUs.clamp(0, maxUs - 1);
-            _trimDurationUs = (value.end - value.start).round().clamp(
-              1,
-              (maxUs - _trimStartUs).clamp(1, 6000000),
-            );
-          }),
-          onChangeEnd: (_) {
-            final id = _assetId;
-            if (id != null) {
-              unawaited(
-                widget.controller.setTrim(id, _trimStartUs, _trimDurationUs),
-              );
-            }
-          },
-        ),
         Text(
-          '${(_trimDurationUs / 1e6).toStringAsFixed(1)}秒を使用',
-          textAlign: TextAlign.center,
+          '開始 ${(_trimStartUs / 1e6).toStringAsFixed(1)}秒 ・ '
+          '終了 ${((_trimStartUs + _trimDurationUs) / 1e6).toStringAsFixed(1)}秒',
+        ),
+        OutlinedButton.icon(
+          onPressed: () => showClipTrimSheet(
+            context,
+            clip: clip,
+            presentation: widget.controller.presentation,
+            waveform: _waveforms.putIfAbsent(
+              clip.id,
+              () => widget.controller.presentation.waveform(clip.relativePath),
+            ),
+            selectionStartUs: _trimStartUs,
+            selectionDurationUs: _trimDurationUs,
+            onSave: (startUs, durationUs) async {
+              await widget.controller.setTrim(clip.id, startUs, durationUs);
+              if (mounted) {
+                setState(() {
+                  _trimStartUs = startUs;
+                  _trimDurationUs = durationUs;
+                });
+              }
+            },
+          ),
+          icon: const Icon(Icons.movie_outlined),
+          label: const Text('動画を見ながら範囲を選ぶ'),
         ),
       ],
     );
   }
-}
-
-final class _WaveformPainter extends CustomPainter {
-  const _WaveformPainter({
-    required this.waveform,
-    required this.selectionStartUs,
-    required this.selectionEndUs,
-  });
-
-  final AudioWaveform waveform;
-  final int selectionStartUs;
-  final int selectionEndUs;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final width = size.width / waveform.levels.length;
-    for (var index = 0; index < waveform.levels.length; index++) {
-      final centerUs =
-          ((index + 0.5) * waveform.durationUs / waveform.levels.length);
-      final selected =
-          centerUs >= selectionStartUs && centerUs <= selectionEndUs;
-      final height = (waveform.levels[index] * (size.height - 12)).clamp(
-        3.0,
-        size.height - 8,
-      );
-      final rect = Rect.fromCenter(
-        center: Offset((index + 0.5) * width, size.height / 2),
-        width: (width * 0.7).clamp(1.0, 4.0),
-        height: height,
-      );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(rect, const Radius.circular(3)),
-        Paint()
-          ..color = selected
-              ? const Color(0xFFEA696B)
-              : const Color(0xFF9B82BC),
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _WaveformPainter oldDelegate) =>
-      oldDelegate.waveform != waveform ||
-      oldDelegate.selectionStartUs != selectionStartUs ||
-      oldDelegate.selectionEndUs != selectionEndUs;
 }

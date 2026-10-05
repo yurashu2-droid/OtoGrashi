@@ -215,12 +215,14 @@ class _FolderScreenState extends State<FolderScreen> {
       },
       onTrim: () {
         final waveform = _waveform(asset);
-        if (waveform == null) return;
+        if (waveform == null || presentation == null) return;
+        setState(_stop);
         unawaited(
           showClipTrimSheet(
             context,
             clip: asset,
             waveform: waveform,
+            presentation: presentation,
             selectionStartUs: asset.selectionStartUs,
             selectionDurationUs: asset.selectionDurationUs,
             onSave: (startUs, durationUs) async {
