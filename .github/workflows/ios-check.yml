@@ -217,7 +217,7 @@ jobs:
             2>&1 | tee ci-logs/xctest.txt
 
       - name: Summarize native test result bundle
-        if: always() && env.OTO_SHARED_FOLDERS != '1'
+        if: always() && env.OTO_SHARED_FOLDERS != '1' && env.OTO_TESTS_ONLY != '1'
         shell: bash
         run: |
           if [[ -d ci-artifacts/RunnerTests.xcresult ]]; then
@@ -232,14 +232,14 @@ jobs:
           fi
 
       - name: Verify rendered audio evidence
-        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1' && env.OTO_PERFORMANCE_RENDER != '1' && env.OTO_SHARED_FOLDERS != '1'
+        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1' && env.OTO_PERFORMANCE_RENDER != '1' && env.OTO_SHARED_FOLDERS != '1' && env.OTO_TESTS_ONLY != '1'
         shell: bash
         run: |
           test -f ci-artifacts/audio-render-fixture.wav
           test -f ci-artifacts/audio-render-report.json
 
       - name: Verify rendered video evidence
-        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1' && env.OTO_PERFORMANCE_RENDER != '1' && env.OTO_SHARED_FOLDERS != '1'
+        if: always() && env.OTO_MEDIA_PARITY != '1' && env.OTO_BACKGROUND_RENDER != '1' && env.OTO_PERFORMANCE_RENDER != '1' && env.OTO_SHARED_FOLDERS != '1' && env.OTO_TESTS_ONLY != '1'
         shell: bash
         run: |
           test -f ci-artifacts/video-render-preview.mp4
