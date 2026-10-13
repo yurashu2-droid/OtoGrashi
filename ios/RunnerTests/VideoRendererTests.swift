@@ -1203,4 +1203,11 @@ final class VideoRendererTests: XCTestCase {
     XCTAssertGreaterThan(red, 200, "\(note) (pictures)")
     XCTAssertGreaterThan(white, 20, "\(note) (frames)")
   }
+
+  func testDepthModelStoreRemoveLeavesItAbsent() {
+    // nothing is downloaded here, so there is no model to lose
+    let status = DepthModelStore.shared.remove()
+    XCTAssertEqual(status["state"] as? String, "absent")
+    XCTAssertFalse(DepthModelStore.shared.isReady)
+  }
 }

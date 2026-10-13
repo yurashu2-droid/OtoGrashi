@@ -106,6 +106,8 @@ final class MediaPlugin: NSObject, FlutterPlugin, ASWebAuthenticationPresentatio
       authenticateSharedAccount(call, result: result)
     case "depthModelStatus":
       result(DepthModelStore.shared.status())
+    case "deleteDepthModel":
+      result(DepthModelStore.shared.remove())
     case "downloadDepthModel":
       DepthModelStore.shared.download { outcome in
         DispatchQueue.main.async {

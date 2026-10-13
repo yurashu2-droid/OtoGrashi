@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../design/tokens.dart';
+import '../../media/depth_model.dart';
 import '../../storage/profile_store.dart';
 import '../../storage/project_repository.dart';
 
@@ -29,8 +30,17 @@ final class SettingsScreen extends StatefulWidget {
 }
 
 final class _SettingsScreenState extends State<SettingsScreen> {
+  final _depthModel = DepthModel.instance;
   late Future<StorageUsage> _usage = widget.usageLoader();
   late String? _name = widget.ownerName;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_depthModel.value.phase == DepthModelPhase.unknown) {
+      _depthModel.refresh();
+    }
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -94,6 +104,28 @@ final class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ],
+              ),
+            );
+          },
+        ),
+        // the とびだす data can be taken off the phone again once it is there
+        ValueListenableBuilder<DepthModelState>(
+          valueListenable: _depthModel,
+          builder: (context, state, _) {
+            if (state.phase != DepthModelPhase.ready) {
+              return const SizedBox.shrink();
+            }
+            return Card(
+              child: ListTile(
+                leading: const Icon(Icons.view_in_ar_rounded),
+                title: const Text('「とびだす」のデータ'),
+                subtitle: const Text(
+                  '約${DepthModel.megabytes}MB · 削除しても、あとでまた追加できます',
+                ),
+                trailing: TextButton(
+                  onPressed: _deleteDepthModel,
+                  child: const Text('削除'),
+                ),
               ),
             );
           },
@@ -189,6 +221,32 @@ final class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _usage = widget.usageLoader());
     ScaffoldMessenger.of(context)
         .showSnackBar(const SnackBar(content: Text('キャッシュを整理しました')));
+  }
+
+  Future<void> _deleteDepthModel() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('「とびだす」のデータを削除しますか？'),
+        content: const Text('つくった動画はそのまま残ります。もう一度使うときは、ダウンロードし直します。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('削除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final deleted = await _depthModel.delete();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(deleted ? 'データを削除しました' : '削除できませんでした')),
+    );
   }
 }
 

@@ -69,6 +69,23 @@ final class DepthModel extends ValueNotifier<DepthModelState> {
     return isReady;
   }
 
+  /// Removes the downloaded model from the phone; true when it is gone. It can
+  /// be downloaded again later. A download in progress is left alone.
+  Future<bool> delete() async {
+    if (value.phase == DepthModelPhase.downloading) return false;
+    try {
+      final status = await _channel.invokeMapMethod<String, Object?>(
+        'deleteDepthModel',
+      );
+      _apply(status);
+    } on MissingPluginException {
+      value = const DepthModelState(DepthModelPhase.absent);
+    } on PlatformException catch (error) {
+      value = DepthModelState(DepthModelPhase.failed, message: error.message);
+    }
+    return value.phase == DepthModelPhase.absent;
+  }
+
   void _apply(Map<String, Object?>? status) {
     final state = status?['state'];
     value = switch (state) {

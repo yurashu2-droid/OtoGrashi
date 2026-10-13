@@ -107,6 +107,25 @@ final class DepthModelStore: @unchecked Sendable {
     try? fm.removeItem(at: package)
   }
 
+  /// Takes the downloaded model off the phone again; it can be added once more later. A
+  /// download that is running is left alone. Returns the status afterwards.
+  func remove() -> [String: Any] {
+    lock.lock()
+    if !downloading {
+      model = nil
+      failure = nil
+      if let folder, let compiledURL {
+        let fm = FileManager.default
+        // the package is only still there when a download was interrupted
+        let package = folder.appendingPathComponent("DepthAnythingV2SmallF16.mlpackage", isDirectory: true)
+        try? fm.removeItem(at: compiledURL)
+        try? fm.removeItem(at: package)
+      }
+    }
+    lock.unlock()
+    return status()
+  }
+
   /// The loaded model, or nil when it has not been downloaded (the cards then stay flat).
   func loadedModel() -> VNCoreMLModel? {
     lock.lock(); defer { lock.unlock() }
