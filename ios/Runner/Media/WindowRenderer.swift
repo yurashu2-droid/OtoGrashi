@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreML
+import CoreText
 import Metal
 import SceneKit
 import UIKit
@@ -274,6 +275,15 @@ final class WindowHeightMaps {
 
 // MARK: - The とびだす frame
 
+/// The words laid over a とびだす video: whose everyday it is, what each sound is called and
+/// how long the song is.
+struct WindowTitles {
+  let owner: String
+  /// the name shown for each sound, by asset id
+  let names: [String: String]
+  let seconds: Int
+}
+
 /// Every sound is a white card standing in a calm 3D space; what it filmed leans out of the
 /// card like someone looking out of a window. Only sounding cards move (sway, hop, frames
 /// advance); silent ones hold their last frame. A light slowly sweeps across them.
@@ -309,6 +319,8 @@ final class WindowFrameRenderer {
   private var lastCaptureAge = Int.max
   private let confetti = SCNNode()
   private var pieces: [(node: SCNNode, direction: SIMD3<Float>, speed: Float, spin: Float)] = []
+  /// flat pictures (name tags, the cover, the closing title), drawn once per video
+  private var stamps: [String: CIImage] = [:]
 
   private static let beatSamples = 22_500   // 128 BPM at 48 kHz
   private static let barSamples = beatSamples * 4
@@ -317,6 +329,7 @@ final class WindowFrameRenderer {
     UIColor(red: 0.92, green: 0.90, blue: 0.99, alpha: 1), UIColor(red: 0.89, green: 0.96, blue: 0.93, alpha: 1),
     UIColor(red: 0.99, green: 0.94, blue: 0.86, alpha: 1), UIColor(red: 0.89, green: 0.93, blue: 0.99, alpha: 1),
   ]
+  private static let ink = CGColor(red: 0.14, green: 0.11, blue: 0.10, alpha: 1)
   private static let paper: [UIColor] = [
     UIColor(red: 0.94, green: 0.44, blue: 0.42, alpha: 1), UIColor(red: 0.61, green: 0.52, blue: 0.94, alpha: 1),
     UIColor(red: 0.95, green: 0.66, blue: 0.23, alpha: 1), UIColor(red: 0.31, green: 0.68, blue: 0.55, alpha: 1),
@@ -455,7 +468,7 @@ final class WindowFrameRenderer {
 
   // MARK: drawing
 
-  func draw(frame: Int, arrangement: ArrangementPayload? = nil,
+  func draw(frame: Int, arrangement: ArrangementPayload? = nil, titles: WindowTitles? = nil,
     cards keyed: [(key: String, image: CGImage?, frameKey: String, playing: Bool, age: Int, punch: CGFloat)],
     into buffer: CVPixelBuffer) throws {
     let t = Float(frame) / 30
@@ -515,6 +528,7 @@ final class WindowFrameRenderer {
     var ground = Self.grounds[(sample / (Self.barSamples * 2)) % Self.grounds.count]
     var flash: Float = 0
     var sway: Float = 1
+    var introduced: (key: String, number: Int, since: Float)?
     confetti.isHidden = true
     for (i, card) in nodes.enumerated() {
       let rect = layout.cards[min(i, layout.cards.count - 1)]
@@ -540,6 +554,7 @@ final class WindowFrameRenderer {
       let who = arrived.max { (firstHit[keyed[$0].key] ?? 0) < (firstHit[keyed[$1].key] ?? 0) } ?? 0
       solo(who)
       let since = Float(sample - (firstHit[keyed[who].key] ?? shot.from)) / 48_000
+      introduced = (key: keyed[who].key, number: who + 1, since: since)
       let side: Float = who % 2 == 0 ? -1 : 1
       aim(SCNVector3(side * 0.45, 0.1, close * 0.95 - min(1, since) * 0.25), SCNVector3(0, -0.05, 0))
     case .follow:
@@ -680,7 +695,160 @@ final class WindowFrameRenderer {
     if flash > 0 {
       output = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: CGFloat(flash))).cropped(to: bounds).composited(over: output)
     }
+    if let titles {
+      output = overlay(titles, on: output, frame: frame, sample: sample,
+        total: arrangement?.totalSamples ?? Self.barSamples * 8, order: keyed.map(\.key), introduced: introduced)
+    }
     images.render(output, to: buffer, bounds: bounds, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+  }
+
+  // MARK: titles
+
+  /// The very first frame is the cover a feed shows before play (whose everyday this is);
+  /// each sound gets a name tag as it is introduced; the last 1.3 s carry the closing title.
+  private func overlay(_ titles: WindowTitles, on canvas: CIImage, frame: Int, sample: Int, total: Int,
+    order: [String], introduced: (key: String, number: Int, since: Float)?) -> CIImage {
+    let k = CGFloat(width) / 720
+    let W = CGFloat(width), H = CGFloat(height)
+    if frame == 0, let cover = coverPlate(titles, k: k) {
+      return place(cover, over: canvas, centre: CGPoint(x: 40 * k + (W - 110 * k) / 2, y: 265 * k), degrees: 3)
+    }
+    var out = canvas
+    if let introduced, introduced.since >= 0, let name = titles.names[introduced.key],
+      let tag = nameTag(name, number: introduced.number, k: k) {
+      // pops onto the lower-left corner of the window as the sound first plays
+      let pop = CGFloat(min(1, introduced.since / 0.18))
+      let eased = 1 - pow(1 - pop, 3)
+      let scale = 0.7 + 0.3 * eased + 0.08 * sin(pop * CGFloat.pi)
+      let centre = CGPoint(x: 30 * k + tag.extent.width / 2, y: H * 0.76)
+      out = place(tag, over: out, centre: centre, scale: scale, degrees: -3, alpha: eased)
+    }
+    let ending = Float(sample - (total - 62_400)) / 48_000
+    if ending >= 0.3, let plate = endPlate(titles, order: order, k: k) {
+      let shown = CGFloat(min(1, (ending - 0.3) / 0.3))
+      let eased = 1 - pow(1 - shown, 3)
+      let centre = CGPoint(x: W / 2, y: H * 0.74 + (1 - eased) * 60 * k)
+      out = place(plate, over: out, centre: centre, scale: 0.94 + 0.06 * eased, alpha: eased)
+    }
+    return out
+  }
+
+  /// Lays a stamp over the frame, centred at `centre` (pixels, y down from the top).
+  private func place(_ stamp: CIImage, over canvas: CIImage, centre: CGPoint, scale: CGFloat = 1,
+    degrees: CGFloat = 0, alpha: CGFloat = 1) -> CIImage {
+    guard alpha > 0.01 else { return canvas }
+    let size = stamp.extent.size
+    let transform = CGAffineTransform(translationX: centre.x, y: CGFloat(height) - centre.y)
+      .rotated(by: degrees * CGFloat.pi / 180)
+      .scaledBy(x: scale, y: scale)
+      .translatedBy(x: -size.width / 2, y: -size.height / 2)
+    var layer = stamp.transformed(by: transform)
+    if alpha < 0.99 {
+      layer = layer.applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: alpha)])
+    }
+    return layer.composited(over: canvas)
+  }
+
+  /// A flat picture drawn once (y up, like Core Image) and kept for the rest of the video.
+  private func stamp(_ key: String, size: CGSize, draw: (CGContext) -> Void) -> CIImage? {
+    if let made = stamps[key] { return made }
+    let w = Int(size.width.rounded(.up)), h = Int(size.height.rounded(.up))
+    guard w > 0, h > 0, let space = CGColorSpace(name: CGColorSpace.sRGB),
+      let g = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    draw(g)
+    guard let image = g.makeImage() else { return nil }
+    let made = CIImage(cgImage: image)
+    stamps[key] = made
+    return made
+  }
+
+  private static func line(_ string: String, font: String, size: CGFloat, color: CGColor) -> (line: CTLine, width: CGFloat) {
+    let made = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [
+      NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(font as CFString, size, nil),
+      NSAttributedString.Key(kCTForegroundColorAttributeName as String): color,
+    ]))
+    return (made, CGFloat(CTLineGetTypographicBounds(made, nil, nil, nil)))
+  }
+
+  private static func plate(_ g: CGContext, _ rect: CGRect, radius: CGFloat, fill: CGColor, shadow: CGFloat) {
+    g.saveGState()
+    g.setShadow(offset: CGSize(width: 0, height: -shadow * 0.3), blur: shadow, color: CGColor(gray: 0, alpha: 0.24))
+    g.setFillColor(fill)
+    let r = min(radius, min(rect.width, rect.height) / 2 - 0.5)
+    g.addPath(CGPath(roundedRect: rect, cornerWidth: r, cornerHeight: r, transform: nil))
+    g.fillPath()
+    g.restoreGState()
+  }
+
+  /// A white tag: the sound's number on its colour, then its name.
+  private func nameTag(_ name: String, number: Int, k: CGFloat) -> CIImage? {
+    let text = Self.line(name, font: "HiraginoSans-W6", size: 30 * k, color: Self.ink)
+    let digit = Self.line("\(number)", font: "HiraginoSans-W6", size: 22 * k, color: CGColor(gray: 1, alpha: 1))
+    let margin = 26 * k, pillH = 64 * k, dot = 42 * k
+    let pillW = 11 * k + dot + 12 * k + text.width + 26 * k
+    let colour = Self.paper[max(0, number - 1) % Self.paper.count].cgColor
+    return stamp("tag:\(number):\(name)", size: CGSize(width: pillW + margin * 2, height: pillH + margin * 2)) { g in
+      let pill = CGRect(x: margin, y: margin, width: pillW, height: pillH)
+      Self.plate(g, pill, radius: pillH / 2, fill: CGColor(gray: 1, alpha: 1), shadow: 16 * k)
+      let circle = CGRect(x: pill.minX + 11 * k, y: pill.midY - dot / 2, width: dot, height: dot)
+      g.setFillColor(colour)
+      g.fillEllipse(in: circle)
+      g.textPosition = CGPoint(x: circle.midX - digit.width / 2, y: circle.midY - 22 * k * 0.36)
+      CTLineDraw(digit.line, g)
+      g.textPosition = CGPoint(x: circle.maxX + 12 * k, y: pill.midY - 30 * k * 0.36)
+      CTLineDraw(text.line, g)
+    }
+  }
+
+  /// The same cover the other forms open with: "〇〇の日常", by オトグラシ.
+  private func coverPlate(_ titles: WindowTitles, k: CGFloat) -> CIImage? {
+    let plateW = CGFloat(width) - 110 * k, plateH = 210 * k, margin = 40 * k
+    let headline = "\(titles.owner)の日常"
+    var size = 104 * k
+    var title = Self.line(headline, font: "HiraginoSans-W6", size: size, color: Self.ink)
+    while size > 48 * k, title.width > plateW - 68 * k {
+      size -= 2 * k
+      title = Self.line(headline, font: "HiraginoSans-W6", size: size, color: Self.ink)
+    }
+    let by = Self.line("by オトグラシ", font: "HiraMaruProN-W4", size: 32 * k, color: Self.paper[0].cgColor)
+    let headlineSize = size, headlineLine = title.line
+    return stamp("cover", size: CGSize(width: plateW + margin * 2, height: plateH + margin * 2)) { g in
+      let rect = CGRect(x: margin, y: margin, width: plateW, height: plateH)
+      Self.plate(g, rect, radius: 26 * k, fill: CGColor(red: 0.984, green: 0.953, blue: 0.902, alpha: 1), shadow: 28 * k)
+      g.textPosition = CGPoint(x: rect.minX + 34 * k, y: rect.maxY - 26 * k - headlineSize * 0.88)
+      CTLineDraw(headlineLine, g)
+      g.textPosition = CGPoint(x: rect.maxX - 34 * k - by.width, y: rect.minY + 26 * k)
+      CTLineDraw(by.line, g)
+    }
+  }
+
+  /// The closing title: the app's signature and what the song was made of.
+  private func endPlate(_ titles: WindowTitles, order: [String], k: CGFloat) -> CIImage? {
+    let plateW = min(CGFloat(width) - 88 * k, 620 * k), plateH = 176 * k, margin = 34 * k
+    let coral = Self.paper[0].cgColor
+    let word = Self.line("otogurashi", font: "BradleyHandITCTT-Bold", size: 78 * k, color: Self.ink)
+    let names = order.compactMap { titles.names[$0] }
+    var made = Self.line(names.joined(separator: "・") + " でできた\(titles.seconds)秒", font: "HiraMaruProN-W4",
+      size: 27 * k, color: coral)
+    if made.width > plateW - 56 * k {
+      made = Self.line("\(max(1, names.count))つの音でできた\(titles.seconds)秒", font: "HiraMaruProN-W4", size: 27 * k, color: coral)
+    }
+    let caption = made
+    return stamp("end", size: CGSize(width: plateW + margin * 2, height: plateH + margin * 2)) { g in
+      let rect = CGRect(x: margin, y: margin, width: plateW, height: plateH)
+      Self.plate(g, rect, radius: 36 * k, fill: CGColor(gray: 1, alpha: 1), shadow: 26 * k)
+      // the signature ends in a small pale-red dot, as it does in the app
+      let dot = 13 * k
+      let wordX = rect.midX - (word.width + dot * 1.5) / 2
+      let baseline = rect.minY + 88 * k
+      g.textPosition = CGPoint(x: wordX, y: baseline)
+      CTLineDraw(word.line, g)
+      g.setFillColor(coral)
+      g.fillEllipse(in: CGRect(x: wordX + word.width + dot * 0.5, y: baseline, width: dot, height: dot))
+      g.textPosition = CGPoint(x: rect.midX - caption.width / 2, y: rect.minY + 34 * k)
+      CTLineDraw(caption.line, g)
+    }
   }
 }
 

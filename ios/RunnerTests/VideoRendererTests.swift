@@ -1113,6 +1113,60 @@ final class VideoRendererTests: XCTestCase {
     XCTAssertGreaterThan(right, 0.3, "the further subject stands out too")
   }
 
+  func testWindowTitlesAreLaidOverTheFrame() throws {
+    guard let renderer = WindowFrameRenderer(width: 360, height: 640, ground: CGColor(gray: 0.95, alpha: 1)) else {
+      throw XCTSkip("Metal is not available")
+    }
+    let space = CGColorSpaceCreateDeviceRGB()
+    guard let context = CGContext(data: nil, width: 90, height: 120, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return XCTFail("no context") }
+    context.setFillColor(CGColor(red: 0.9, green: 0.1, blue: 0.1, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: 90, height: 120))
+    guard let image = context.makeImage() else { return XCTFail("no image") }
+    let titles = WindowTitles(owner: "ゆい", names: ["a": "コップ", "b": "ドア"], seconds: 15)
+    // the same frame with and without its words: only the words may differ
+    func changed(frame: Int, in area: CGRect) throws -> Int {
+      var pictures: [[UInt8]] = []
+      for words in [nil, titles] as [WindowTitles?] {
+        var made: CVPixelBuffer?
+        CVPixelBufferCreate(nil, 360, 640, kCVPixelFormatType_32BGRA,
+          [kCVPixelBufferIOSurfacePropertiesKey as String: [:]] as CFDictionary, &made)
+        guard let buffer = made else { XCTFail("no buffer"); return 0 }
+        try renderer.draw(frame: frame, titles: words, cards: [
+          (key: "a", image: image, frameKey: "a@1", playing: true, age: 2_000, punch: 0.6),
+          (key: "b", image: image, frameKey: "b@1", playing: false, age: 48_000, punch: 0),
+        ], into: buffer)
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        let base = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+        let row = CVPixelBufferGetBytesPerRow(buffer)
+        var pixels: [UInt8] = []
+        for y in Int(area.minY)..<Int(area.maxY) {
+          for x in Int(area.minX)..<Int(area.maxX) {
+            let p = base + y * row + x * 4
+            pixels += [p[0], p[1], p[2]]
+          }
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
+        pictures.append(pixels)
+      }
+      var count = 0
+      for i in stride(from: 0, to: pictures[0].count, by: 3) {
+        let far = (0..<3).contains { abs(Int(pictures[0][i + $0]) - Int(pictures[1][i + $0])) > 24 }
+        if far { count += 1 }
+      }
+      return count
+    }
+    let cover = try changed(frame: 0, in: CGRect(x: 20, y: 80, width: 300, height: 105))
+    let tag = try changed(frame: 12, in: CGRect(x: 20, y: 462, width: 120, height: 48))
+    let elsewhere = try changed(frame: 12, in: CGRect(x: 200, y: 40, width: 140, height: 120))
+    let ending = try changed(frame: 449, in: CGRect(x: 30, y: 432, width: 300, height: 84))
+    print("WINDOW_TEST titles cover=\(cover) tag=\(tag) elsewhere=\(elsewhere) ending=\(ending) problem=\(renderer.lastProblem ?? "none")")
+    XCTAssertGreaterThan(cover, 1_500, "the cover is on the first frame")
+    XCTAssertGreaterThan(tag, 300, "a sound is named as it is introduced")
+    XCTAssertLessThan(elsewhere, 200, "the name tag stays in its corner")
+    XCTAssertGreaterThan(ending, 3_000, "the closing title is on the last frames")
+  }
+
   func testWindowCardsRenderIntoTheFrame() throws {
     guard let renderer = WindowFrameRenderer(width: 360, height: 640, ground: CGColor(gray: 0.95, alpha: 1)) else {
       throw XCTSkip("Metal is not available")
