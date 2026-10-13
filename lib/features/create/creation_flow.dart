@@ -1745,6 +1745,17 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   _FinishedSong get _song => widget.song;
   bool get _saved => _song.saved;
 
+  /// The video is as large as the screen allows while the controls and the
+  /// row of smaller actions under it still fit without scrolling: about 230
+  /// wide on a 844pt phone, never under 180 (then the list scrolls).
+  static double _cardWidth(double available) {
+    // everything but the video, from the top of the list to under the
+    // actions: paddings, title and caption, one row of controls, the tiles
+    const rest = 8 + 24 + 10 + 42 + 8 + 48 + 8 + 68 + 6;
+    final videoHeight = (available - rest).clamp(320.0, 412.0);
+    return videoHeight * 9 / 16 + 24;
+  }
+
   // the reveal: a finished song starts by itself, once
   void _autoPlay() {
     if (_autoStarted || !playback.isReady) return;
@@ -1882,6 +1893,10 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   Widget build(BuildContext context) {
     final state = widget.controller.state;
     final canRevise = widget.controller.deferRendering;
+    final media = MediaQuery.of(context);
+    // what is left for the list between the app bar and the two buttons
+    final listHeight =
+        media.size.height - media.padding.vertical - kToolbarHeight - 76;
     return Scaffold(
       backgroundColor: AppTokens.surfaceColor,
       appBar: AppBar(
@@ -1914,9 +1929,7 @@ class _CompletedScreenState extends State<_CompletedScreen> {
           children: [
             Center(
               child: Container(
-                // with the one-row controls, the small actions below still
-                // fit on a 844pt phone
-                width: 256,
+                width: _cardWidth(listHeight),
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: AppTokens.tile,
