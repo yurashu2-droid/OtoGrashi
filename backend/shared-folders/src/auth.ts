@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { generateRegistrationOptions, generateAuthenticationOptions, verifyRegistrationResponse, verifyAuthenticationResponse, type RegistrationResponseJSON, type AuthenticationResponseJSON } from '@simplewebauthn/server';
 import { bodyJson, fail, hash, token, text, json, errorResponse, type Env } from './index';
+import { accountSongRoute } from './songs';
 import browser from './passkey-browser.txt';
 
 const HEX = /^[0-9a-f]{64}$/;
@@ -20,7 +21,7 @@ export function authAsset(path: string): Response | undefined {
 }
 
 // One namespace instance coordinates credential discovery and serializes account quotas.
-// Only private DO RPC reaches folder account methods; public headers confer no authority.
+// Only private DO RPC reaches folder and song-catalogue account methods; public headers confer no authority.
 export class AuthAccounts extends DurableObject<Env> {
   private queue: Promise<unknown> = Promise.resolve();
   constructor(ctx: DurableObjectState, env: Env) {
@@ -106,6 +107,8 @@ export class AuthAccounts extends DurableObject<Env> {
       const t=token(),expires=Date.now()+30*86400000; this.set('session',await hash(t),{accountId:f.verified,expires} satisfies Session);
       return json({token:t,expiresAt:new Date(expires).toISOString(),account:this.get('account',f.verified)});
     }
+    // Song routes verify the session with this same account() and reach the catalogue by private RPC only.
+    const s=p.split('/'); if((s[1]==='v1'&&s[2]==='songs')||p==='/v1/account/songs') return await accountSongRoute(request,this.env,s,()=>this.account(request));
     const a=await this.account(request);
     if(request.method==='GET' && p==='/v1/account') return json({account:a});
     if(post&&p==='/v1/auth/logout') { this.remove('session',await hash(request.headers.get('X-Oto-Session')!)); return json({ok:true}); }

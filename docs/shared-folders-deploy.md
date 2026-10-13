@@ -18,6 +18,8 @@ Cloudflare の管理 API トークンを GitHub の Repository secret に登録�
 
 `backend/shared-folders/wrangler.jsonc` の現在の設定を読み、バインディング・Durable Object マイグレーションをそのまま公開します。設定された R2 バケットがなければ作成し、あれば再利用します。公開 `r2.dev` が有効、またはカスタムドメインが 1 つでも付いているバケットは拒否します。非公開状態を API で確認できない場合も停止します。既存バケットやデータの削除、公開設定の変更は行いません。
 
+曲カタログ（Durable Object `SongCatalog`、マイグレーション `v3`）もこの通常の公開で追加されます。通報された曲を運営者が確認・非表示・復元・削除するルートだけは、公開後に `backend/shared-folders` で `npx wrangler secret put ADMIN_TOKEN`（32 文字以上のランダムな値）を設定したときに有効になり、未設定の間は 404 を返します。手順は[バックエンド README](../backend/shared-folders/README.md#song-catalogue) を参照してください。
+
 生成設定と公開情報は gitignore 対象の `backend/shared-folders/.wrangler/` に保存します。追跡される設定ファイルは変更しません。Wrangler は `package-lock.json` で固定されたローカル依存を使います。失敗時は資格情報保護のため API の応答本文や Wrangler の出力を表示せず、HTTP ステータスまたは終了コードを報告します。アカウント・権限・R2 有効化を確認して再実行してください。途中で作成された非公開バケットは残り、次回再利用できます。
 
 ## ローカル実行

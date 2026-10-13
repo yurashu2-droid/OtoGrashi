@@ -3,7 +3,8 @@
 Implements the v1 contract in `../../docs/superpowers/specs/2026-10-05-r2-shared-folders-design.md`.
 One SQLite Durable Object holds each folder's membership, invitation hashes,
 clip metadata and reservations. A separate SQLite Durable Object verifies
-passkeys and manages account sessions and the free owned-folder quota.
+passkeys and manages account sessions and the free owned-folder quota. A third
+one holds the public [song catalogue](#song-catalogue).
 The R2 bucket must stay private. Cloudflare credentials never belong in the app.
 
 The account contract is in
@@ -34,7 +35,9 @@ concurrent idempotency and quota, checksum failures, truncated input, expired
 reservations, revocation and deletion. A test-only Durable Object subclass
 simulates truncation after the HTTP boundary; it is excluded from the deployment
 bundle. Near-quota fixtures use test-only SQLite inspection rather than uploading
-a GiB. `build` is a dry run and does not deploy. Dependencies and lockfile are
+a GiB. `test/songs.test.ts` covers the song catalogue the same way: every score
+rule, paging, the account limits, use counting, reports, removal and the
+operator secret. `build` is a dry run and does not deploy. Dependencies and lockfile are
 pinned together; the current Wrangler release depends on a Miniflare 5 alpha,
 which is development tooling only. SimpleWebAuthn ships in the Worker and its
 same-origin browser bundle; no external CDN is required.
@@ -60,7 +63,7 @@ For direct Wrangler deployment:
    Keep **Public development URL (r2.dev) disabled** and attach no public custom
    domain. Do not provision S3 credentials for the application.
 2. In `wrangler.jsonc`, choose a unique Worker `name`. Keep the Durable Object
-   bindings/classes and both `v1` and `v2` SQLite migrations; Wrangler creates the namespaces on
+   bindings/classes and the `v1`, `v2` and `v3` SQLite migrations; Wrangler creates the namespaces on
    deployment. Select two unused positive integer rate-limit namespace IDs in
    your account (default `1001` and `1002`). IDs shared by other Workers share
    their counters, so change them if already used.
@@ -99,7 +102,8 @@ parameters. The implementation logs no request headers, bodies or credentials;
 Worker observability is disabled in the supplied config. Do not add middleware
 or logs that record secrets.
 
-The general API limiter allows 120 requests/minute; create/join share an
+The general API limiter allows 120 requests/minute; create/join, and posting or
+reporting a song, share an
 additional 10 requests/minute limit keyed by a hash of the Cloudflare client IP.
 People sharing a NAT also share the IP-based entry limits. Cloudflare rate limits are per-location guardrails, not an
 exact global cap or billing protection. Required bindings fail closed if absent.
@@ -151,6 +155,85 @@ The feature does not include SMS, Apple Sign In, paid plans or alternate recover
 after losing a passkey. Local synthetic WebAuthn verification cannot prove actual
 Face ID, iCloud synchronization or two-phone behavior; verify those on a deployed
 HTTPS origin before public launch.
+
+## Song catalogue
+
+`SongCatalog` (binding `SONGS`, migration `v3`, one instance named `catalog`)
+holds public songs: small three-lane scores that the app converts from MIDI
+files. Anyone can list songs and fetch one to make a piece with it; an account
+posts, reports and removes its own. The object has no fetch handler. The Worker
+and `AuthAccounts` call it by Durable Object RPC with values they verified
+themselves, so public request headers confer no authority there. Everything is
+JSON, `no-store` and without query strings; errors are `{error:{code,message}}`.
+
+| Route | Needs | Answer |
+| --- | --- | --- |
+| `POST /v1/songs` | account | 201 `{song}`, or 200 with the existing song when this account already posted the same score |
+| `GET /v1/songs`, `GET /v1/songs/after/<cursor>` | | `{songs, next?}`: public songs, newest first, 30 a page, without lanes; `next` is an opaque cursor |
+| `GET /v1/songs/popular` | | `{songs}`: the 30 most used public songs, the newer first among equals |
+| `GET /v1/songs/<id>` | | `{song}` with lanes; with the poster's session also their own hidden song |
+| `GET /v1/account/songs` | account | `{songs}`: the account's songs with `status`, newest first, without lanes |
+| `POST /v1/songs/<id>/use` | | `{uses}`: counted once per client address, song and UTC day |
+| `POST /v1/songs/<id>/report` | account | 201 `{ok}`, or 200 when this account had already reported the song |
+| `DELETE /v1/songs/<id>` | the poster | `{ok}` |
+| `GET /v1/admin/songs/reported` | operator | `{songs}`, each with its `reports` |
+| `POST /v1/admin/songs/<id>/hide`, `/restore`, `/remove` | operator | `{song}` with its new `status` |
+
+A list entry is `{id, title, credit, rights, author, beats, uses, createdAt}`;
+the account's list adds `status`, and a single song adds `status` and `lanes`.
+`author` is the poster's display name when posting. Account IDs never leave the
+object.
+
+A post is `{title, credit?, rights, score}` in at most 64 KiB: a title of up to
+40 characters, a credit for the composer or source of up to 60, and `rights`,
+the poster's own declaration, `own` or `public_domain`. The server cannot check
+that declaration. `score` is `{"v":1,"beats":32|64,"lanes":[melody,bass,chords]}`.
+A lane is a list of `[startTick, durationTicks, pitch]` integer notes at 480
+ticks per beat, sorted by start tick, at most 600 per lane, inside the song and
+with a pitch of 0 to 127; the melody must not be empty. Anything else is refused
+with 400 and its own code: `invalid_text`, `invalid_rights`, `invalid_score`,
+`unsupported_score_version`, `invalid_beats`, `invalid_lanes`, `empty_melody`,
+`too_many_notes`, `invalid_note`, `invalid_note_time`, `invalid_pitch` or
+`unsorted_notes`. The content hash that recognises a repeated post is the
+SHA-256 of `{"beats":32,"lanes":[...]}` written without whitespace.
+
+Limits: an account keeps 30 songs (409 `song_limit`) and posts 10 per UTC day
+(429 `post_limit`); a removed song frees its place but still counts for the day
+it was posted. A use is remembered as the hashed client address that already
+keys the rate limits, the song and the day, and such rows are dropped after two
+days. People behind one address count as one listener.
+
+Reports and takedown: a report is `{reason, note?}` with the reason `rights`,
+`inappropriate` or `other` and a note of up to 200 characters, one per account
+and song; nobody can report their own song. Once three different accounts have
+reported a public song it becomes `hidden`: it leaves the lists and only its
+poster can still fetch it, until the operator decides. Removing a song, by its
+poster or the operator, leaves a tombstone without lanes or reports, so the ID
+is never reused; the same score can be posted again and becomes a new song.
+
+Operator routes exist only while the Worker has a secret `ADMIN_TOKEN` of at
+least 32 characters. Without it they answer 404 `not_found`. Set it once, after
+the Worker is deployed, from this directory with Wrangler authenticated for the
+same account:
+
+```sh
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+npx wrangler secret put ADMIN_TOKEN
+```
+
+Paste the generated value at the prompt and keep it out of the repository and
+the app. The secret survives later deployments; `npx wrangler secret delete
+ADMIN_TOKEN` switches the routes off again. Send it as `X-Oto-Admin: <token>`;
+it is compared in constant time, and a wrong one is 401 `admin_required`.
+`reported` lists up to 100 songs that have reports, the most recently reported
+first, each with `status` and `reports` of `{reason, note, createdAt}` and no
+account IDs. `hide` hides a song, `restore` makes it public again and clears its
+reports, `remove` takes it down for good:
+
+```sh
+curl -H "X-Oto-Admin: $TOKEN" https://<service>/v1/admin/songs/reported
+curl -X POST -H "X-Oto-Admin: $TOKEN" https://<service>/v1/admin/songs/<id>/remove
+```
 
 ## Official references
 

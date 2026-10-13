@@ -13,6 +13,10 @@
       {
         "name": "AUTH_ACCOUNTS",
         "class_name": "AuthAccounts"
+      },
+      {
+        "name": "SONGS",
+        "class_name": "SongCatalog"
       }
     ]
   },
@@ -27,6 +31,12 @@
       "tag": "v2",
       "new_sqlite_classes": [
         "AuthAccounts"
+      ]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": [
+        "SongCatalog"
       ]
     }
   ],

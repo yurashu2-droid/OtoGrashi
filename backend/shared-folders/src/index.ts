@@ -1,13 +1,17 @@
 import { DurableObject } from 'cloudflare:workers';
 import { AuthAccounts, authAsset } from './auth';
-export { AuthAccounts };
+import { SongCatalog, songRoute } from './songs';
+export { AuthAccounts, SongCatalog };
 
 export interface Env {
   AUTH_ACCOUNTS: DurableObjectNamespace<AuthAccounts>;
   FOLDERS: DurableObjectNamespace<SharedFolder>;
+  SONGS: DurableObjectNamespace<SongCatalog>;
   FILES: R2Bucket;
   ENTRY_LIMIT: RateLimit;
   API_LIMIT: RateLimit;
+  // Optional operator secret. The song catalogue's admin routes do not exist without it.
+  ADMIN_TOKEN?: string;
 }
 export const LIMITS = { maxClipBytes: 52428800, maxFolderBytes: 1073741824, maxClips: 200, maxMembers: 20 };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -26,7 +30,7 @@ interface FolderState {
   clips: Record<string, StoredClip>; pending: Record<string, Reservation>;
   garbage: string[]; invite?: { hash: string; expiresAt: string };
 }
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
 }
 export function fail(status: number, code: string, message: string): never { throw new ApiError(status, code, message); }
@@ -74,9 +78,9 @@ async function timedRead(reader: ReadableStreamDefaultReader<Uint8Array>): Promi
     })]);
   } finally { if (timer !== undefined) clearTimeout(timer); }
 }
-export async function bodyJson(request: Request): Promise<Record<string, unknown>> {
+export async function bodyJson(request: Request, maximum = 8192): Promise<Record<string, unknown>> {
   try {
-    const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(await boundedBytes(request, 8192)));
+    const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(await boundedBytes(request, maximum)));
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
     return value as Record<string, unknown>;
   } catch (e) { if (e instanceof ApiError) throw e; fail(400, 'invalid_json', 'Invalid JSON object.'); }
@@ -135,10 +139,12 @@ export default {
       }
       if (url.search) fail(400, 'invalid_path', 'Query parameters are not supported.');
       if (request.method === 'GET') { const asset = authAsset(url.pathname); if (asset) return asset; }
-      const accountRoute = url.pathname.startsWith('/v1/auth/') || url.pathname === '/v1/account' || url.pathname === '/v1/account/folders';
+      const accountRoute = url.pathname.startsWith('/v1/auth/') || url.pathname === '/v1/account' || url.pathname === '/v1/account/folders' || url.pathname === '/v1/account/songs';
       if (accountRoute) return await env.AUTH_ACCOUNTS.get(env.AUTH_ACCOUNTS.idFromName('accounts')).fetch(request);
       const create = request.method === 'POST' && url.pathname === '/v1/folders';
       const parts = url.pathname.split('/');
+      // The public song catalogue and its operator routes sit beside the folders; see songs.ts.
+      if (parts[1] === 'v1' && (parts[2] === 'songs' || (parts[2] === 'admin' && parts[3] === 'songs'))) return await songRoute(request, env, parts, actor);
       if (!create && (parts[1] !== 'v1' || parts[2] !== 'folders')) fail(404, 'not_found', 'Route not found.');
       const id = create ? crypto.randomUUID() : parts[3];
       if (!UUID.test(id ?? '')) fail(400, 'invalid_id', 'Invalid folder ID.');
