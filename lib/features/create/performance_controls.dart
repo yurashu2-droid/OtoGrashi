@@ -222,17 +222,21 @@ final class _LengthPill extends StatelessWidget {
         duration: const Duration(milliseconds: 150),
         constraints: const BoxConstraints(minHeight: 44),
         padding: const EdgeInsets.symmetric(horizontal: 12),
-        alignment: Alignment.center,
         decoration: BoxDecoration(
           color: selected ? AppTokens.ink : AppTokens.tile,
           borderRadius: BorderRadius.circular(999),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-            color: selected ? Colors.white : AppTokens.ink,
+        // as wide as its label: an `alignment` here would stretch the pill
+        // across the whole row
+        child: Center(
+          widthFactor: 1,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: selected ? Colors.white : AppTokens.ink,
+            ),
           ),
         ),
       ),

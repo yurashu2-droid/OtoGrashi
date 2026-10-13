@@ -1914,7 +1914,9 @@ class _CompletedScreenState extends State<_CompletedScreen> {
           children: [
             Center(
               child: Container(
-                width: 280,
+                // with the one-row controls, the small actions below still
+                // fit on a 844pt phone
+                width: 256,
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: AppTokens.tile,
@@ -1968,12 +1970,13 @@ class _CompletedScreenState extends State<_CompletedScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             _PlaybackControls(
               playback: playback,
               label: '完成した${state.durationSeconds}秒',
+              compact: true,
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Row(
               children: [
                 _ShareTile(
@@ -2147,10 +2150,17 @@ class _CompareVideoButton extends StatelessWidget {
 }
 
 class _PlaybackControls extends StatelessWidget {
-  const _PlaybackControls({required this.playback, required this.label});
+  const _PlaybackControls({
+    required this.playback,
+    required this.label,
+    this.compact = false,
+  });
 
   final MediaPlaybackController playback;
   final String label;
+
+  /// One row (play, position, time) where the screen is short of height.
+  final bool compact;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -2158,42 +2168,49 @@ class _PlaybackControls extends StatelessWidget {
     builder: (context, _) {
       final durationUs = playback.duration.inMicroseconds.clamp(1, 1 << 53);
       final positionUs = playback.position.inMicroseconds.clamp(0, durationUs);
+      final play = IconButton.filledTonal(
+        onPressed: playback.isReady ? playback.toggle : null,
+        tooltip: playback.isLoading
+            ? '動画を読み込み中'
+            : playback.isPlaying
+            ? '一時停止'
+            : '再生',
+        icon: Text(
+          playback.isPlaying ? 'Ⅱ' : '▶',
+          style: const TextStyle(fontSize: 19),
+        ),
+      );
+      final time = Text(
+        '${_seconds(playback.position)} / ${_seconds(playback.duration)}',
+      );
+      final position = Semantics(
+        label: '再生位置',
+        value: '${playback.position.inSeconds}秒',
+        child: Slider(
+          value: positionUs.toDouble(),
+          max: durationUs.toDouble(),
+          onChanged: playback.isReady
+              ? (value) => unawaited(
+                  playback.seek(Duration(microseconds: value.round())),
+                )
+              : null,
+        ),
+      );
       return Column(
         children: [
-          Row(
-            children: [
-              IconButton.filledTonal(
-                onPressed: playback.isReady ? playback.toggle : null,
-                tooltip: playback.isLoading
-                    ? '動画を読み込み中'
-                    : playback.isPlaying
-                    ? '一時停止'
-                    : '再生',
-                icon: Text(
-                  playback.isPlaying ? 'Ⅱ' : '▶',
-                  style: const TextStyle(fontSize: 19),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(child: Text(label)),
-              Text(
-                '${_seconds(playback.position)} / ${_seconds(playback.duration)}',
-              ),
-            ],
-          ),
-          Semantics(
-            label: '再生位置',
-            value: '${playback.position.inSeconds}秒',
-            child: Slider(
-              value: positionUs.toDouble(),
-              max: durationUs.toDouble(),
-              onChanged: playback.isReady
-                  ? (value) => unawaited(
-                      playback.seek(Duration(microseconds: value.round())),
-                    )
-                  : null,
+          if (compact)
+            Row(children: [play, Expanded(child: position), time])
+          else ...[
+            Row(
+              children: [
+                play,
+                const SizedBox(width: 10),
+                Expanded(child: Text(label)),
+                time,
+              ],
             ),
-          ),
+            position,
+          ],
           if (playback.error != null)
             Text(
               '再生できませんでした。もう一度お試しください。',

@@ -879,6 +879,13 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: buildOtogurashiTheme(),
+        // the status bar and home indicator of a 390 by 844 iPhone
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            padding: const EdgeInsets.only(top: 47, bottom: 34),
+          ),
+          child: child!,
+        ),
         home: CreationFlow(controller: controller, media: media),
       ),
     );
@@ -901,12 +908,13 @@ void main() {
       MelodyTemplate.odeToJoy,
     );
 
-    await tester.scrollUntilVisible(
-      find.text('つくり直す'),
-      200,
-      scrollable: find.byType(Scrollable).first,
+    // the video, its controls and the smaller actions share one screen,
+    // above the share and save buttons
+    expect(
+      tester.getRect(find.text('つくり直す')).bottom + 12,
+      lessThan(tester.getRect(find.text('シェアする')).top),
     );
-    await tester.pumpAndSettle();
+    expect(find.text('新しくつくる'), findsOneWidget);
     await tester.tap(find.text('つくり直す'));
     await tester.pumpAndSettle();
     expect(find.text('曲をつくる'), findsOneWidget);

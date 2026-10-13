@@ -29,6 +29,11 @@ void main() {
           ),
         ),
       );
+      // the two lengths are small pills on one line, not full-width bars
+      final short = tester.getRect(find.text('15秒'));
+      final long = tester.getRect(find.text('30秒・展開あり'));
+      expect(short.center.dy, long.center.dy);
+      expect(long.left, greaterThan(short.right));
       // the four forms people reach for come first
       expect(find.byType(ChoiceChip), findsNWidgets(4));
       await tester.ensureVisible(find.text('MAD（おすすめ）'));
