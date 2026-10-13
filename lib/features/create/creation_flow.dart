@@ -8,6 +8,7 @@ import '../../design/rolling_tab_bar.dart';
 import '../../design/tokens.dart';
 import '../../domain/arrangement.dart';
 import '../../domain/clip_asset.dart';
+import '../../domain/custom_song.dart';
 import '../../domain/melody_template.dart';
 import '../../domain/project.dart';
 import '../../domain/video_recipe.dart';
@@ -18,6 +19,7 @@ import '../sharing/shared_folders_screen.dart';
 import '../../sharing/shared_folder_service.dart';
 import '../library/library_screen.dart';
 import '../settings/settings_screen.dart';
+import '../songs/song_library.dart';
 import '../songs/songs_screen.dart';
 import '../../storage/folder_repository.dart';
 import '../../storage/project_repository.dart';
@@ -48,6 +50,7 @@ class CreationFlow extends StatefulWidget {
     this.onInvitationOpened,
     this.startAtHome = false,
     this.onOwnerName,
+    this.songLibrary,
     super.key,
   });
 
@@ -66,6 +69,9 @@ class CreationFlow extends StatefulWidget {
 
   /// Saves the creator name from Settings; returns the name as stored.
   final Future<String?> Function(String name)? onOwnerName;
+
+  /// Songs from outside the app (MIDI files, the catalogue), for the 曲 tab.
+  final SongLibrary? songLibrary;
 
   @override
   State<CreationFlow> createState() => _CreationFlowState();
@@ -475,12 +481,19 @@ class _CreationFlowState extends State<CreationFlow> {
 
   /// "この曲でつくる" from the 曲 tab: the song is chosen first; with sounds
   /// already collected the settings open, otherwise the camera does.
-  Future<void> _makeWithSong(MelodyTemplate melody) async {
+  Future<void> _makeWithSong(MelodyTemplate melody) =>
+      _makeWith(() => widget.controller.presetMelody(melody));
+
+  /// The same for a song from outside the app.
+  Future<void> _makeWithCustomSong(CustomSong song) =>
+      _makeWith(() => widget.controller.presetSong(song));
+
+  Future<void> _makeWith(VoidCallback choose) async {
     final controller = widget.controller;
     if (controller.state.phase == CreationPhase.completed) {
       controller.startNew();
     }
-    controller.presetMelody(melody);
+    choose();
     if (controller.state.clips.isEmpty) {
       await _captureFromBar();
       return;
@@ -576,6 +589,8 @@ class _CreationFlowState extends State<CreationFlow> {
               state.clips.isEmpty || state.phase == CreationPhase.completed
               ? null
               : state.melody,
+          library: widget.songLibrary,
+          onMakeWithSong: (song) => unawaited(_makeWithCustomSong(song)),
           mine: LibraryScreen(
             projects: widget.controller.projects,
             assets: widget.controller.assets,

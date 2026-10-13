@@ -619,6 +619,31 @@ final class SharedFolderService {
     return decodeSharedJson(await _collect(r.body, 1024 * 1024));
   }
 
+  /// A JSON call for a service that lives on the same server and uses the
+  /// same account as the shared folders (the song catalogue). With [account]
+  /// the logged-in session is sent, and `login_required` is thrown when there
+  /// is none; `server_missing` when no server is set up at all.
+  Future<Map<String, dynamic>> serverJson(
+    String method,
+    String path, {
+    Map<String, dynamic>? data,
+    bool account = false,
+  }) async {
+    final server = await configuredServer();
+    if (server == null) {
+      throw const SharedFolderException(
+        '共有サービスがまだ設定されていません。',
+        code: 'server_missing',
+      );
+    }
+    return _json(
+      method,
+      server.resolve(path),
+      session: account ? await _requireSession(server) : null,
+      data: data,
+    );
+  }
+
   Uri _url(SharedFolderMembership m, String suffix) =>
       m.server.resolve('/v1/folders/${m.folderId}$suffix');
   Future<SharedFolder> refresh(String folderId) async {

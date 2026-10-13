@@ -12,9 +12,12 @@ import '../domain/project.dart';
 import '../features/create/creation_controller.dart';
 import '../features/create/creation_flow.dart';
 import '../features/onboarding/onboarding_screen.dart';
+import '../features/songs/song_library.dart';
+import '../media/midi_file_picker.dart';
 import '../storage/profile_store.dart';
 import '../storage/project_repository.dart';
 import '../sharing/shared_folder_service.dart';
+import '../sharing/song_catalog.dart';
 import 'app_dependencies.dart';
 
 typedef DependenciesLoader = Future<AppDependencies> Function();
@@ -64,6 +67,7 @@ class _CreationHost extends StatefulWidget {
 class _CreationHostState extends State<_CreationHost> {
   AppDependencies? _dependencies;
   CreationController? _controller;
+  SongLibrary? _songLibrary;
   bool _busy = true;
   bool _showOnboarding = true;
   bool _startWithCapture = false;
@@ -132,9 +136,24 @@ class _CreationHostState extends State<_CreationHost> {
         dependencies.close();
         return;
       }
+      final songs = dependencies.songs;
+      final sharing = dependencies.sharedFolders;
+      final songLibrary = songs == null
+          ? null
+          : SongLibrary(
+              songs: songs,
+              catalog: sharing == null ? null : ServerSongCatalog(sharing),
+              picker: const PlatformMidiFilePicker(),
+              signIn: sharing == null
+                  ? null
+                  : () async {
+                      await sharing.signIn();
+                    },
+            );
       setState(() {
         _dependencies = dependencies;
         _controller = controller;
+        _songLibrary = songLibrary;
         _showOnboarding = resume && projects.isEmpty;
         _startWithCapture = !resume;
         _startInLibrary = resume && project == null && projects.isNotEmpty;
@@ -231,6 +250,7 @@ class _CreationHostState extends State<_CreationHost> {
   @override
   void dispose() {
     unawaited(_invitationSubscription?.cancel());
+    _songLibrary?.dispose();
     _controller?.dispose();
     _dependencies?.close();
     super.dispose();
@@ -256,6 +276,7 @@ class _CreationHostState extends State<_CreationHost> {
         },
         startAtHome: true,
         onOwnerName: _rename,
+        songLibrary: _songLibrary,
       );
     }
     return OnboardingScreen(

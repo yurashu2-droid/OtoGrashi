@@ -8,6 +8,7 @@ import '../storage/folder_repository.dart';
 import '../storage/profile_store.dart';
 import '../storage/project_database.dart';
 import '../storage/project_repository.dart';
+import '../storage/song_repository.dart';
 import '../sharing/shared_folder_service.dart';
 
 final class AppDependencies {
@@ -21,6 +22,7 @@ final class AppDependencies {
     this.draft,
     this.folders,
     this.sharedFolders,
+    this.songs,
   });
 
   final ProjectDatabase database;
@@ -32,6 +34,7 @@ final class AppDependencies {
   final DraftPointer? draft;
   final FolderRepository? folders;
   final SharedFolderService? sharedFolders;
+  final SongRepository? songs;
 
   static Future<AppDependencies> bootstrap() async {
     final media = PlatformMediaGateway();
@@ -51,6 +54,7 @@ final class AppDependencies {
       draft: DraftPointer(File('$root/current_project.txt')),
       folders: SqliteFolderRepository(database),
       sharedFolders: SharedFolderService(database: database, assets: assets),
+      songs: SqliteSongRepository(database),
     );
   }
 
