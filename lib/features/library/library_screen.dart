@@ -853,8 +853,12 @@ final class _StatusPill extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       child: Text(
         text,
-        style: const TextStyle(
-          color: AppTokens.ink,
+        style: TextStyle(
+          // the 完成 pill is ink: its label has to turn white to be read
+          color:
+              ThemeData.estimateBrightnessForColor(color) == Brightness.dark
+              ? Colors.white
+              : AppTokens.ink,
           fontWeight: FontWeight.w800,
           fontSize: 12,
         ),

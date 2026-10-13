@@ -56,7 +56,7 @@ final class _SettingsScreenState extends State<SettingsScreen> {
               subtitle: Text(
                 _name == null
                     ? 'まだ決めていません（動画には「わたしの日常」と出ます）'
-                    : '動画の最初に「$_nameの日常」と出ます',
+                    : '「$_nameの日常」と動画に出ます',
               ),
               trailing: const Icon(Icons.edit_rounded, size: 20),
               onTap: _editName,

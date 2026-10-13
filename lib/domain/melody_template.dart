@@ -84,7 +84,7 @@ extension MelodyTemplateDetails on MelodyTemplate {
     MelodyTemplate.none => '撮った音からリズムをつくる',
     MelodyTemplate.hop => '声や生活音が、はねるメロディに変わる',
     MelodyTemplate.wink => '小刻みな音と反転カットで、MAD風に',
-    MelodyTemplate.answer => '友達の声を残して、音でかけあい',
+    MelodyTemplate.answer => '友だちの声を残して、音でかけあい',
     MelodyTemplate.midiScore => '旋律・低音・ピアノの3つのパートを、撮った音で演奏',
     MelodyTemplate.odeToJoy => 'ベートーヴェン。みんな知ってるあのメロディ',
     MelodyTemplate.twinkle => 'フランスの古いうた。やさしく、ゆっくり',

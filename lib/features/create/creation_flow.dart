@@ -1366,7 +1366,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
           initialValue: draft,
           autofocus: true,
           maxLength: 40,
-          decoration: const InputDecoration(hintText: '例：友達のわっ！'),
+          decoration: const InputDecoration(hintText: '例：友だちのわっ！'),
           onChanged: (value) => draft = value,
           onFieldSubmitted: (_) => Navigator.pop(dialogContext, draft),
         ),

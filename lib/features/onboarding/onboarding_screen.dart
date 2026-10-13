@@ -52,7 +52,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               child: Image.asset(
                 'assets/art/onboarding-moments-v1.webp',
                 fit: BoxFit.cover,
-                semanticLabel: '友達の笑顔、キーボード、コップの動画が重なるイメージ',
+                semanticLabel: '友だちの笑顔、キーボード、コップの動画が重なるイメージ',
               ),
             ),
           ),
@@ -63,7 +63,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
           const SizedBox(height: 14),
           Text(
-            '友達の「わっ！」も、タイピングの音も。旅行やいつメンのフォルダに音をあつめて、そこから1曲に。',
+            '友だちの「わっ！」も、タイピングの音も。旅行やいつメンのフォルダに音をあつめて、そこから1曲に。',
             style: Theme.of(context).textTheme.bodyLarge,
           ),
           const SizedBox(height: 28),
