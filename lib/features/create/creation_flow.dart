@@ -545,6 +545,18 @@ class _CreationFlowState extends State<CreationFlow> {
       );
   }
 
+  /// Deletes a sound from the phone and from every folder, unless a song
+  /// (the one in progress included) still uses it. Completes with the number
+  /// of songs using it: 0 when the sound is gone.
+  Future<int> _deleteSound(ClipAsset asset) async {
+    final assets = widget.controller.assets;
+    final songs = (await assets.referencingProjectIds(asset.id)).length;
+    if (songs > 0) return songs;
+    await widget.folders?.removeEverywhere(asset.id);
+    await assets.deleteUnreferenced(asset.id);
+    return await assets.load(asset.id) == null ? 0 : 1;
+  }
+
   /// The song in progress was deleted in the library: let go of it, or every
   /// later recording would try to join a project that is gone.
   void _projectDeleted(Project project) {
@@ -602,6 +614,7 @@ class _CreationFlowState extends State<CreationFlow> {
             onProjectSelected: _openProject,
             onProjectDeleted: _projectDeleted,
             onAssetSelected: _reuseAsset,
+            onDeleteAsset: _deleteSound,
           ),
         ),
         _ => _creationContent(state),

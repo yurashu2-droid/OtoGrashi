@@ -25,6 +25,7 @@ final class LibraryScreen extends StatefulWidget {
     this.onProjectSelected,
     this.onProjectDeleted,
     this.onAssetSelected,
+    this.onDeleteAsset,
     this.initialTabIndex = 0,
     this.onSettings,
     this.embedded = false,
@@ -41,6 +42,11 @@ final class LibraryScreen extends StatefulWidget {
   /// A song was deleted here; whoever still holds it has to let go of it.
   final ValueChanged<Project>? onProjectDeleted;
   final ValueChanged<ClipAsset>? onAssetSelected;
+
+  /// Deletes a sound from the phone and every folder; completes with how many
+  /// songs still use it (0 when it is gone). Without it the stock offers no
+  /// delete, and a sound that is in no folder could never be removed.
+  final Future<int> Function(ClipAsset asset)? onDeleteAsset;
   final int initialTabIndex;
   final VoidCallback? onSettings;
 
@@ -328,6 +334,12 @@ class _LibraryScreenState extends State<LibraryScreen>
           Navigator.of(sheetContext).pop();
           _renameAsset(context, asset, index);
         },
+        onDelete: widget.onDeleteAsset == null
+            ? null
+            : () {
+                Navigator.of(sheetContext).pop();
+                unawaited(_deleteAsset(context, asset, index));
+              },
         onReuse: widget.onAssetSelected == null
             ? null
             : () {
@@ -380,6 +392,65 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
+  /// The stock is the one place every sound appears, so it is also where a
+  /// sound that is in no folder can be deleted. A sound a song still uses is
+  /// never deleted, and the person is told why.
+  Future<void> _deleteAsset(
+    BuildContext context,
+    ClipAsset asset,
+    int index,
+  ) async {
+    final delete = widget.onDeleteAsset;
+    if (delete == null) return;
+    final songs = (await widget.assets.referencingProjectIds(asset.id)).length;
+    if (!context.mounted) return;
+    if (songs > 0) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('この音はまだ消せません'),
+          content: Text(
+            'つくりかけの曲をふくめて、$songs曲で使われています。'
+            '曲からこの音を外すか、その曲を削除すると、消せるようになります。',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('わかった'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('「${_soundName(asset, index)}」を削除しますか？'),
+        content: const Text('すべてのフォルダから消えて、もとに戻せなくなります。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('削除する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final left = await delete(asset);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(left == 0 ? '音を削除しました' : 'この音は曲で使われているので、消せませんでした'),
+      ),
+    );
+    await _reload();
+  }
+
   Future<void> _deleteProject(BuildContext context, Project project) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -412,8 +483,17 @@ class _LibraryScreenState extends State<LibraryScreen>
             ? SnackBarAction(
                 label: '取り消す',
                 onPressed: () async {
-                  await (widget.projects as SqliteProjectRepository)
-                      .restoreProject(project.id);
+                  try {
+                    await (widget.projects as SqliteProjectRepository)
+                        .restoreProject(project.id);
+                  } catch (_) {
+                    // one of its sounds was deleted in the meantime
+                    messenger.showSnackBar(
+                      const SnackBar(
+                        content: Text('使っていた音が削除されたため、元に戻せませんでした'),
+                      ),
+                    );
+                  }
                   await _reload();
                 },
               )
@@ -1494,12 +1574,14 @@ final class _AssetPreviewSheet extends StatefulWidget {
     required this.presentation,
     required this.onRename,
     required this.onReuse,
+    this.onDelete,
   });
   final ClipAsset asset;
   final String title;
   final MediaPresentationGateway presentation;
   final VoidCallback onRename;
   final VoidCallback? onReuse;
+  final VoidCallback? onDelete;
 
   @override
   State<_AssetPreviewSheet> createState() => _AssetPreviewSheetState();
@@ -1549,6 +1631,12 @@ class _AssetPreviewSheetState extends State<_AssetPreviewSheet> {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
+                if (widget.onDelete != null)
+                  IconButton(
+                    onPressed: widget.onDelete,
+                    tooltip: 'この音を削除',
+                    icon: const Icon(Icons.delete_outline_rounded),
+                  ),
                 IconButton(
                   onPressed: () => Navigator.pop(context),
                   tooltip: '閉じる',

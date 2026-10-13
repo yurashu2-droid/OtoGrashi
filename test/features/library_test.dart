@@ -178,6 +178,55 @@ void main() {
     expect(reused?.label, '雨の音');
   });
 
+  testWidgets('the stock deletes a sound only when no song uses it', (
+    tester,
+  ) async {
+    final assets = _LibraryAssets()..asset = _asset();
+    final deleted = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LibraryScreen(
+          projects: _LibraryProjects(),
+          assets: assets,
+          presentation: _PreviewPresentation(),
+          initialTabIndex: 1,
+          onCreate: () {},
+          onDeleteAsset: (asset) async {
+            deleted.add(asset.id);
+            assets.asset = null;
+            return 0;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // while a song uses it, the sound stays and the person is told why
+    assets.usedBy = const ['song-1', 'song-2'];
+    await tester.tap(find.text('聴く'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('この音を削除'));
+    await tester.pumpAndSettle();
+    expect(find.text('この音はまだ消せません'), findsOneWidget);
+    expect(find.textContaining('2曲で使われています'), findsOneWidget);
+    await tester.tap(find.text('わかった'));
+    await tester.pumpAndSettle();
+    expect(deleted, isEmpty);
+
+    // unused: asked once, then gone from the list
+    assets.usedBy = const [];
+    await tester.tap(find.text('聴く'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('この音を削除'));
+    await tester.pumpAndSettle();
+    expect(find.text('「カタカタ」を削除しますか？'), findsOneWidget);
+    await tester.tap(find.text('削除する'));
+    await tester.pumpAndSettle();
+    expect(deleted, hasLength(1));
+    expect(find.text('音を削除しました'), findsOneWidget);
+    expect(find.text('カタカタ'), findsNothing);
+  });
+
   testWidgets('the stock shows the newest sound first, not the first by name', (
     tester,
   ) async {
@@ -509,6 +558,9 @@ final class _LibraryAssets implements AssetRepository {
   ClipAsset? newer;
   int referenceLoads = 0;
 
+  /// The songs that use the sound.
+  List<String> usedBy = const [];
+
   @override
   Future<ClipAsset> rename(String assetId, String label) async =>
       asset = asset!.withLabel(label);
@@ -535,7 +587,7 @@ final class _LibraryAssets implements AssetRepository {
   @override
   Future<List<String>> referencingProjectIds(String assetId) async {
     referenceLoads++;
-    return const [];
+    return usedBy;
   }
 
   @override

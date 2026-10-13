@@ -272,7 +272,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         'みんなの音',
                         style: TextStyle(fontWeight: FontWeight.w800),
                       ),
-                      subtitle: const Text('友だちとひとつのフォルダに集めよう'),
+                      subtitle: const Text('友だちと音を集めるフォルダ'),
                       trailing: const Icon(Icons.chevron_right_rounded),
                       onTap: widget.onOpenSharedFolders,
                     ),
