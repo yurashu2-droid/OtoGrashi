@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:otogurashi/domain/arrangement.dart';
 import 'package:otogurashi/domain/arrangement_engine.dart';
@@ -84,6 +86,60 @@ void main() {
     }
   });
 
+  test('whatever score arrives, every form can still make a song', () {
+    // a posted song is only as careful as the client that posted it
+    final random = math.Random(20261014);
+    List<List<int>> lane(int notes, int low, int high, int longest) => [
+      for (var i = 0; i < notes; i++)
+        [
+          random.nextInt(scoreTicks + 2000) - 500,
+          random.nextInt(longest) - 20,
+          low + random.nextInt(high - low + 1),
+        ],
+    ];
+    // one voice, the usual mix, and a full set that includes plain noises
+    final casts = [
+      [_clip('solo', 62, SuggestedRole.sustain)],
+      clips,
+      [
+        ...clips,
+        _clip('clap', null, SuggestedRole.transient),
+        _clip('hiss', null, SuggestedRole.texture),
+      ],
+    ];
+    for (var round = 0; round < 60; round++) {
+      final score = [
+        lane(1 + random.nextInt(round.isEven ? 60 : 700), 0, 127, 2400),
+        if (random.nextInt(4) > 0) lane(random.nextInt(400), 0, 127, 4000),
+        if (random.nextInt(4) > 0) lane(random.nextInt(900), 0, 127, 4000),
+      ];
+      if (fitScore(score).first.isEmpty) continue;
+      for (final (mode, seconds) in const [
+        (PerformanceMode.natural, 15),
+        (PerformanceMode.mad, 15),
+        (PerformanceMode.mad, 30),
+        (PerformanceMode.collect, 30),
+        (PerformanceMode.window, 30),
+        (PerformanceMode.vinyl, 30),
+      ]) {
+        final song = arrange(
+          clips: casts[round % casts.length],
+          style: ArrangementStyle.values[round % 3],
+          melodyTemplate: MelodyTemplate.imported,
+          performanceMode: mode,
+          durationSeconds: seconds,
+          seed: round,
+          score: score,
+        );
+        expect(
+          song.events.length,
+          lessThanOrEqualTo(Arrangement.maxEvents),
+          reason: 'round $round ${mode.name} $seconds',
+        );
+      }
+    }
+  });
+
   test('a score from outside is fitted to eight bars and three lanes', () {
     final fitted = fitScore([
       [
@@ -106,9 +162,31 @@ void main() {
       [480, 480, 64],
       [15000, 360, 67],
     ]);
-    // only the chords lane limits how many notes sound together
-    expect(fitted[1], hasLength(6));
+    // the bass plays one note at a time: of six that start together, the lowest
+    expect(fitted[1], [
+      [0, 1920, 36],
+    ]);
     expect(fitted[2], isEmpty);
+
+    // the melody too: the highest of a chord, and a note stops for the next
+    expect(
+      fitScore([
+        [
+          [0, 480, 60],
+          [0, 480, 67],
+          [480, 960, 62],
+          [960, 480, 72],
+          [1440, 10, 60], // too short to place
+          [1440, 480, 108], // five octaves above the rest
+        ],
+      ])[0],
+      [
+        [0, 480, 67],
+        [480, 480, 62],
+        [960, 480, 72],
+        [1440, 480, 96],
+      ],
+    );
 
     final chords = fitScore([
       [
@@ -127,7 +205,7 @@ void main() {
         for (var i = 0; i < 400; i++) [i * 30, 30, 60],
       ],
     ]);
-    expect(long[0], hasLength(128));
+    expect(long[0], hasLength(96));
 
     // the bundled songs pass through unchanged
     for (final score in publicDomainScores.values) {

@@ -161,13 +161,20 @@ extension MelodyTemplateDetails on MelodyTemplate {
 /// One 15-second song is eight 4/4 bars: 32 beats at 480 ticks.
 const scoreTicks = 15360;
 
-/// Makes a score from outside the app safe for the arrangers: exactly three
-/// lanes (melody, bass, chords), notes inside the eight bars and inside the
-/// MIDI range, in time order (notes that start together keep their order),
-/// and few enough that a song stays within its event budget. Chords keep at
-/// most four notes per moment.
+/// Makes a score from outside the app safe for the arrangers, whoever made
+/// it: exactly three lanes (melody, bass, chords); notes inside the eight
+/// bars and the MIDI range, at least [_minNoteTicks] long, in time order;
+/// the melody and the bass one note at a time (of notes that start together
+/// the melody keeps the highest and the bass the lowest, and a note stops
+/// where the next one starts); at most four chord notes per moment; each
+/// lane within five octaves; and few enough notes that a song stays within
+/// its event budget. A score that already keeps these rules, like the
+/// bundled ones, comes back unchanged.
 List<List<List<int>>> fitScore(List<List<List<int>>> score) {
-  const limits = [128, 96, 144];
+  // a 30-second song plays the eight bars twice and must stay under
+  // Arrangement.maxEvents in every form; the bundled songs use up to 76, 32
+  // and 52 notes
+  const limits = [96, 48, 80];
   final fitted = <List<List<int>>>[];
   for (var lane = 0; lane < 3; lane++) {
     final source = lane < score.length ? score[lane] : const <List<int>>[];
@@ -176,7 +183,6 @@ List<List<List<int>>> fitScore(List<List<List<int>>> score) {
         if (source[i].length >= 3 &&
             source[i][0] >= 0 &&
             source[i][0] < scoreTicks &&
-            source[i][1] > 0 &&
             source[i][2] >= 0 &&
             source[i][2] <= 127)
           i,
@@ -184,21 +190,50 @@ List<List<List<int>>> fitScore(List<List<List<int>>> score) {
     final notes = <List<int>>[];
     var together = 0;
     for (final i in order) {
-      final start = source[i][0];
-      together = notes.isNotEmpty && notes.last[0] == start ? together + 1 : 1;
-      if (lane == 2 && together > 4) continue;
-      if (notes.length == limits[lane]) break;
-      final length = source[i][1];
-      notes.add([
-        start,
-        start + length > scoreTicks ? scoreTicks - start : length,
-        source[i][2],
-      ]);
+      final start = source[i][0], pitch = source[i][2];
+      final length = start + source[i][1] > scoreTicks
+          ? scoreTicks - start
+          : source[i][1];
+      if (length < _minNoteTicks) continue;
+      if (lane == 2) {
+        together = notes.isNotEmpty && notes.last[0] == start ? together + 1 : 1;
+        if (together > 4) continue;
+      } else if (notes.isNotEmpty) {
+        final last = notes.last;
+        if (last[0] == start) {
+          if (lane == 0 ? pitch > last[2] : pitch < last[2]) {
+            notes[notes.length - 1] = [start, length, pitch];
+          }
+          continue;
+        }
+        if (last[0] + last[1] > start) {
+          last[1] = start - last[0];
+          if (last[1] < _minNoteTicks) notes.removeLast();
+        }
+      }
+      notes.add([start, length, pitch]);
+    }
+    if (notes.length > limits[lane]) notes.length = limits[lane];
+    if (notes.isNotEmpty) {
+      // far outliers come in by octaves, so one octave shift fits the lane
+      final pitches = [for (final note in notes) note[2]]..sort();
+      final middle = pitches[pitches.length ~/ 2];
+      for (final note in notes) {
+        while (note[2] > middle + 30) {
+          note[2] -= 12;
+        }
+        while (note[2] < middle - 30) {
+          note[2] += 12;
+        }
+      }
     }
     fitted.add(notes);
   }
   return fitted;
 }
+
+/// The arrangers cannot place a shorter note (1/32 of a beat).
+const _minNoteTicks = 15;
 
 /// The same clip may fill two roles when the user records only one long sound.
 /// Missing roles are kept null rather than synthesizing an unrelated source.
