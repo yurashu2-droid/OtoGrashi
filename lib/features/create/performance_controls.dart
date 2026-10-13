@@ -4,7 +4,7 @@ import '../../domain/arrangement.dart';
 import '../../design/tokens.dart';
 import '../../media/depth_model.dart';
 
-class PerformanceControls extends StatelessWidget {
+class PerformanceControls extends StatefulWidget {
   const PerformanceControls({
     super.key,
     required this.mode,
@@ -16,6 +16,14 @@ class PerformanceControls extends StatelessWidget {
   final int seconds;
   final ValueChanged<PerformanceMode> onMode;
   final ValueChanged<int> onDuration;
+
+  /// The forms offered up front; the rest wait behind ほかのつくり方.
+  static const featured = [
+    PerformanceMode.mad,
+    PerformanceMode.collect,
+    PerformanceMode.window,
+    PerformanceMode.natural,
+  ];
   static const labels = {
     PerformanceMode.mad: (
       'MAD（おすすめ）',
@@ -68,6 +76,26 @@ class PerformanceControls extends StatelessWidget {
       'ビート→ベース→メロディ。音と動画を積み上げる。',
     ),
   };
+
+  @override
+  State<PerformanceControls> createState() => _PerformanceControlsState();
+}
+
+class _PerformanceControlsState extends State<PerformanceControls> {
+  // a song already made in one of the other forms shows them all
+  late var _showAll = !PerformanceControls.featured.contains(widget.mode);
+
+  PerformanceMode get mode => widget.mode;
+  int get seconds => widget.seconds;
+  ValueChanged<PerformanceMode> get onMode => widget.onMode;
+  ValueChanged<int> get onDuration => widget.onDuration;
+
+  @override
+  void didUpdateWidget(PerformanceControls oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!PerformanceControls.featured.contains(widget.mode)) _showAll = true;
+  }
+
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 16),
@@ -106,7 +134,12 @@ class PerformanceControls extends StatelessWidget {
           clipBehavior: Clip.none,
           child: Row(
             children: [
-              for (final option in PerformanceMode.values)
+              for (final option in [
+                ...PerformanceControls.featured,
+                if (_showAll)
+                  for (final other in PerformanceMode.values)
+                    if (!PerformanceControls.featured.contains(other)) other,
+              ])
                 if (option == PerformanceMode.window)
                   Padding(
                     padding: const EdgeInsets.only(right: 6),
@@ -116,33 +149,53 @@ class PerformanceControls extends StatelessWidget {
                     ),
                   )
                 else
-                Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: ChoiceChip(
-                    label: Text(labels[option]!.$1),
-                    avatar: Icon(
-                      labels[option]!.$2,
-                      size: 17,
-                      color: mode == option ? Colors.white : AppTokens.ink,
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text(PerformanceControls.labels[option]!.$1),
+                      avatar: Icon(
+                        PerformanceControls.labels[option]!.$2,
+                        size: 17,
+                        color: mode == option ? Colors.white : AppTokens.ink,
+                      ),
+                      selected: mode == option,
+                      onSelected: (_) => onMode(option),
+                      shape: const StadiumBorder(),
+                      side: BorderSide.none,
+                      backgroundColor: AppTokens.tile,
+                      selectedColor: AppTokens.ink,
+                      showCheckmark: false,
+                      labelStyle: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: mode == option ? Colors.white : AppTokens.ink,
+                      ),
                     ),
-                    selected: mode == option,
-                    onSelected: (_) => onMode(option),
-                    shape: const StadiumBorder(),
-                    side: BorderSide.none,
-                    backgroundColor: AppTokens.tile,
-                    selectedColor: AppTokens.ink,
-                    showCheckmark: false,
-                    labelStyle: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      color: mode == option ? Colors.white : AppTokens.ink,
-                    ),
+                  ),
+              if (!_showAll)
+                ActionChip(
+                  label: const Text('ほかのつくり方'),
+                  avatar: const Icon(
+                    Icons.add_rounded,
+                    size: 17,
+                    color: AppTokens.mutedInk,
+                  ),
+                  onPressed: () => setState(() => _showAll = true),
+                  shape: const StadiumBorder(),
+                  side: const BorderSide(color: AppTokens.hairline),
+                  backgroundColor: Colors.transparent,
+                  labelStyle: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: AppTokens.mutedInk,
                   ),
                 ),
             ],
           ),
         ),
         const SizedBox(height: 6),
-        Text(labels[mode]!.$3, style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          PerformanceControls.labels[mode]!.$3,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
       ],
     ),
   );

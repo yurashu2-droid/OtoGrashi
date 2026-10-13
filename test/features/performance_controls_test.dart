@@ -29,13 +29,20 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(ChoiceChip), findsNWidgets(10));
+      // the four forms people reach for come first
+      expect(find.byType(ChoiceChip), findsNWidgets(4));
       await tester.ensureVisible(find.text('MAD（おすすめ）'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('MAD（おすすめ）'));
       await tester.pumpAndSettle();
       expect(mode, PerformanceMode.mad);
-      // the modes slide sideways in one row
+      // the rest open from the end of the same sliding row
+      await tester.ensureVisible(find.text('ほかのつくり方'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('ほかのつくり方'));
+      await tester.pumpAndSettle();
+      expect(find.text('ほかのつくり方'), findsNothing);
+      expect(find.byType(ChoiceChip), findsNWidgets(10));
       await tester.ensureVisible(find.text('声レコード'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('声レコード'));

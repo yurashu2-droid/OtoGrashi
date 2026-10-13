@@ -1,42 +1,37 @@
 import 'package:flutter/material.dart';
 
 import '../../design/tokens.dart';
+import '../../domain/melody_template.dart';
 
-/// The 曲 tab: your own songs (the real library), plus 友達 and みんな feeds,
-/// which are sample screens until sharing exists. Melody templates live
-/// here ("この曲でつくる") rather than in the menu.
+/// The 曲 tab: your own songs (the real library), the way into the folders
+/// shared with friends, and the songs a new piece can be made with.
 final class SongsScreen extends StatefulWidget {
   const SongsScreen({
     required this.mine,
     this.onSettings,
     this.onMakeWithTemplate,
+    this.onOpenSharedFolders,
+    this.selectedMelody,
     super.key,
   });
 
   final Widget mine;
   final VoidCallback? onSettings;
-  final VoidCallback? onMakeWithTemplate;
+
+  /// "この曲でつくる": the song is chosen before the sounds are.
+  final ValueChanged<MelodyTemplate>? onMakeWithTemplate;
+  final VoidCallback? onOpenSharedFolders;
+
+  /// The song the piece in progress is set to, if there is one.
+  final MelodyTemplate? selectedMelody;
 
   @override
   State<SongsScreen> createState() => _SongsScreenState();
 }
 
 class _SongsScreenState extends State<SongsScreen> {
-  static const _segments = ['じぶん', '友達', 'みんな'];
+  static const _segments = ['じぶん', '友達', '曲をえらぶ'];
   var _segment = 0;
-
-  void _make() {
-    final make = widget.onMakeWithTemplate;
-    if (make != null) {
-      make();
-      return;
-    }
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(content: Text('テンプレートからつくるのは、もうすぐ使えます')),
-      );
-  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -78,8 +73,11 @@ class _SongsScreenState extends State<SongsScreen> {
           Expanded(
             child: switch (_segment) {
               0 => widget.mine,
-              1 => _FriendsFeed(onMake: _make),
-              _ => _WorldFeed(onMake: _make),
+              1 => _FriendsEntry(onOpen: widget.onOpenSharedFolders),
+              _ => _SongChoices(
+                onMake: widget.onMakeWithTemplate,
+                selected: widget.selectedMelody,
+              ),
             },
           ),
         ],
@@ -162,301 +160,263 @@ final class _Segmented extends StatelessWidget {
   );
 }
 
-final class _Post {
-  const _Post(this.who, this.title, this.template, this.tones, this.likes);
-  final String who;
-  final String title;
-  final String template;
-  final List<Color> tones;
-  final int likes;
-}
+/// 友達: sounds are shared through folders, so this leads to them.
+final class _FriendsEntry extends StatelessWidget {
+  const _FriendsEntry({required this.onOpen});
 
-const _friendPosts = [
-  _Post('みお', '沖縄の波でつくった', 'はずむ坂道', [
-    Color(0xFF8FCFE0),
-    Color(0xFFF6D28B),
-    Color(0xFF9ED6B5),
-  ], 12),
-  _Post('けんた', 'ファミレスのベルでMAD', 'ライラック風', [
-    Color(0xFFC9B8F5),
-    Color(0xFFF5B3CF),
-    Color(0xFFF5DDB3),
-  ], 8),
-];
+  final VoidCallback? onOpen;
 
-const _worldPosts = [
-  _Post('saku', '朝の台所だけで1曲', 'しずかな朝', [
-    Color(0xFFF5DDB3),
-    Color(0xFFB8D8F5),
-    Color(0xFFF2B6A6),
-  ], 214),
-  _Post('nono', '猫の「にゃ」を歌わせた', 'はずむ坂道', [
-    Color(0xFFF5B3CF),
-    Color(0xFFC9B8F5),
-    Color(0xFF9ED6B5),
-  ], 1302),
-  _Post('toki', '駅の発車ベル合唱', 'ライラック風', [
-    Color(0xFFB8D8F5),
-    Color(0xFF8FCFE0),
-    Color(0xFFF6D28B),
-  ], 87),
-  _Post('ria', '部活の掛け声ビート', 'まっすぐビート', [
-    Color(0xFFF2B6A6),
-    Color(0xFFF5DDB3),
-    Color(0xFFC9B8F5),
-  ], 455),
-];
-
-const _templates = [
-  ('はずむ坂道', 'よく使われてる'),
-  ('ライラック風', 'MADむき'),
-  ('しずかな朝', '原声でたのしむ'),
-  ('まっすぐビート', 'あつめる'),
-];
-
-final class _SampleNote extends StatelessWidget {
-  const _SampleNote();
-
-  @override
-  Widget build(BuildContext context) => const Padding(
-    padding: EdgeInsets.only(bottom: 12),
-    child: Text(
-      'サンプル表示です。共有はもうすぐ使えるようになります。',
-      style: TextStyle(fontSize: 12, color: AppTokens.mutedInk),
-    ),
-  );
-}
-
-final class _FriendsFeed extends StatelessWidget {
-  const _FriendsFeed({required this.onMake});
-  final VoidCallback onMake;
+  static const _steps = [
+    (Icons.create_new_folder_outlined, '共有フォルダをつくる'),
+    (Icons.link_rounded, '招待リンクを友だちに送る'),
+    (Icons.graphic_eq_rounded, '集まった音で、1曲つくる'),
+  ];
 
   @override
   Widget build(BuildContext context) => ListView(
     padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
     children: [
-      const _SampleNote(),
-      for (final post in _friendPosts) ...[
-        _PostCard(post: post, onMake: onMake, large: true),
-        const SizedBox(height: 14),
-      ],
-    ],
-  );
-}
-
-final class _WorldFeed extends StatelessWidget {
-  const _WorldFeed({required this.onMake});
-  final VoidCallback onMake;
-
-  @override
-  Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-    children: [
-      const _SampleNote(),
-      const Text(
-        'いま人気の曲テンプレ',
-        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-      ),
-      const SizedBox(height: 10),
-      SizedBox(
-        height: 92,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          itemCount: _templates.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 10),
-          itemBuilder: (context, i) => GestureDetector(
-            onTap: onMake,
-            child: Container(
-              width: 140,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(AppTokens.tileRadius),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      for (var k = 0; k < 4; k++)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 3),
-                          child: Container(
-                            width: 6,
-                            height: 6,
-                            decoration: BoxDecoration(
-                              color: AppTokens.soundColor(i + k),
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                  Text(
-                    _templates[i].$1,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  Text(
-                    _templates[i].$2,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: AppTokens.mutedInk,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+      Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: AppTokens.blushSoft,
+          borderRadius: BorderRadius.circular(AppTokens.tileRadius),
         ),
-      ),
-      const SizedBox(height: 22),
-      const Text(
-        'みんなの曲',
-        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-      ),
-      const SizedBox(height: 10),
-      GridView.count(
-        crossAxisCount: 2,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 0.56,
-        children: [
-          for (final post in _worldPosts)
-            _PostCard(post: post, onMake: onMake, large: false),
-        ],
-      ),
-    ],
-  );
-}
-
-final class _PostCard extends StatelessWidget {
-  const _PostCard({
-    required this.post,
-    required this.onMake,
-    required this.large,
-  });
-
-  final _Post post;
-  final VoidCallback onMake;
-  final bool large;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(10),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(AppTokens.tileRadius),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            CircleAvatar(
-              radius: 12,
-              backgroundColor: post.tones.first,
-              child: Text(
-                post.who.characters.first,
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  color: AppTokens.ink,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                post.who,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-            const Icon(
-              Icons.favorite_rounded,
-              size: 14,
-              color: AppTokens.blush,
-            ),
-            const SizedBox(width: 3),
-            Text(
-              '${post.likes}',
-              style: const TextStyle(
-                fontSize: 11,
-                color: AppTokens.mutedInk,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        AspectRatio(
-          aspectRatio: large ? 4 / 3 : 1,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: Row(
-              children: [
-                for (final tone in post.tones)
-                  Expanded(child: Container(color: tone)),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          post.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 6),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: AppTokens.tile,
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: Text(
-            '♪ ${post.template}',
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-          ),
-        ),
-        if (large) ...[
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 44,
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: onMake,
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(44),
-              ),
-              child: const Text('この曲で、自分の音でつくる'),
-            ),
-          ),
-        ] else ...[
-          const Spacer(),
-          GestureDetector(
-            onTap: onMake,
-            child: const Text(
-              'この曲でつくる →',
+            const Text(
+              '友だちの音も、\nひとつの曲に。',
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 22,
+                height: 1.25,
                 fontWeight: FontWeight.w800,
                 color: AppTokens.ink,
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: 8),
+            const Text(
+              '「みんなの音」は、招待した友だちだけが入れる共有フォルダです。',
+              style: TextStyle(color: AppTokens.ink, height: 1.5),
+            ),
+            const SizedBox(height: 16),
+            for (final (icon, text) in _steps)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  children: [
+                    Icon(icon, size: 20, color: AppTokens.ink),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        text,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: AppTokens.ink,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 6),
+            FilledButton(
+              onPressed: onOpen,
+              child: const Text('みんなの音をひらく'),
+            ),
+            if (onOpen == null) ...[
+              const SizedBox(height: 8),
+              const Text(
+                '共有フォルダは、いまは使えません。',
+                style: TextStyle(fontSize: 12, color: AppTokens.mutedInk),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
+/// Every song the app can play; one tap makes a piece with it.
+final class _SongChoices extends StatelessWidget {
+  const _SongChoices({required this.onMake, required this.selected});
+
+  final ValueChanged<MelodyTemplate>? onMake;
+  final MelodyTemplate? selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final make = onMake;
+    final known = [
+      for (final melody in melodyChoices)
+        if (melody.scoreId != null) melody,
+    ];
+    final patterns = [
+      for (final melody in melodyChoices)
+        if (melody.scoreId == null) melody,
+    ];
+    Widget row(MelodyTemplate melody, int index) => Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: _SongRow(
+        melody: melody,
+        color: AppTokens.soundColor(index),
+        current: melody == selected,
+        onMake: make == null ? null : () => make(melody),
+      ),
+    );
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+      children: [
+        const Text(
+          '曲をえらぶと、撮った音がその曲を演奏します。',
+          style: TextStyle(fontSize: 12, color: AppTokens.mutedInk),
+        ),
+        const SizedBox(height: 14),
+        const _GroupLabel('みんなが知ってる曲'),
+        const SizedBox(height: 10),
+        for (final (index, melody) in known.indexed) row(melody, index),
+        const SizedBox(height: 12),
+        const _GroupLabel('オトグラシのパターン'),
+        const SizedBox(height: 10),
+        for (final (index, melody) in patterns.indexed)
+          row(melody, known.length + index),
       ],
+    );
+  }
+}
+
+final class _GroupLabel extends StatelessWidget {
+  const _GroupLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    text,
+    style: const TextStyle(
+      fontSize: 15,
+      fontWeight: FontWeight.w800,
+      color: AppTokens.ink,
+    ),
+  );
+}
+
+final class _SongRow extends StatelessWidget {
+  const _SongRow({
+    required this.melody,
+    required this.color,
+    required this.current,
+    required this.onMake,
+  });
+
+  final MelodyTemplate melody;
+  final Color color;
+  final bool current;
+  final VoidCallback? onMake;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    enabled: onMake != null,
+    label: '${melody.label}でつくる',
+    child: Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(AppTokens.tileRadius),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onMake,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                child: const Icon(
+                  Icons.music_note_rounded,
+                  size: 20,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            melody.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: AppTokens.ink,
+                            ),
+                          ),
+                        ),
+                        if (current) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppTokens.blushSoft,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: const Text(
+                              'いまの曲',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: AppTokens.ink,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      melody.description,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        height: 1.35,
+                        color: AppTokens.mutedInk,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 9,
+                ),
+                decoration: BoxDecoration(
+                  color: onMake == null ? AppTokens.tile : AppTokens.ink,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  'つくる',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: onMake == null ? AppTokens.mutedInk : Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     ),
   );
 }

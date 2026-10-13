@@ -19,6 +19,7 @@ final class HomeScreen extends StatefulWidget {
     required this.thumbnails,
     required this.assets,
     required this.onOpenCurrent,
+    this.onMakeCurrent,
     this.folders,
     this.onOpenFolder,
     this.onOpenSharedFolders,
@@ -33,6 +34,9 @@ final class HomeScreen extends StatefulWidget {
   final Map<String, Uint8List> thumbnails;
   final AssetRepository assets;
   final VoidCallback onOpenCurrent;
+
+  /// Straight from the song in progress to its song settings.
+  final VoidCallback? onMakeCurrent;
   final FolderRepository? folders;
 
   /// Opens a folder; completes when the person comes back to Home.
@@ -178,6 +182,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       for (final clip in widget.currentClips) _thumb(clip),
                     ],
                     onTap: widget.onOpenCurrent,
+                    onMake: widget.onMakeCurrent,
                   ),
                 ],
                 const SizedBox(height: 20),
@@ -463,82 +468,110 @@ final class _NewFolderCard extends StatelessWidget {
   );
 }
 
-/// The song in progress: its sounds in a row, one tap to carry on.
+/// The song in progress: its sounds in a row, one tap to carry on, and one
+/// to turn them into a song.
 final class _DraftSongCard extends StatelessWidget {
-  const _DraftSongCard({required this.thumbs, required this.onTap});
+  const _DraftSongCard({
+    required this.thumbs,
+    required this.onTap,
+    this.onMake,
+  });
 
   final List<Future<Uint8List>?> thumbs;
   final VoidCallback onTap;
+  final VoidCallback? onMake;
 
   @override
-  Widget build(BuildContext context) => Semantics(
-    button: true,
-    label: 'つくりかけの曲 ${thumbs.length}/6つの音',
-    child: GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(AppTokens.tileRadius),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(AppTokens.tileRadius),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Semantics(
+          button: true,
+          label: 'つくりかけの曲 ${thumbs.length}/6つの音',
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        width: 6,
-                        height: 6,
-                        decoration: const BoxDecoration(
-                          color: AppTokens.blush,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      const Text(
-                        'つくりかけの曲',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                          color: AppTokens.ink,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${thumbs.length}/6つの音',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: AppTokens.mutedInk,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      for (var i = 0; i < thumbs.length; i++)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: SoundThumb(
-                            thumbnail: thumbs[i],
-                            color: AppTokens.soundColor(i),
-                            number: i + 1,
-                            size: 40,
+                      Row(
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: const BoxDecoration(
+                              color: AppTokens.blush,
+                              shape: BoxShape.circle,
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 6),
+                          const Text(
+                            'つくりかけの曲',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                              color: AppTokens.ink,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            '${thumbs.length}/6つの音',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppTokens.mutedInk,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          for (var i = 0; i < thumbs.length; i++)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: SoundThumb(
+                                thumbnail: thumbs[i],
+                                color: AppTokens.soundColor(i),
+                                number: i + 1,
+                                size: 40,
+                              ),
+                            ),
+                        ],
+                      ),
                     ],
                   ),
-                ],
-              ),
+                ),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppTokens.mutedInk,
+                ),
+              ],
             ),
-            const Icon(Icons.chevron_right_rounded, color: AppTokens.mutedInk),
-          ],
+          ),
         ),
-      ),
+        if (onMake != null) ...[
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: FilledButton(
+              onPressed: onMake,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(46),
+              ),
+              child: const Text('この音で曲をつくる  ↗'),
+            ),
+          ),
+        ],
+      ],
     ),
   );
 }

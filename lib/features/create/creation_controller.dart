@@ -175,6 +175,8 @@ final class CreationController extends ChangeNotifier {
     required this.demo,
     Iterator<String>? renderOperationIds,
     this.deferRendering = false,
+    this.defaultPerformanceMode = PerformanceMode.natural,
+    this.defaultMelody = MelodyTemplate.hop,
   }) : _render = RenderController(
          gateway: media,
          operationIds: renderOperationIds,
@@ -196,6 +198,15 @@ final class CreationController extends ChangeNotifier {
   /// When true, song choices are only remembered; a song is made when the
   /// person presses つくる ([createPreview]), never on each choice.
   final bool deferRendering;
+
+  /// What a new song starts with, before the person chooses anything.
+  final PerformanceMode defaultPerformanceMode;
+  final MelodyTemplate defaultMelody;
+
+  CreationState get _blank => CreationState(
+    performanceMode: defaultPerformanceMode,
+    melody: defaultMelody,
+  );
 
   /// Choices are held (not rendered) while the settings screen is in use.
   bool get _holdChoices =>
@@ -242,10 +253,32 @@ final class CreationController extends ChangeNotifier {
     _set(_state.copyWith(choosing: true));
   }
 
+  /// From a finished song back to its settings, keeping the song that was made.
+  void reviseSong() {
+    if (_disposed || _state.phase != CreationPhase.completed) return;
+    _set(_state.copyWith(phase: CreationPhase.ready, choosing: true));
+  }
+
+  /// Chooses the song (from the 曲 tab) before or between makes. Nothing is
+  /// rendered here; with no sounds yet it is simply remembered.
+  void presetMelody(MelodyTemplate melody) {
+    if (_disposed || _state.making || melody == _state.melody) return;
+    if (_state.clips.isEmpty || deferRendering) {
+      _set(
+        _state.copyWith(
+          melody: melody,
+          settingsChanged: _state.preview != null || _state.settingsChanged,
+        ),
+      );
+    } else {
+      selectMelody(melody);
+    }
+  }
+
   /// The creator's name for the cover ("〇〇の日常"); written into every
   /// recipe arranged from now on.
   String? ownerName;
-  CreationState _state = const CreationState();
+  late CreationState _state = _blank;
   final math.Random _random = math.Random();
   Future<void> _mutationTail = Future<void>.value();
   final Map<String, _CachedAnalysis> _analysisCache = {};
@@ -400,6 +433,9 @@ final class CreationController extends ChangeNotifier {
       final loaded = await Future.wait(project.clipIds.map(assets.load));
       if (_disposed || version != _requestVersion) return;
       final clips = loaded.whereType<ClipAsset>().toList(growable: false);
+      // sounds that were never made into a song start from the same choices
+      // as a new one
+      final unmade = !project.arrangement.containsKey('style');
       _render.open(project);
       _set(
         _state.copyWith(
@@ -420,7 +456,7 @@ final class CreationController extends ChangeNotifier {
           ),
           melody: MelodyTemplate.values.firstWhere(
             (value) => value.name == project.arrangement['melodyTemplate'],
-            orElse: () => MelodyTemplate.none,
+            orElse: () => unmade ? defaultMelody : MelodyTemplate.none,
           ),
           layout: VideoLayout.values.firstWhere(
             (value) => value.name == project.videoRecipe['layout'],
@@ -428,7 +464,8 @@ final class CreationController extends ChangeNotifier {
           ),
           performanceMode: PerformanceMode.values.firstWhere(
             (v) => v.name == project.arrangement['performanceMode'],
-            orElse: () => PerformanceMode.natural,
+            orElse: () =>
+                unmade ? defaultPerformanceMode : PerformanceMode.natural,
           ),
           durationSeconds: project.arrangement['totalSamples'] == 1440000
               ? 30
@@ -718,7 +755,7 @@ final class CreationController extends ChangeNotifier {
     _clearAnalysisCache();
     final project = _state.project;
     if (project != null) _render.open(project);
-    _set(const CreationState());
+    _set(_blank);
   }
 
   Future<void> renameProject(String title) => _applyEdit(RenameProject(title));
@@ -1091,6 +1128,13 @@ final class CreationController extends ChangeNotifier {
             value.phase == CreationPhase.failed ||
             value.phase == CreationPhase.collecting)) {
       value = value.copyWith(making: false);
+      // choose first, then make: a song the person asked for goes straight
+      // to its result (save, share), not back to the settings
+      if (deferRendering &&
+          value.phase == CreationPhase.ready &&
+          value.preview != null) {
+        value = value.copyWith(phase: CreationPhase.completed);
+      }
     }
     _state = value;
     notifyListeners();

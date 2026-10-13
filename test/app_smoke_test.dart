@@ -166,6 +166,13 @@ void main() {
     expect(find.text('typing'), findsOneWidget);
     expect(find.text('cup'), findsNothing);
     expect(find.text('自分の音でつくる'), findsNothing);
+
+    // sounds not yet made into a song open on the recommended choices
+    await tester.tap(find.text('この音で曲をつくる  ↗'));
+    await tester.pumpAndSettle();
+    expect(find.text('曲をつくる'), findsOneWidget);
+    expect(find.text('ベートーヴェン。みんな知ってるあのメロディ'), findsOneWidget);
+    expect(find.text('声を1音ずつ歌わせて、連打・スクラッチ・分身で曲にする。'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

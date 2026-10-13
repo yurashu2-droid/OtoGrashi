@@ -793,6 +793,128 @@ void main() {
     expect(controller.state.settingsChanged, isTrue);
   });
 
+  test('a song asked for with つくる opens finished and can be revised', () async {
+    final projects = _MemoryProjects();
+    final media = _FakeMedia();
+    CreationController create() => CreationController(
+      projects: projects,
+      assets: _RelayAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+      deferRendering: true,
+      defaultPerformanceMode: PerformanceMode.mad,
+      defaultMelody: MelodyTemplate.odeToJoy,
+    );
+    final controller = create();
+    addTearDown(controller.dispose);
+    expect(controller.state.performanceMode, PerformanceMode.mad);
+    expect(controller.state.melody, MelodyTemplate.odeToJoy);
+
+    // the song can be chosen before any sound is collected
+    controller.presetMelody(MelodyTemplate.canon);
+    expect(controller.state.melody, MelodyTemplate.canon);
+    expect(projects.createCount, 0);
+    for (final clip in await _FakeDemo().install(_UnusedAssets())) {
+      await controller.addExisting(clip);
+    }
+    expect(controller.state.melody, MelodyTemplate.canon);
+    expect(media.renderRequests, isEmpty);
+
+    // sounds that were never made into a song reopen with the starting choices
+    final reopened = create();
+    addTearDown(reopened.dispose);
+    await reopened.openProject(projects.project!);
+    expect(reopened.state.clips, hasLength(3));
+    expect(reopened.state.performanceMode, PerformanceMode.mad);
+    expect(reopened.state.melody, MelodyTemplate.odeToJoy);
+
+    controller.beginChoosing();
+    await controller.createPreview();
+    for (var i = 0; i < 100 && controller.state.preview == null; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(controller.state.phase, CreationPhase.completed);
+    expect(controller.state.making, isFalse);
+    expect(
+      media.renderRequests.single.arrangement.melodyTemplate,
+      MelodyTemplate.canon,
+    );
+
+    controller.reviseSong();
+    expect(controller.state.phase, CreationPhase.ready);
+    expect(controller.state.choosing, isTrue);
+    expect(controller.state.preview, isNotNull);
+    controller.complete();
+    expect(controller.state.phase, CreationPhase.completed);
+    expect(media.renderRequests, hasLength(1));
+
+    controller.startNew();
+    expect(controller.state.clips, isEmpty);
+    expect(controller.state.performanceMode, PerformanceMode.mad);
+    expect(controller.state.melody, MelodyTemplate.odeToJoy);
+  });
+
+  testWidgets('choosing first leads from つくる to the finished song', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final media = _FakeMedia();
+    final controller = CreationController(
+      projects: _MemoryProjects(),
+      assets: _UnusedAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+      deferRendering: true,
+      defaultPerformanceMode: PerformanceMode.mad,
+      defaultMelody: MelodyTemplate.odeToJoy,
+    );
+    addTearDown(controller.dispose);
+    await controller.startDemo();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildOtogurashiTheme(),
+        home: CreationFlow(controller: controller, media: media),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // the form and length are chosen on the next screen, not in a sheet here
+    expect(find.textContaining('演出と長さ'), findsNothing);
+    await tester.tap(find.text('この音で曲をつくる  ↗'));
+    await tester.pumpAndSettle();
+    expect(find.text('曲をつくる'), findsOneWidget);
+    expect(find.text('ほかのつくり方'), findsOneWidget);
+    expect(media.renderRequests, isEmpty);
+
+    await tester.tap(find.text('♪  つくる'));
+    await tester.pumpAndSettle();
+    expect(find.text('できあがり'), findsOneWidget);
+    expect(controller.state.phase, CreationPhase.completed);
+    expect(
+      media.renderRequests.single.arrangement.melodyTemplate,
+      MelodyTemplate.odeToJoy,
+    );
+
+    await tester.scrollUntilVisible(
+      find.text('つくり直す'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('つくり直す'));
+    await tester.pumpAndSettle();
+    expect(find.text('曲をつくる'), findsOneWidget);
+    expect(find.text('これで完成'), findsOneWidget);
+    expect(controller.state.preview, isNotNull);
+    expect(media.renderRequests, hasLength(1));
+    expect(tester.takeException(), isNull);
+  });
+
   test('melody change during a save keeps the next revision valid', () async {
     final projects = _MemoryProjects();
     final media = _FakeMedia();
@@ -1279,6 +1401,9 @@ void main() {
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     await tester.drag(find.byType(ListView).first, const Offset(0, 1000));
+    await tester.pumpAndSettle();
+    // the songs slide sideways; the app's own patterns come after the tunes
+    await tester.ensureVisible(find.text('はねる'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('はねる'));
     await tester.pumpAndSettle();

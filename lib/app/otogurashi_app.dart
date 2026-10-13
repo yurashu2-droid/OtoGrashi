@@ -6,6 +6,8 @@ import 'package:app_links/app_links.dart';
 
 import 'package:otogurashi/design/tokens.dart';
 
+import '../domain/arrangement.dart';
+import '../domain/melody_template.dart';
 import '../domain/project.dart';
 import '../features/create/creation_controller.dart';
 import '../features/create/creation_flow.dart';
@@ -107,6 +109,10 @@ class _CreationHostState extends State<_CreationHost> {
         ),
         // choose first, then make: nothing renders until つくる is pressed
         deferRendering: true,
+        // a first song should already sound like one: the recommended form,
+        // playing a tune everyone knows
+        defaultPerformanceMode: PerformanceMode.mad,
+        defaultMelody: MelodyTemplate.odeToJoy,
       );
       final projects = resume
           ? await dependencies.projects.list()
@@ -183,6 +189,16 @@ class _CreationHostState extends State<_CreationHost> {
     }
   }
 
+  /// The name edited in Settings; returns it as stored (null when cleared).
+  Future<String?> _rename(String name) async {
+    final profile = _dependencies?.profile;
+    final saved = profile == null
+        ? ProfileStore.clean(name)
+        : await profile.saveName(name);
+    _ownerName = saved;
+    return saved;
+  }
+
   @override
   void dispose() {
     unawaited(_invitationSubscription?.cancel());
@@ -210,6 +226,7 @@ class _CreationHostState extends State<_CreationHost> {
           }
         },
         startAtHome: true,
+        onOwnerName: _rename,
       );
     }
     return OnboardingScreen(

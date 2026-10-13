@@ -47,6 +47,7 @@ class CreationFlow extends StatefulWidget {
     this.pendingInvitation,
     this.onInvitationOpened,
     this.startAtHome = false,
+    this.onOwnerName,
     super.key,
   });
 
@@ -62,6 +63,9 @@ class CreationFlow extends StatefulWidget {
 
   /// Open on Home rather than inside the song in progress.
   final bool startAtHome;
+
+  /// Saves the creator name from Settings; returns the name as stored.
+  final Future<String?> Function(String name)? onOwnerName;
 
   @override
   State<CreationFlow> createState() => _CreationFlowState();
@@ -144,6 +148,8 @@ class _CreationFlowState extends State<CreationFlow> {
   String? _destinationId;
   var _sharingOpen = false;
   String? _openedInvitation;
+  // the finished song that has already played itself once
+  String? _revealedSong;
 
   @override
   void didUpdateWidget(CreationFlow oldWidget) {
@@ -198,7 +204,14 @@ class _CreationFlowState extends State<CreationFlow> {
     _scheduleInvitation();
     if (widget.startWithCapture && !_captureOpened && widget.pendingInvitation == null) {
       _captureOpened = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _openCapture());
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        final before = widget.controller.state.clips.length;
+        await _openCapture();
+        // the first sound is ready to become a song: show it with つくる in reach
+        if (mounted && widget.controller.state.clips.length > before) {
+          setState(() => _folderOpen = true);
+        }
+      });
     }
   }
 
@@ -430,6 +443,25 @@ class _CreationFlowState extends State<CreationFlow> {
     await _openCapture();
   }
 
+  /// "この曲でつくる" from the 曲 tab: the song is chosen first; with sounds
+  /// already collected the settings open, otherwise the camera does.
+  Future<void> _makeWithSong(MelodyTemplate melody) async {
+    final controller = widget.controller;
+    if (controller.state.phase == CreationPhase.completed) {
+      controller.startNew();
+    }
+    controller.presetMelody(melody);
+    if (controller.state.clips.isEmpty) {
+      await _captureFromBar();
+      return;
+    }
+    setState(() {
+      _tabIndex = 0;
+      _folderOpen = true;
+    });
+    controller.beginChoosing();
+  }
+
   Future<void> _reuseAsset(ClipAsset asset) async {
     final before = widget.controller.state.clips.map((clip) => clip.id).toSet();
     await widget.controller.addExisting(asset);
@@ -447,9 +479,19 @@ class _CreationFlowState extends State<CreationFlow> {
     if (projects is! SqliteProjectRepository) {
       return const Scaffold(body: Center(child: Text('設定を読み込めません')));
     }
+    final saveName = widget.onOwnerName;
     return SettingsScreen(
       usageLoader: projects.storageUsage,
       clearCache: projects.clearRegenerableCache,
+      ownerName: widget.controller.ownerName,
+      onOwnerName: saveName == null
+          ? null
+          : (name) async {
+              final saved = await saveName(name);
+              widget.controller.ownerName = saved;
+              if (mounted) setState(() {});
+              return saved;
+            },
     );
   }
 
@@ -461,7 +503,14 @@ class _CreationFlowState extends State<CreationFlow> {
       final content = switch (_tabIndex) {
         1 => SongsScreen(
           onSettings: _openSettings,
-          onMakeWithTemplate: () => unawaited(_captureFromBar()),
+          onMakeWithTemplate: (melody) => unawaited(_makeWithSong(melody)),
+          onOpenSharedFolders: widget.sharedFolders == null
+              ? null
+              : () => unawaited(_openSharedFolders()),
+          selectedMelody:
+              state.clips.isEmpty || state.phase == CreationPhase.completed
+              ? null
+              : state.melody,
           mine: LibraryScreen(
             projects: widget.controller.projects,
             assets: widget.controller.assets,
@@ -503,9 +552,12 @@ class _CreationFlowState extends State<CreationFlow> {
 
   Widget _creationContent(CreationState state) {
     if (state.phase == CreationPhase.completed) {
+      final song = '${state.project?.id}:${state.project?.revision}';
       return _CompletedScreen(
         controller: widget.controller,
         delivery: widget.delivery,
+        reveal: _revealedSong != song,
+        onRevealed: () => _revealedSong = song,
         onOpenLibrary: () => setState(() => _tabIndex = 1),
       );
     }
@@ -536,6 +588,10 @@ class _CreationFlowState extends State<CreationFlow> {
         presentation: widget.controller.presentation,
         ownerName: widget.controller.ownerName,
         onOpenCurrent: () => setState(() => _folderOpen = true),
+        onMakeCurrent: () {
+          setState(() => _folderOpen = true);
+          widget.controller.beginChoosing();
+        },
         folders: widget.folders,
         onOpenFolder: _openFolder,
         onOpenSharedFolders: widget.sharedFolders == null
@@ -916,7 +972,7 @@ class _CollectScreen extends StatelessWidget {
                   ),
                 ],
               ),
-            if (state.clips.isNotEmpty)
+            if (state.clips.isNotEmpty && !controller.deferRendering)
               TextButton.icon(
                 icon: const Icon(Icons.tune_rounded),
                 label: Text(
@@ -1251,19 +1307,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               clipBehavior: Clip.none,
               child: Row(
                 children: [
-                  for (final melody in const <MelodyTemplate>[
-                    MelodyTemplate.midiScore,
-                    MelodyTemplate.hop,
-                    MelodyTemplate.wink,
-                    MelodyTemplate.answer,
-                    MelodyTemplate.odeToJoy,
-                    MelodyTemplate.twinkle,
-                    MelodyTemplate.furElise,
-                    MelodyTemplate.jingleBells,
-                    MelodyTemplate.fate,
-                    MelodyTemplate.canon,
-                    MelodyTemplate.none,
-                  ])
+                  for (final melody in melodyChoices)
                     Padding(
                       padding: const EdgeInsets.only(right: 6),
                       child: _PillChoice(
@@ -1443,7 +1487,12 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
             const SizedBox(height: 6),
           ],
           FilledButton(
-            onPressed: busy ? null : controller.createPreview,
+            onPressed: busy
+                ? null
+                : () {
+                    unawaited(HapticFeedback.selectionClick());
+                    unawaited(controller.createPreview());
+                  },
             style: FilledButton.styleFrom(
               backgroundColor: AppTokens.ink,
               foregroundColor: Colors.white,
@@ -1469,10 +1518,16 @@ class _CompletedScreen extends StatefulWidget {
     required this.controller,
     required this.delivery,
     required this.onOpenLibrary,
+    this.reveal = true,
+    this.onRevealed,
   });
   final CreationController controller;
   final MediaDeliveryGateway? delivery;
   final VoidCallback onOpenLibrary;
+
+  /// The first look at this song: it starts playing by itself.
+  final bool reveal;
+  final VoidCallback? onRevealed;
 
   @override
   State<_CompletedScreen> createState() => _CompletedScreenState();
@@ -1491,6 +1546,24 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   bool _saved = false;
   String? _message;
   String? _busyStage;
+  var _autoStarted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.reveal) return;
+    playback.addListener(_autoPlay);
+    unawaited(HapticFeedback.mediumImpact());
+    widget.onRevealed?.call();
+  }
+
+  // the reveal: a finished song starts by itself, once
+  void _autoPlay() {
+    if (_autoStarted || !playback.isReady) return;
+    _autoStarted = true;
+    playback.removeListener(_autoPlay);
+    if (!playback.isPlaying) unawaited(playback.toggle());
+  }
 
   Future<void> _openComparison() async {
     await playback.pause();
@@ -1609,6 +1682,7 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   void dispose() {
     final exportId = _exportOperationId;
     if (exportId != null) unawaited(widget.controller.media.cancel(exportId));
+    playback.removeListener(_autoPlay);
     unawaited(playback.pause());
     playback.dispose();
     super.dispose();
@@ -1617,6 +1691,7 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   @override
   Widget build(BuildContext context) {
     final state = widget.controller.state;
+    final canRevise = widget.controller.deferRendering;
     return Scaffold(
       backgroundColor: AppTokens.surfaceColor,
       appBar: AppBar(
@@ -1703,26 +1778,58 @@ class _CompletedScreenState extends State<_CompletedScreen> {
               playback: playback,
               label: '完成した${state.durationSeconds}秒',
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
+            // what people came for, large and first
             Row(
               children: [
-                _ShareTile(
-                  icon: _saved ? Icons.check_rounded : Icons.download_rounded,
-                  label: _saved ? '保存済み' : '保存する',
-                  onTap: _busy || _saved ? null : _save,
+                Expanded(
+                  flex: 3,
+                  child: FilledButton.icon(
+                    onPressed: _busy ? null : _share,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppTokens.coral,
+                      foregroundColor: AppTokens.ink,
+                      minimumSize: const Size(0, 56),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    icon: const Icon(Icons.ios_share_rounded, size: 20),
+                    label: const Text('シェアする'),
+                  ),
                 ),
                 const SizedBox(width: 8),
-                _ShareTile(
-                  icon: Icons.ios_share_rounded,
-                  label: 'シェアする',
-                  onTap: _busy ? null : _share,
+                Expanded(
+                  flex: 2,
+                  child: OutlinedButton.icon(
+                    onPressed: _busy || _saved ? null : _save,
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 56),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    icon: Icon(
+                      _saved ? Icons.check_rounded : Icons.download_rounded,
+                      size: 20,
+                    ),
+                    label: Text(_saved ? '保存済み' : '保存する'),
+                  ),
                 ),
-                const SizedBox(width: 8),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
                 _ShareTile(
                   icon: Icons.compare_rounded,
                   label: '元の音と',
                   onTap: _openComparison,
                 ),
+                if (canRevise) ...[
+                  const SizedBox(width: 8),
+                  _ShareTile(
+                    icon: Icons.tune_rounded,
+                    label: 'つくり直す',
+                    onTap: _busy ? null : widget.controller.reviseSong,
+                  ),
+                ],
                 const SizedBox(width: 8),
                 _ShareTile(
                   icon: Icons.library_music_outlined,
@@ -1757,7 +1864,7 @@ class _CompletedScreenState extends State<_CompletedScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-          child: FilledButton(
+          child: OutlinedButton(
             onPressed: widget.controller.startNew,
             child: const Text('新しくつくる'),
           ),
@@ -1767,7 +1874,7 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   }
 }
 
-/// One of the four square actions under a finished song.
+/// One of the smaller square actions under a finished song.
 final class _ShareTile extends StatelessWidget {
   const _ShareTile({required this.icon, required this.label, this.onTap});
 

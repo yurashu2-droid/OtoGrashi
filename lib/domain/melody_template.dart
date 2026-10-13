@@ -20,6 +20,22 @@ enum MelodyTemplate {
   canon,
 }
 
+/// The order songs are offered in: tunes everyone knows first, then the
+/// patterns made for this app.
+const melodyChoices = <MelodyTemplate>[
+  MelodyTemplate.odeToJoy,
+  MelodyTemplate.twinkle,
+  MelodyTemplate.canon,
+  MelodyTemplate.jingleBells,
+  MelodyTemplate.furElise,
+  MelodyTemplate.fate,
+  MelodyTemplate.hop,
+  MelodyTemplate.wink,
+  MelodyTemplate.answer,
+  MelodyTemplate.midiScore,
+  MelodyTemplate.none,
+];
+
 extension MelodyTemplateDetails on MelodyTemplate {
   /// Songs driven by a bundled three-lane score (melody, bass, keys).
   bool get isMidiScore => scoreId != null || this == MelodyTemplate.midiScore;
