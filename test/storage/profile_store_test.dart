@@ -5,9 +5,24 @@ import 'package:otogurashi/domain/arrangement.dart';
 import 'package:otogurashi/domain/arrangement_engine.dart';
 import 'package:otogurashi/domain/melody_template.dart';
 import 'package:otogurashi/domain/video_recipe.dart';
+import 'package:otogurashi/storage/draft_pointer.dart';
 import 'package:otogurashi/storage/profile_store.dart';
 
 void main() {
+  test('the song in progress is remembered, and so is having none', () async {
+    final root = await Directory.systemTemp.createTemp('otogurashi-draft-');
+    addTearDown(() => root.delete(recursive: true));
+    final pointer = DraftPointer(File('${root.path}/current_project.txt'));
+    // nothing remembered yet is different from "no song in progress"
+    expect(await pointer.load(), isNull);
+    await pointer.save('project-1');
+    expect(await pointer.load(), 'project-1');
+    await pointer.save(null);
+    expect(await pointer.load(), '');
+    // a folder that cannot be written to is not an error
+    await DraftPointer(File('${root.path}/missing/x.txt')).save('project-2');
+  });
+
   test('the cover name is kept on the device, tidied and bounded', () async {
     final root = await Directory.systemTemp.createTemp('otogurashi-profile-');
     addTearDown(() => root.delete(recursive: true));

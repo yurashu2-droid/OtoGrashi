@@ -809,7 +809,20 @@ class _CollectScreen extends StatelessWidget {
         actions: [
           if (state.clips.isNotEmpty || controller.isRelay)
             TextButton(
-              onPressed: controller.startNew,
+              onPressed: () {
+                final leavesDraft = state.clips.isNotEmpty;
+                controller.startNew();
+                // the sounds collected so far are not thrown away
+                if (leavesDraft) {
+                  ScaffoldMessenger.of(context)
+                    ..hideCurrentSnackBar()
+                    ..showSnackBar(
+                      const SnackBar(
+                        content: Text('つくりかけの曲は、曲タブの「じぶん」に残しました'),
+                      ),
+                    );
+                }
+              },
               child: Text(state.clips.isEmpty ? 'ひとりでつくる' : '新しくつくる'),
             ),
         ],

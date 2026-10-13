@@ -123,8 +123,10 @@ class _CreationHostState extends State<_CreationHost> {
           : const <CompletedExport>[];
       final ownerName = await dependencies.profile?.loadName();
       controller.ownerName = ownerName;
-      final project = _recentUnfinishedProject(projects, exports);
+      final remembered = await dependencies.draft?.load();
+      final project = _draftToResume(projects, exports, remembered);
       if (project != null) await controller.openProject(project);
+      _watchDraft(controller, dependencies);
       if (!mounted) {
         controller.dispose();
         dependencies.close();
@@ -151,9 +153,13 @@ class _CreationHostState extends State<_CreationHost> {
     }
   }
 
-  Project? _recentUnfinishedProject(
+  /// The song to continue: the one that was in progress last time. Before
+  /// anything has been remembered ([remembered] null) it is the newest
+  /// unfinished song, as it always was.
+  Project? _draftToResume(
     List<Project> projects,
     List<CompletedExport> exports,
+    String? remembered,
   ) {
     final unfinished =
         projects
@@ -168,7 +174,30 @@ class _CreationHostState extends State<_CreationHost> {
             )
             .toList()
           ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    return unfinished.firstOrNull;
+    if (remembered == null) return unfinished.firstOrNull;
+    return unfinished.where((project) => project.id == remembered).firstOrNull;
+  }
+
+  /// Keeps the remembered song in step with what the person is working on.
+  void _watchDraft(CreationController controller, AppDependencies dependencies) {
+    final pointer = dependencies.draft;
+    if (pointer == null) return;
+    String? current() {
+      final state = controller.state;
+      // a finished song is not a draft; nor is one without sounds
+      return state.phase == CreationPhase.completed || state.clips.isEmpty
+          ? null
+          : state.project?.id;
+    }
+
+    var saved = current();
+    unawaited(pointer.save(saved));
+    controller.addListener(() {
+      final now = current();
+      if (now == saved) return;
+      saved = now;
+      unawaited(pointer.save(now));
+    });
   }
 
   void _begin(String name) {

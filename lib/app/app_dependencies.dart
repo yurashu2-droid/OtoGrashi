@@ -3,6 +3,7 @@ import 'dart:io';
 import '../media/media_presentation_gateway.dart';
 import '../media/platform_media_gateway.dart';
 import '../storage/asset_repository.dart';
+import '../storage/draft_pointer.dart';
 import '../storage/folder_repository.dart';
 import '../storage/profile_store.dart';
 import '../storage/project_database.dart';
@@ -17,6 +18,7 @@ final class AppDependencies {
     required this.projects,
     required this.assets,
     this.profile,
+    this.draft,
     this.folders,
     this.sharedFolders,
   });
@@ -27,6 +29,7 @@ final class AppDependencies {
   final ProjectRepository projects;
   final AssetRepository assets;
   final ProfileStore? profile;
+  final DraftPointer? draft;
   final FolderRepository? folders;
   final SharedFolderService? sharedFolders;
 
@@ -45,6 +48,7 @@ final class AppDependencies {
       projects: SqliteProjectRepository(database),
       assets: assets,
       profile: ProfileStore(File('$root/owner_name.txt')),
+      draft: DraftPointer(File('$root/current_project.txt')),
       folders: SqliteFolderRepository(database),
       sharedFolders: SharedFolderService(database: database, assets: assets),
     );
