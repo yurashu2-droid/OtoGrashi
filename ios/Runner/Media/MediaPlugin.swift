@@ -4,6 +4,7 @@ import AVFoundation
 import Foundation
 import Photos
 import UIKit
+import UniformTypeIdentifiers
 
 private enum MediaDeliveryError: Error {
   case permissionDenied
@@ -47,6 +48,7 @@ final class MediaPlugin: NSObject, FlutterPlugin, ASWebAuthenticationPresentatio
   }
 
   private var sharedAuthenticationSession: ASWebAuthenticationSession?
+  private let midiPicker = MidiFilePicker()
   private let jobs = JobRegistry()
   private let store: ManagedMediaStore
   private let eventStream: MediaEventStreamHandler
@@ -171,6 +173,18 @@ final class MediaPlugin: NSObject, FlutterPlugin, ASWebAuthenticationPresentatio
       }
       capture.stop(operationId: operationId) { outcome in
         self.finish(result, outcome.map(\.dictionary))
+      }
+    case "pickMidiFile":
+      guard let presenter = Self.topViewController() else {
+        fail(result, error: CaptureServiceError.unavailable)
+        return
+      }
+      midiPicker.pick(presenter: presenter) { outcome in
+        switch outcome {
+        case .success(let file): result(file)
+        case .failure(let error):
+          result(FlutterError(code: "midi_file_unreadable", message: error.localizedDescription, details: nil))
+        }
       }
     case "pickVideo":
       guard let arguments = call.arguments as? [String: Any],
@@ -1102,8 +1116,56 @@ struct ManagedMediaStore {
   }
 }
 
+/// Lets the person choose one MIDI file in Files. Only its name and bytes go to Dart, which
+/// reads the notes; nothing is kept here.
+final class MidiFilePicker: NSObject, UIDocumentPickerDelegate {
+  static let maximumBytes = 1_048_576
+  private var completion: ((Result<[String: Any]?, Error>) -> Void)?
 
-/// A self-contained check, kept apart from real capture: can this phone record a movie and
-/// depth at the same time? It runs its own short session (no microphone), records about
-/// 1.5 seconds, and reports which depth cameras exist, what was configured and how many
-/// depth frames arrived. Nothing it records is kept.
+  /// Completes on the main thread with nil when the person cancels.
+  func pick(presenter: UIViewController, completion: @escaping (Result<[String: Any]?, Error>) -> Void) {
+    guard self.completion == nil else {
+      completion(.failure(MidiFileError("another file is being chosen")))
+      return
+    }
+    self.completion = completion
+    // a copy in the app's own inbox: no security scope to hold on to
+    let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.midi], asCopy: true)
+    picker.allowsMultipleSelection = false
+    picker.delegate = self
+    presenter.present(picker, animated: true)
+  }
+
+  func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+    guard let url = urls.first else { return finish(.success(nil)) }
+    defer { try? FileManager.default.removeItem(at: url) }
+    do {
+      let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+      guard size > 0 else { throw MidiFileError("the file is empty") }
+      guard size <= Self.maximumBytes else { throw MidiFileError("the file is larger than 1 MB") }
+      let data = try Data(contentsOf: url)
+      finish(.success([
+        "name": url.deletingPathExtension().lastPathComponent,
+        "bytes": FlutterStandardTypedData(bytes: data),
+      ]))
+    } catch {
+      finish(.failure(error))
+    }
+  }
+
+  func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+    finish(.success(nil))
+  }
+
+  private func finish(_ outcome: Result<[String: Any]?, Error>) {
+    let done = completion
+    completion = nil
+    done?(outcome)
+  }
+}
+
+private struct MidiFileError: LocalizedError {
+  let message: String
+  init(_ message: String) { self.message = message }
+  var errorDescription: String? { message }
+}

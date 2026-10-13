@@ -10,6 +10,7 @@ import 'package:otogurashi/design/rolling_tab_bar.dart';
 import 'package:otogurashi/design/tokens.dart';
 import 'package:otogurashi/domain/arrangement.dart';
 import 'package:otogurashi/domain/clip_asset.dart';
+import 'package:otogurashi/domain/custom_song.dart';
 import 'package:otogurashi/domain/melody_template.dart';
 import 'package:otogurashi/domain/project.dart';
 import 'package:otogurashi/domain/video_recipe.dart';
@@ -913,6 +914,75 @@ void main() {
     expect(controller.state.preview, isNotNull);
     expect(media.renderRequests, hasLength(1));
     expect(tester.takeException(), isNull);
+  });
+
+  test('a song from outside the app travels with the project', () async {
+    final projects = _MemoryProjects();
+    final media = _FakeMedia();
+    CreationController create() => CreationController(
+      projects: projects,
+      assets: _RelayAssets(),
+      media: media,
+      presentation: _FakePresentation(),
+      demo: _FakeDemo(),
+      deferRendering: true,
+    );
+    final controller = create();
+    addTearDown(controller.dispose);
+    final song = CustomSong(
+      id: 'song-1',
+      title: 'きょうのうた',
+      credit: 'じぶん',
+      lanes: [
+        [
+          for (var beat = 0; beat < 32; beat += 2) [beat * 480, 480, 60 + beat % 5],
+        ],
+      ],
+    );
+
+    // chosen before any sound, like a built-in song
+    controller.presetSong(song);
+    expect(controller.state.melody, MelodyTemplate.imported);
+    expect(controller.state.songLabel, 'きょうのうた');
+    for (final clip in await _FakeDemo().install(_UnusedAssets())) {
+      await controller.addExisting(clip);
+    }
+    await controller.createPreview();
+    for (var i = 0; i < 100 && controller.state.preview == null; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(controller.state.phase, CreationPhase.completed);
+    final request = media.renderRequests.single;
+    expect(request.arrangement.melodyTemplate, MelodyTemplate.imported);
+    expect(
+      request.arrangement.events.any((event) => event.targetMidiNote != null),
+      isTrue,
+    );
+    final stored = projects.project!.arrangement['customSong'] as Map;
+    expect(stored['title'], 'きょうのうた');
+    expect((stored['lanes'] as List).first, hasLength(16));
+
+    // a built-in song can be chosen and the outside one picked again
+    controller.reviseSong();
+    controller.selectMelody(MelodyTemplate.canon);
+    expect(controller.state.songLabel, 'カノン');
+    controller.selectMelody(MelodyTemplate.imported);
+    expect(controller.state.songLabel, 'きょうのうた');
+
+    // reopening the project brings its song back, without the catalogue
+    final reopened = create();
+    addTearDown(reopened.dispose);
+    await reopened.openProject(projects.project!);
+    expect(reopened.state.melody, MelodyTemplate.imported);
+    expect(reopened.state.song?.id, 'song-1');
+    expect(reopened.state.song?.credit, 'じぶん');
+    expect(reopened.state.song?.lanes.first, song.lanes.first);
+
+    // without a song to play, the outside-song choice cannot be selected
+    final empty = create();
+    addTearDown(empty.dispose);
+    empty.selectMelody(MelodyTemplate.imported);
+    expect(empty.state.melody, isNot(MelodyTemplate.imported));
   });
 
   test('melody change during a save keeps the next revision valid', () async {

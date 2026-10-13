@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 
 import '../../domain/arrangement.dart';
 import '../../domain/arrangement_engine.dart';
+import '../../domain/custom_song.dart';
 import '../../domain/melody_template.dart';
 import '../../domain/clip_asset.dart';
 import '../../domain/project.dart';
@@ -38,6 +39,7 @@ final class CreationState {
     this.thumbnails = const <String, Uint8List>{},
     this.style = ArrangementStyle.sparse,
     this.melody = MelodyTemplate.hop,
+    this.song,
     this.layout = VideoLayout.buildUp,
     this.compareOriginal = false,
     this.seed = 1,
@@ -57,6 +59,10 @@ final class CreationState {
   final Map<String, Uint8List> thumbnails;
   final ArrangementStyle style;
   final MelodyTemplate melody;
+
+  /// The song from outside the app that [MelodyTemplate.imported] plays. It
+  /// stays here while a built-in song is chosen, so it can be picked again.
+  final CustomSong? song;
   final VideoLayout layout;
   final bool compareOriginal;
   final int seed;
@@ -75,6 +81,11 @@ final class CreationState {
   /// A song is being made because the person pressed つくる.
   final bool making;
 
+  /// The name of the chosen song, as shown to the person.
+  String get songLabel => melody == MelodyTemplate.imported
+      ? song?.title ?? melody.label
+      : melody.label;
+
   CreationState copyWith({
     CreationPhase? phase,
     Project? project,
@@ -82,6 +93,8 @@ final class CreationState {
     Map<String, Uint8List>? thumbnails,
     ArrangementStyle? style,
     MelodyTemplate? melody,
+    CustomSong? song,
+    bool clearSong = false,
     VideoLayout? layout,
     bool? compareOriginal,
     int? seed,
@@ -102,6 +115,7 @@ final class CreationState {
     thumbnails: thumbnails ?? this.thumbnails,
     style: style ?? this.style,
     melody: melody ?? this.melody,
+    song: clearSong ? null : song ?? this.song,
     layout: layout ?? this.layout,
     compareOriginal: compareOriginal ?? this.compareOriginal,
     seed: seed ?? this.seed,
@@ -275,6 +289,43 @@ final class CreationController extends ChangeNotifier {
     }
   }
 
+  /// Chooses a song from outside the app (a MIDI file, or the catalogue), in
+  /// the same way [presetMelody] chooses a built-in one.
+  void presetSong(CustomSong song) {
+    if (_disposed || _state.making || !song.hasMelody) return;
+    if (_state.melody == MelodyTemplate.imported &&
+        _state.song?.id == song.id) {
+      return;
+    }
+    final next = _state.copyWith(melody: MelodyTemplate.imported, song: song);
+    if (_state.clips.isEmpty || deferRendering) {
+      _set(
+        next.copyWith(
+          settingsChanged: _state.preview != null || _state.settingsChanged,
+        ),
+      );
+      return;
+    }
+    _previewRenderTimer?.cancel();
+    final project = _state.project;
+    if (project != null) _render.open(project);
+    _set(
+      next.copyWith(
+        compareOriginal: false,
+        phase: CreationPhase.preparing,
+        clearPreview: true,
+        clearError: true,
+      ),
+    );
+    unawaited(
+      _requestArrangement(
+        style: _state.style,
+        seed: _state.seed,
+        debouncePreview: true,
+      ),
+    );
+  }
+
   /// The creator's name for the cover ("〇〇の日常"); written into every
   /// recipe arranged from now on.
   String? ownerName;
@@ -436,6 +487,7 @@ final class CreationController extends ChangeNotifier {
       // sounds that were never made into a song start from the same choices
       // as a new one
       final unmade = !project.arrangement.containsKey('style');
+      final song = CustomSong.tryFromJson(project.arrangement['customSong']);
       _render.open(project);
       _set(
         _state.copyWith(
@@ -450,6 +502,8 @@ final class CreationController extends ChangeNotifier {
           clearPreview: true,
           clearError: true,
           compareOriginal: false,
+          song: song,
+          clearSong: song == null,
           style: ArrangementStyle.values.firstWhere(
             (value) => value.name == project.arrangement['style'],
             orElse: () => ArrangementStyle.sparse,
@@ -617,6 +671,8 @@ final class CreationController extends ChangeNotifier {
 
   void selectMelody(MelodyTemplate melody) {
     if (_disposed || melody == _state.melody) return;
+    // an imported song is chosen with [presetSong], which brings its score
+    if (melody == MelodyTemplate.imported && _state.song == null) return;
     if (_holdChoices) return _holdChoice(_state.copyWith(melody: melody));
     _previewRenderTimer?.cancel();
     final project = _state.project;
@@ -871,6 +927,9 @@ final class CreationController extends ChangeNotifier {
           _analyzeCached(clip, _analysisRequest(clip), analysisEpoch),
       ]);
       if (_disposed || version != _requestVersion) return;
+      final song = _state.melody == MelodyTemplate.imported
+          ? _state.song
+          : null;
       final arrangement = arrange(
         clips: analyses,
         style: style,
@@ -878,11 +937,14 @@ final class CreationController extends ChangeNotifier {
         melodyTemplate: _state.melody,
         performanceMode: _state.performanceMode,
         durationSeconds: _state.durationSeconds,
+        score: song?.lanes,
       );
       final arrangementJson = _applyArrangementEdits(
         arrangement.toJson(),
         project.arrangement,
       );
+      // the project keeps its own copy of a song from outside the app
+      if (song != null) arrangementJson['customSong'] = song.toJson();
       final recipe = VideoRecipe.fromArrangement(
         arrangement: arrangement,
         layout: _state.layout,

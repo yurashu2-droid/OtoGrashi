@@ -1127,7 +1127,7 @@ class _CollectScreen extends StatelessWidget {
                           // the song chosen so far (also from the 曲 tab)
                           if (controller.deferRendering) ...[
                             Text(
-                              '曲は「${state.melody.label}」。次の画面で変えられます',
+                              '曲は「${state.songLabel}」。次の画面で変えられます',
                               textAlign: TextAlign.center,
                               style: const TextStyle(
                                 fontSize: 12,
@@ -1398,6 +1398,19 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               clipBehavior: Clip.none,
               child: Row(
                 children: [
+                  // a song from outside the app comes first, under its own name
+                  if (state.song case final song?)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: _PillChoice(
+                        label: song.title,
+                        tooltip: MelodyTemplate.imported.description,
+                        selected: state.melody == MelodyTemplate.imported,
+                        onTap: () => widget.controller.selectMelody(
+                          MelodyTemplate.imported,
+                        ),
+                      ),
+                    ),
                   for (final melody in melodyChoices)
                     Padding(
                       padding: const EdgeInsets.only(right: 6),
@@ -1413,7 +1426,7 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
             ),
             const SizedBox(height: 6),
             Text(
-              state.melody.description,
+              _songDescription(state),
               style: Theme.of(context).textTheme.bodySmall,
             ),
             PerformanceControls(
@@ -1555,6 +1568,21 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
 
   Future<void> _showAdjustments(BuildContext context) =>
       showAdjustmentsSheet(context, widget.controller);
+
+  /// One line under the songs: what the chosen one is, or whose it is.
+  String _songDescription(CreationState state) {
+    final song = state.song;
+    if (state.melody != MelodyTemplate.imported || song == null) {
+      return state.melody.description;
+    }
+    return [
+      if (song.credit.isNotEmpty) song.credit,
+      if (song.author case final author?)
+        '$authorさんの投稿'
+      else
+        'MIDIから読み込んだ曲',
+    ].join(' · ');
+  }
 
   /// Choose first, then make: つくる until there is a song for the current
   /// choices, then これで完成.
@@ -1902,7 +1930,7 @@ class _CompletedScreenState extends State<_CompletedScreen> {
                       ),
                     ),
                     Text(
-                      '${state.clips.length}つの音 · ${state.durationSeconds}秒 · ${state.melody.label}',
+                      '${state.clips.length}つの音 · ${state.durationSeconds}秒 · ${state.songLabel}',
                       style: const TextStyle(
                         fontSize: 11,
                         color: AppTokens.mutedInk,
