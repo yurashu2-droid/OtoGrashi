@@ -608,7 +608,7 @@ final class _SongChoicesState extends State<_SongChoices> {
         label: const Text('MIDIを読み込む'),
       )
     else if (library.local.isEmpty)
-      const _Notice('MIDIの読み込みは、iPhoneのアプリで使えます。'),
+      const _Notice('読み込んだ曲は、ここに並びます。'),
   ];
 }
 
