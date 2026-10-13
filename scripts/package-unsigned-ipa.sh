@@ -16,7 +16,14 @@ mkdir -p "$build_root/Payload" "$output_root"
 xcodebuild -version
 flutter --version
 flutter pub get
-flutter build ios --release --no-codesign --config-only --build-number="$build_number"
+# The server for shared folders and the song catalogue, once one is deployed
+# (the repository variable OTO_SHARED_API_URL). Without it the app asks.
+defines=()
+if [[ -n "${OTO_SHARED_API_URL:-}" ]]; then
+  [[ "$OTO_SHARED_API_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]] || { echo 'OTO_SHARED_API_URL must be an https origin'; exit 1; }
+  defines+=("--dart-define=OTO_SHARED_API_URL=$OTO_SHARED_API_URL")
+fi
+flutter build ios --release --no-codesign --config-only --build-number="$build_number" ${defines[@]+"${defines[@]}"}
 
 # iPhone device archive only. iLoader signs locally on the user's Windows PC.
 xcodebuild archive \

@@ -34,6 +34,8 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       FLUTTER_VERSION: 3.47.5
       BUILD_NUMBER: ${{ github.run_number }}
+      # set as a repository variable after "Deploy shared folders" has run
+      OTO_SHARED_API_URL: ${{ vars.OTO_SHARED_API_URL }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5; same as RakugakiMap
         with:
