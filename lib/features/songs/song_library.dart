@@ -6,20 +6,7 @@ import '../../domain/custom_song.dart';
 import '../../media/midi_file_picker.dart';
 import '../../sharing/song_catalog.dart';
 import '../../storage/song_repository.dart';
-
-/// Turns a chosen MIDI file into a song, or says in the person's words why
-/// it cannot ([MidiSongProblem]).
-typedef MidiSongReader = CustomSong Function(PickedMidiFile file, String id);
-
-/// A MIDI file that could not become a song; [message] is ready to show.
-final class MidiSongProblem implements Exception {
-  const MidiSongProblem(this.message);
-
-  final String message;
-
-  @override
-  String toString() => message;
-}
+import 'midi_song_reader.dart';
 
 enum CatalogPhase {
   /// no server is set up for this build
@@ -143,7 +130,7 @@ final class SongLibrary extends ChangeNotifier {
   /// Opens Files for a MIDI file and reads it. Null when the person cancels;
   /// throws [MidiSongProblem] when the file cannot become a song. The song is
   /// not kept until [keep].
-  Future<CustomSong?> pickMidi() async {
+  Future<MidiSongReading?> pickMidi() async {
     final picker = _picker;
     final reader = _reader;
     if (picker == null || reader == null) return null;

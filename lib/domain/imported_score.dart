@@ -304,6 +304,13 @@ final class ImportedScore {
     );
   }
 
+  /// Where the bars of [file] start, in beats, counted as [fromMidi] counts
+  /// them: from each time signature, and in 4/4 when the file gives none.
+  /// Every bar up to the end of the last note, but never more than [limit],
+  /// which only a damaged file reaches.
+  static List<double> barStarts(MidiFile file, {int limit = 2000}) =>
+      _Importer(file).barStarts(limit);
+
   static const schemaVersion = 1;
   static const ticksPerBeat = 480;
 
@@ -458,6 +465,13 @@ final class _Importer {
   /// note sounds alone, and how many notes sound together on average.
   late final textures = [for (final part in sources) texture(part.notes)];
 
+  /// Where the last note of the file ends, in score ticks.
+  late final songEnd = sources.fold(
+    0,
+    (end, part) =>
+        math.max(end, at(part.notes.map((n) => n.end).reduce(math.max))),
+  );
+
   /// A tick of the file on the score's grid of 480 per beat: exact when the
   /// file's division allows it, the nearest tick otherwise.
   int at(int tick) =>
@@ -471,11 +485,6 @@ final class _Importer {
     required double? startBeat,
     required List<int?> asked,
   }) {
-    final songEnd = sources.fold(
-      0,
-      (end, part) =>
-          math.max(end, at(part.notes.map((n) => n.end).reduce(math.max))),
-    );
     ScoreImport failed(ScoreImportFailure reason) => ScoreImportFailed._(
       parts: parts,
       songBeats: songEnd / ticksPerBeat,
@@ -671,6 +680,23 @@ final class _Importer {
       length = 4 * ticksPerBeat * signature.numerator ~/ signature.denominator;
     }
     return (origin + (tick - origin) ~/ length * length, length);
+  }
+
+  /// The start of every bar that begins before the song ends, in beats.
+  List<double> barStarts(int limit) {
+    final starts = <double>[];
+    for (var tick = 0; tick < songEnd && starts.length < limit;) {
+      final (start, length) = bar(tick);
+      starts.add(start / ticksPerBeat);
+      var next = start + length;
+      // a new time signature may begin before the bar it interrupts is over
+      for (final signature in file.timeSignatures) {
+        final change = at(signature.tick);
+        if (change > start && change < next) next = change;
+      }
+      tick = next;
+    }
+    return starts;
   }
 
   /// The notes of one part between [from] and [to], moved to start at 0.

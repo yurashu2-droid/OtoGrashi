@@ -749,6 +749,69 @@ void main() {
     });
   });
 
+  group('bars', () {
+    List<double> bars(
+      int end, {
+      List<List<int>> signatures = const [],
+      int limit = 2000,
+    }) => ImportedScore.barStarts(
+      MidiFile.parse(
+        _midi([
+          _track([
+            [0, end, 60],
+          ]),
+        ], signatures: signatures),
+      ),
+      limit: limit,
+    );
+
+    test('are in 4/4 when the file says nothing', () {
+      expect(bars(480 * 9), [0, 4, 8]);
+      // a bar counts once the song reaches into it
+      expect(bars(480 * 8 + 1), [0, 4, 8]);
+      expect(bars(480 * 8), [0, 4]);
+    });
+
+    test('follow each time signature from where it begins', () {
+      expect(
+        bars(
+          480 * 14,
+          signatures: [
+            [0, 3, 2],
+            // 4/4 comes in after two beats of the third bar of 3/4
+            [480 * 8, 4, 2],
+          ],
+        ),
+        [0, 3, 6, 8, 12],
+      );
+      // the same lines the import starts a song on
+      final file = MidiFile.parse(
+        _midi(
+          [
+            _track([
+              [480 * 9, 480, 60],
+              [480 * 13, 480, 62],
+            ]),
+          ],
+          signatures: [
+            [0, 3, 2],
+            [480 * 8, 4, 2],
+          ],
+        ),
+      );
+      expect(_imported(ImportedScore.fromMidi(file)).startBeat, 8);
+      expect(ImportedScore.barStarts(file), contains(8));
+    });
+
+    test('stop at the limit, and a file without notes has none', () {
+      expect(bars(480 * 400, limit: 10), hasLength(10));
+      expect(
+        ImportedScore.barStarts(MidiFile.parse(_midi([_track(const [])]))),
+        isEmpty,
+      );
+    });
+  });
+
   group('timing', () {
     test('is exact when the division divides a beat into 480', () {
       final result = _imported(

@@ -4,6 +4,7 @@ import '../../design/tokens.dart';
 import '../../domain/custom_song.dart';
 import '../../domain/melody_template.dart';
 import '../../sharing/song_catalog.dart';
+import 'midi_song_reader.dart';
 import 'song_library.dart';
 import 'song_sheets.dart';
 
@@ -317,7 +318,7 @@ final class _SongChoicesState extends State<_SongChoices> {
   Future<void> _import() async {
     final library = widget.library;
     if (library == null) return;
-    final CustomSong? read;
+    final MidiSongReading? read;
     try {
       read = await library.pickMidi();
     } on MidiSongProblem catch (error) {
@@ -331,7 +332,7 @@ final class _SongChoicesState extends State<_SongChoices> {
     );
     if (choice == null) return;
     final song = await library.keep(
-      read,
+      choice.song,
       title: choice.title,
       credit: choice.credit,
     );

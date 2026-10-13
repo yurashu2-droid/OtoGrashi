@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:otogurashi/design/tokens.dart';
 import 'package:otogurashi/domain/custom_song.dart';
 import 'package:otogurashi/domain/melody_template.dart';
+import 'package:otogurashi/features/songs/midi_song_reader.dart';
 import 'package:otogurashi/features/songs/song_library.dart';
 import 'package:otogurashi/features/songs/songs_screen.dart';
 import 'package:otogurashi/media/midi_file_picker.dart';
@@ -98,7 +99,9 @@ void main() {
       songs: songs,
       catalog: _FakeCatalog()..serverReady = false,
       picker: _FakePicker(),
-      reader: (file, id) => CustomSong(id: id, title: file.name, lanes: _notes),
+      reader: (file, id) => MidiSongReading.only(
+        CustomSong(id: id, title: file.name, lanes: _notes),
+      ),
     );
     addTearDown(library.dispose);
     CustomSong? made;
