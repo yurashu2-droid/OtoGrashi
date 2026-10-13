@@ -19,6 +19,9 @@ abstract interface class AssetRepository {
   Future<ClipAsset> importManagedStaging(String relativePath);
   Future<ClipAsset?> load(String id);
   Future<List<ClipAsset>> list();
+
+  /// The sounds added last come first; [limit] keeps only that many of them.
+  Future<List<ClipAsset>> listNewest({int? limit});
   Future<ClipAsset> rename(String assetId, String label);
   Future<String> resolvePath(String assetId);
   Future<List<String>> referencingProjectIds(String assetId);
@@ -180,6 +183,19 @@ final class SqliteAssetRepository implements AssetRepository {
   Future<List<ClipAsset>> list() async {
     return _database.connection
         .select('SELECT * FROM assets ORDER BY label COLLATE NOCASE, id')
+        .map(_decodeAsset)
+        .toList(growable: false);
+  }
+
+  @override
+  Future<List<ClipAsset>> listNewest({int? limit}) async {
+    // Sounds carry no date, but a new one always gets the largest rowid, so
+    // rowid order is the order they were added in. SQLite takes a negative
+    // LIMIT to mean no limit.
+    return _database.connection
+        .select('SELECT * FROM assets ORDER BY rowid DESC LIMIT ?', <Object?>[
+          limit ?? -1,
+        ])
         .map(_decodeAsset)
         .toList(growable: false);
   }

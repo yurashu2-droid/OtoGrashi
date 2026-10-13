@@ -61,6 +61,8 @@ class _LibraryScreenState extends State<LibraryScreen>
   var _loading = true;
   List<Project> _projects = const <Project>[];
   List<ClipAsset> _assets = const <ClipAsset>[];
+  // 音のストック shows the same sounds, the newest first.
+  List<ClipAsset> _stock = const <ClipAsset>[];
   List<CompletedExport> _exports = const <CompletedExport>[];
   int _reloadGeneration = 0;
   var _smallAssetCards = false;
@@ -83,6 +85,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     try {
       final projects = await widget.projects.list();
       final assets = await widget.assets.list();
+      final stock = await widget.assets.listNewest();
       final exports = widget.projects is SqliteProjectRepository
           ? await (widget.projects as SqliteProjectRepository)
                 .listCompletedExports()
@@ -91,6 +94,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       setState(() {
         _projects = projects;
         _assets = assets;
+        _stock = stock;
         _exports = exports;
         _reloadGeneration++;
         _loading = false;
@@ -207,7 +211,7 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   Widget _buildAssets(BuildContext context) {
-    if (_assets.isEmpty) {
+    if (_stock.isEmpty) {
       return _EmptyState(
         message: '素材はまだありません',
         description: '気になった音を撮って、ここに集めよう。',
@@ -228,7 +232,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 children: [
                   _SectionIntro(
                     title: '集めた音',
-                    count: _assets.length,
+                    count: _stock.length,
                     description: '聴き直して、名前をつけて、次の曲にも。',
                   ),
                   Row(
@@ -267,7 +271,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 delegate: SliverChildBuilderDelegate(
                   (context, index) =>
                       _buildAssetCard(context, index, compact: true),
-                  childCount: _assets.length,
+                  childCount: _stock.length,
                 ),
               ),
             )
@@ -277,7 +281,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) => _buildAssetCard(context, index),
-                  childCount: _assets.length,
+                  childCount: _stock.length,
                 ),
               ),
             ),
@@ -291,7 +295,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     int index, {
     bool compact = false,
   }) {
-    final asset = _assets[index];
+    final asset = _stock[index];
     return _AssetCard(
       key: ValueKey(asset.id),
       asset: asset,

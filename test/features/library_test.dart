@@ -178,6 +178,41 @@ void main() {
     expect(reused?.label, '雨の音');
   });
 
+  testWidgets('the stock shows the newest sound first, not the first by name', (
+    tester,
+  ) async {
+    final assets = _LibraryAssets()
+      ..asset = _asset()
+      ..newer = const ClipAsset(
+        id: 'newer',
+        relativePath: 'assets/drop.mov',
+        durationUs: 2_000_000,
+        selectionStartUs: 0,
+        selectionDurationUs: 2_000_000,
+        width: 1080,
+        height: 1920,
+        rotation: 0,
+        sha256: 'def',
+        label: 'ポチャン',
+      );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LibraryScreen(
+          projects: _LibraryProjects(),
+          assets: assets,
+          initialTabIndex: 1,
+          onCreate: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getTopLeft(find.text('ポチャン')).dy,
+      lessThan(tester.getTopLeft(find.text('カタカタ')).dy),
+    );
+  });
+
   testWidgets('small stock cards open preview with rename and reuse actions', (
     tester,
   ) async {
@@ -469,6 +504,9 @@ final class _LibraryProjects implements ProjectRepository {
 
 final class _LibraryAssets implements AssetRepository {
   ClipAsset? asset;
+
+  /// A sound recorded after [asset].
+  ClipAsset? newer;
   int referenceLoads = 0;
 
   @override
@@ -486,7 +524,10 @@ final class _LibraryAssets implements AssetRepository {
   Future<ClipAsset?> load(String id) async => null;
 
   @override
-  Future<List<ClipAsset>> list() async => asset == null ? const [] : [asset!];
+  Future<List<ClipAsset>> list() async => [?asset, ?newer];
+
+  @override
+  Future<List<ClipAsset>> listNewest({int? limit}) async => [?newer, ?asset];
 
   @override
   Future<void> deleteUnreferenced(String assetId) async {}

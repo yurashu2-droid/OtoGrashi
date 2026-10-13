@@ -19,6 +19,7 @@ final class SoundRow extends StatelessWidget {
     this.thumbnail,
     this.trailing,
     this.caption,
+    this.onTap,
     super.key,
   });
 
@@ -34,8 +35,25 @@ final class SoundRow extends StatelessWidget {
   final Widget? trailing;
   final String? caption;
 
+  /// Plays the sound. A button in [trailing] keeps its own tap.
+  final VoidCallback? onTap;
+
   @override
-  Widget build(BuildContext context) => Padding(
+  Widget build(BuildContext context) {
+    final onTap = this.onTap;
+    if (onTap == null) return _row();
+    return Semantics(
+      button: true,
+      label: '$labelを再生',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: _row(),
+      ),
+    );
+  }
+
+  Widget _row() => Padding(
     padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
     child: Row(
       children: [

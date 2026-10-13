@@ -179,12 +179,28 @@ class _FolderScreenState extends State<FolderScreen> {
 
   // --- long-press actions -------------------------------------------------
 
+  /// Deletes a sound for good and answers 0. While songs still use it, it
+  /// stays in its folders instead and the answer is how many songs do.
+  Future<int> _deleteSound(String assetId) async {
+    final songs = (await widget.assets.referencingProjectIds(assetId)).length;
+    if (songs > 0) return songs;
+    await widget.folders.removeEverywhere(assetId);
+    await widget.assets.deleteUnreferenced(assetId);
+    if (await widget.assets.load(assetId) == null) return 0;
+    // a song took it up in the meantime; it must not be left in no folder
+    await widget.folders.addAsset(_folder.id, assetId);
+    final now = (await widget.assets.referencingProjectIds(assetId)).length;
+    return now > 0 ? now : 1;
+  }
+
   Future<void> _actions(ClipAsset asset, int number, Color color) async {
     final presentation = widget.presentation;
     final allTags = <String>{
       ...FolderScreen.suggestedTags,
       for (final tags in _tags.values) ...tags,
     }.toList();
+    final songs = (await widget.assets.referencingProjectIds(asset.id)).length;
+    if (!mounted) return;
     await showSoundActions(
       context,
       name: readableSoundName(asset.label, number),
@@ -197,6 +213,7 @@ class _FolderScreenState extends State<FolderScreen> {
         for (final folder in _allFolders)
           if (folder.id != _folder.id) (id: folder.id, title: folder.title),
       ],
+      songsUsing: songs,
       onFullScreen: () {
         if (presentation == null) return;
         _stop();
@@ -250,10 +267,10 @@ class _FolderScreenState extends State<FolderScreen> {
       },
       onDelete: () async {
         if (_playingId == asset.id) setState(_stop);
-        await widget.folders.removeEverywhere(asset.id);
-        await widget.assets.deleteUnreferenced(asset.id);
-        _picked.remove(asset.id);
+        final songs = await _deleteSound(asset.id);
+        if (songs == 0) _picked.remove(asset.id);
         await _reload();
+        return songs;
       },
     );
   }
@@ -292,6 +309,40 @@ class _FolderScreenState extends State<FolderScreen> {
   }
 
   Future<void> _deleteFolder() async {
+    // The sounds no other folder holds are deleted with the folder. One that
+    // a song still uses cannot be, so the folder has to wait with it.
+    final elsewhere = <String>{
+      for (final folder in _allFolders)
+        if (folder.id != _folder.id) ...folder.assetIds,
+    };
+    final onlyHere = [
+      for (final id in _folder.assetIds)
+        if (!elsewhere.contains(id)) id,
+    ];
+    var inUse = 0;
+    for (final id in onlyHere) {
+      if ((await widget.assets.referencingProjectIds(id)).isNotEmpty) inUse++;
+    }
+    if (!mounted) return;
+    if (inUse > 0) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('このフォルダはまだ削除できません'),
+          content: Text(
+            'つくりかけの曲をふくめて、曲で使われている音が$inUse個入っています。'
+            'その音をほかのフォルダへ移動するか、曲から外すと、フォルダを削除できます。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('閉じる'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -318,14 +369,14 @@ class _FolderScreenState extends State<FolderScreen> {
     );
     if (confirmed != true) return;
     setState(_stop);
-    final elsewhere = <String>{
-      for (final folder in _allFolders)
-        if (folder.id != _folder.id) ...folder.assetIds,
-    };
-    await widget.folders.delete(_folder.id);
-    for (final id in _folder.assetIds) {
-      if (!elsewhere.contains(id)) await widget.assets.deleteUnreferenced(id);
+    for (final id in onlyHere) {
+      if (await _deleteSound(id) > 0) {
+        // a song took it up while the question was open: say why it stays
+        await _reload();
+        return _deleteFolder();
+      }
     }
+    await widget.folders.delete(_folder.id);
     if (mounted) Navigator.pop(context);
   }
 
@@ -396,7 +447,7 @@ class _FolderScreenState extends State<FolderScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${sounds.length}の音 · ${created.month}/${created.day}から'
+                  '${sounds.length}個の音 · ${created.month}/${created.day}から'
                   '${_picked.isEmpty ? '' : ' · ${_picked.length}/6 えらんでいます'}',
                   style: const TextStyle(fontSize: 12, color: AppTokens.mutedInk),
                 ),

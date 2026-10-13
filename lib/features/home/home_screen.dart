@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import '../../media/media_presentation_gateway.dart';
 import '../../storage/asset_repository.dart';
 import '../../storage/folder_repository.dart';
 import 'folder_screen.dart';
+import 'sound_player_screen.dart';
 import 'sound_row.dart';
 
 /// Home: the in-progress collection, the folders ("〇〇のオトグラシ") sounds
@@ -62,11 +64,15 @@ class _HomeScreenState extends State<HomeScreen> {
     return _HomeData(
       folders: folders,
       assets: {for (final asset in all) asset.id: asset},
-      recent: all.reversed.take(8).toList(),
+      recent: await widget.assets.listNewest(limit: 8),
     );
   }
 
-  void _reload() => setState(() => _data = _load());
+  // A block, not `=>`: setState rejects a callback that returns the Future,
+  // which in a debug build left the page as it was.
+  void _reload() => setState(() {
+    _data = _load();
+  });
 
   @override
   void didUpdateWidget(HomeScreen oldWidget) {
@@ -133,6 +139,24 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) _reload();
   }
 
+  /// A recent sound plays full screen, the way a folder shows one.
+  void _play(ClipAsset asset, String title) {
+    final presentation = widget.presentation;
+    if (presentation == null) return;
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          fullscreenDialog: true,
+          builder: (_) => SoundPlayerScreen(
+            asset: asset,
+            title: title,
+            presentation: presentation,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final owner = widget.ownerName;
@@ -185,9 +209,25 @@ class _HomeScreenState extends State<HomeScreen> {
                     onMake: widget.onMakeCurrent,
                   ),
                 ],
-                const SizedBox(height: 20),
-                const _SectionLabel('フォルダ'),
-                const SizedBox(height: 10),
+                // the header is as tall as its button, which stands in for
+                // the gaps a bare label had around it
+                const SizedBox(height: 6),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 48),
+                  child: Row(
+                    children: [
+                      const Expanded(child: _SectionLabel('フォルダ')),
+                      // the card that makes a folder sits at the far end of
+                      // the list below, off screen once there are two folders
+                      if (widget.folders != null)
+                        IconButton(
+                          onPressed: _newFolder,
+                          tooltip: 'フォルダをつくる',
+                          icon: const Icon(Icons.add_rounded),
+                        ),
+                    ],
+                  ),
+                ),
                 SizedBox(
                   height: 236,
                   child: ListView(
@@ -198,7 +238,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           in data?.folders ?? const <SoundFolder>[]) ...[
                         _FolderCard(
                           title: folder.title,
-                          caption: '${folder.assetIds.length}の音',
+                          caption: '${folder.assetIds.length}個の音',
                           tiles: [
                             for (final id in folder.assetIds.take(4))
                               if (data!.assets[id] case final asset?)
@@ -276,6 +316,15 @@ class _HomeScreenState extends State<HomeScreen> {
                             waveform: _waveform(data.recent[i]),
                             thumbnail: _thumb(data.recent[i]),
                             seed: data.recent[i].id.hashCode,
+                            onTap: widget.presentation == null
+                                ? null
+                                : () => _play(
+                                    data.recent[i],
+                                    readableSoundName(
+                                      data.recent[i].label,
+                                      i + 1,
+                                    ),
+                                  ),
                             trailing: widget.onAssetSelected == null
                                 ? null
                                 : IconButton(
@@ -493,7 +542,7 @@ final class _DraftSongCard extends StatelessWidget {
       children: [
         Semantics(
           button: true,
-          label: 'つくりかけの曲 ${thumbs.length}/6つの音',
+          label: 'つくりかけの曲 音 ${thumbs.length}/6',
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: onTap,
@@ -524,7 +573,7 @@ final class _DraftSongCard extends StatelessWidget {
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            '${thumbs.length}/6つの音',
+                            '音 ${thumbs.length}/6',
                             style: const TextStyle(
                               fontSize: 12,
                               color: AppTokens.mutedInk,

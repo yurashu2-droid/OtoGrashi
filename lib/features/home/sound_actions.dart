@@ -12,6 +12,10 @@ typedef MoveTarget = ({String id, String title});
 /// Long-press actions for one sound. The sound lifts out of the list over a
 /// blurred page, and a white panel under it swaps between the menu and each
 /// small editor (name, tags, move, delete) — no bottom sheets.
+///
+/// A sound that songs still use cannot be deleted: with [songsUsing] above
+/// zero the delete pane says so instead of asking. [onDelete] answers with
+/// the same count, 0 once the sound is really gone.
 Future<void> showSoundActions(
   BuildContext context, {
   required String name,
@@ -21,12 +25,13 @@ Future<void> showSoundActions(
   required List<String> tags,
   required List<String> tagSuggestions,
   required List<MoveTarget> moveTargets,
+  required int songsUsing,
   required VoidCallback onFullScreen,
   required VoidCallback onTrim,
   required Future<void> Function(String name) onRename,
   required Future<void> Function(List<String> tags) onTags,
   required Future<void> Function(String folderId) onMove,
-  required Future<void> Function() onDelete,
+  required Future<int> Function() onDelete,
 }) {
   HapticFeedback.mediumImpact();
   return showGeneralDialog<void>(
@@ -43,6 +48,7 @@ Future<void> showSoundActions(
       tags: tags,
       tagSuggestions: tagSuggestions,
       moveTargets: moveTargets,
+      songsUsing: songsUsing,
       onFullScreen: onFullScreen,
       onTrim: onTrim,
       onRename: onRename,
@@ -78,6 +84,7 @@ class _SoundActions extends StatefulWidget {
     required this.tags,
     required this.tagSuggestions,
     required this.moveTargets,
+    required this.songsUsing,
     required this.onFullScreen,
     required this.onTrim,
     required this.onRename,
@@ -93,12 +100,13 @@ class _SoundActions extends StatefulWidget {
   final List<String> tags;
   final List<String> tagSuggestions;
   final List<MoveTarget> moveTargets;
+  final int songsUsing;
   final VoidCallback onFullScreen;
   final VoidCallback onTrim;
   final Future<void> Function(String name) onRename;
   final Future<void> Function(List<String> tags) onTags;
   final Future<void> Function(String folderId) onMove;
-  final Future<void> Function() onDelete;
+  final Future<int> Function() onDelete;
 
   @override
   State<_SoundActions> createState() => _SoundActionsState();
@@ -109,6 +117,7 @@ class _SoundActionsState extends State<_SoundActions> {
   late final _name = TextEditingController(text: widget.name);
   final _newTag = TextEditingController();
   late final _tags = <String>{...widget.tags};
+  late var _songsUsing = widget.songsUsing;
   var _busy = false;
 
   @override
@@ -124,6 +133,24 @@ class _SoundActionsState extends State<_SoundActions> {
     try {
       await action();
       if (mounted) Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Closes only when the sound is really gone; otherwise the pane says why
+  /// it is still here.
+  Future<void> _confirmDelete() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final songs = await widget.onDelete();
+      if (!mounted) return;
+      if (songs > 0) {
+        setState(() => _songsUsing = songs);
+      } else {
+        Navigator.pop(context);
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -157,12 +184,17 @@ class _SoundActionsState extends State<_SoundActions> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _LiftedSound(
-                      name: widget.name,
-                      thumbnail: widget.thumbnail,
-                      color: widget.color,
-                      number: widget.number,
-                      tags: _tags.toList(),
+                    // This page has no Material of its own; without one the
+                    // name is drawn in Flutter's red, underlined fallback.
+                    Material(
+                      type: MaterialType.transparency,
+                      child: _LiftedSound(
+                        name: widget.name,
+                        thumbnail: widget.thumbnail,
+                        color: widget.color,
+                        number: widget.number,
+                        tags: _tags.toList(),
+                      ),
                     ),
                     const SizedBox(height: 16),
                     Material(
@@ -358,31 +390,44 @@ class _SoundActionsState extends State<_SoundActions> {
     ],
   );
 
-  Widget _delete() => Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      _paneHeader('この音を削除しますか？'),
-      const Padding(
-        padding: EdgeInsets.fromLTRB(20, 4, 20, 12),
-        child: Text(
-          'すべてのフォルダから消えます。作った曲に使われている音は、その曲の中には残ります。',
-          style: TextStyle(fontSize: 13, color: AppTokens.mutedInk, height: 1.5),
-        ),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        child: FilledButton(
-          onPressed: _busy ? null : () => _run(widget.onDelete),
-          style: FilledButton.styleFrom(
-            backgroundColor: AppTokens.blush,
-            foregroundColor: Colors.white,
+  Widget _delete() {
+    // a sound that a song still uses stays where it is, and there is nothing
+    // to confirm
+    final inUse = _songsUsing > 0;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _paneHeader(inUse ? 'この音はまだ消せません' : 'この音を削除しますか？'),
+        Padding(
+          padding: EdgeInsets.fromLTRB(20, 4, 20, inUse ? 16 : 12),
+          child: Text(
+            inUse
+                ? 'つくりかけの曲をふくめて、$_songsUsing曲で使われています。'
+                      '曲からこの音を外すか、曲タブでその曲を削除すると、消せるようになります。'
+                : 'すべてのフォルダから消えて、もとに戻せなくなります。',
+            style: const TextStyle(
+              fontSize: 13,
+              color: AppTokens.mutedInk,
+              height: 1.5,
+            ),
           ),
-          child: const Text('削除する'),
         ),
-      ),
-    ],
-  );
+        if (!inUse)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: FilledButton(
+              onPressed: _busy ? null : _confirmDelete,
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTokens.blush,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('削除する'),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 final class _LiftedSound extends StatelessWidget {
