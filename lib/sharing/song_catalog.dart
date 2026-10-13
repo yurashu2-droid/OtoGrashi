@@ -230,12 +230,10 @@ final class ServerSongCatalog implements SongCatalog {
     bool account = false,
   }) async {
     try {
-      return await _service.serverJson(
-        method,
-        path,
-        data: data,
-        account: account,
-      );
+      // a song is a few kilobytes: a slow answer is a lost connection
+      return await _service
+          .serverJson(method, path, data: data, account: account)
+          .timeout(const Duration(seconds: 20));
     } on SharedFolderException catch (error) {
       throw SongCatalogException(_message(error), code: error.code);
     } on SongCatalogException {
