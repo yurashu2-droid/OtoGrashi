@@ -208,6 +208,35 @@ void main() {
     expect(find.text('じぶんのうた'), findsNothing);
   });
 
+  testWidgets('a person can see their own posts and take one down', (
+    tester,
+  ) async {
+    final catalog = _FakeCatalog()
+      ..own = [
+        _listed('p1', 'じぶんのうた', uses: 3),
+        const CatalogSong(
+          id: 'p2',
+          title: 'みなおし中のうた',
+          credit: '',
+          author: '',
+          uses: 0,
+          status: 'hidden',
+        ),
+      ];
+    final library = SongLibrary(songs: _MemorySongs(), catalog: catalog);
+    addTearDown(library.dispose);
+    await open(tester, library);
+
+    await tester.tap(find.text('自分の投稿をみる'));
+    await tester.pumpAndSettle();
+    expect(find.text('3回つかわれた'), findsOneWidget);
+    expect(find.text('通報があり、確認のため非公開になっています'), findsOneWidget);
+    await tester.tap(find.text('取り下げる').first);
+    await tester.pumpAndSettle();
+    expect(catalog.removed, ['p1']);
+    expect(find.text('「じぶんのうた」を取り下げました'), findsOneWidget);
+  });
+
   test('more songs are added without repeats; trouble is told once', () async {
     final catalog = _FakeCatalog()
       ..listed = [_listed('r1', 'いち'), _listed('r2', 'に')]
@@ -277,6 +306,8 @@ final class _FakeCatalog implements SongCatalog {
   final used = <String>[];
   final posted = <(CustomSong, SongRights)>[];
   final reported = <(String, SongReportReason)>[];
+  var own = <CatalogSong>[];
+  final removed = <String>[];
 
   void _needLogin() {
     if (!loggedIn) {
@@ -330,8 +361,14 @@ final class _FakeCatalog implements SongCatalog {
   }
 
   @override
-  Future<List<CatalogSong>> mine() async => const [];
+  Future<List<CatalogSong>> mine() async {
+    _needLogin();
+    return own;
+  }
 
   @override
-  Future<void> remove(String id) async {}
+  Future<void> remove(String id) async {
+    _needLogin();
+    removed.add(id);
+  }
 }

@@ -507,7 +507,71 @@ final class _SongChoicesState extends State<_SongChoices> {
           ],
         ),
       },
+      if (library.canPost)
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: _showMine,
+            child: const Text('自分の投稿をみる'),
+          ),
+        ),
     ];
+  }
+
+  /// The person's own posts, with a way to take each one down.
+  Future<void> _showMine() async {
+    final library = widget.library;
+    if (library == null) return;
+    final List<CatalogSong> mine;
+    try {
+      mine = await library.mine();
+    } on SongCatalogException catch (error) {
+      return _say(error.message);
+    }
+    if (!mounted) return;
+    final removed = await showModalBottomSheet<CatalogSong>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(20, 4, 12, 20),
+          children: [
+            Text('自分の投稿', style: Theme.of(sheetContext).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            if (mine.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text('まだ投稿していません。'),
+              ),
+            for (final song in mine)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  song.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  song.status == 'hidden'
+                      ? '通報があり、確認のため非公開になっています'
+                      : '${song.uses}回つかわれた',
+                ),
+                trailing: TextButton(
+                  onPressed: () => Navigator.pop(sheetContext, song),
+                  child: const Text('取り下げる'),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (removed == null) return;
+    try {
+      await library.removePosted(removed.id);
+      _say('「${removed.title}」を取り下げました');
+    } on SongCatalogException catch (error) {
+      _say(error.message);
+    }
   }
 
   List<Widget> _local(
