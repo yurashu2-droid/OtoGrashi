@@ -12,6 +12,7 @@ import '../domain/project.dart';
 import '../features/create/creation_controller.dart';
 import '../features/create/creation_flow.dart';
 import '../features/onboarding/onboarding_screen.dart';
+import '../features/songs/midi_song_reader.dart';
 import '../features/songs/song_library.dart';
 import '../media/midi_file_picker.dart';
 import '../storage/profile_store.dart';
@@ -144,6 +145,7 @@ class _CreationHostState extends State<_CreationHost> {
               songs: songs,
               catalog: sharing == null ? null : ServerSongCatalog(sharing),
               picker: const PlatformMidiFilePicker(),
+              reader: readMidiSong,
               signIn: sharing == null
                   ? null
                   : () async {
