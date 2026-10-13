@@ -140,6 +140,39 @@ void main() {
     }
   });
 
+  test('a fitted score is one the catalogue takes', () {
+    // the rules of backend/shared-folders/src/songs.ts (songDraft), which
+    // refuses the whole post for a single note out of place
+    final random = math.Random(7);
+    for (var round = 0; round < 200; round++) {
+      final fitted = fitScore([
+        for (var lane = 0; lane < random.nextInt(5); lane++)
+          [
+            for (var i = random.nextInt(900); i > 0; i--)
+              [
+                random.nextInt(scoreTicks + 4000) - 2000,
+                random.nextInt(6000) - 200,
+                random.nextInt(200) - 30,
+              ],
+          ],
+      ]);
+      expect(fitted, hasLength(3));
+      for (final lane in fitted) {
+        expect(lane.length, lessThanOrEqualTo(600));
+        var previous = 0;
+        for (final note in lane) {
+          expect(note, hasLength(3));
+          final [start, duration, pitch] = note;
+          expect(start, greaterThanOrEqualTo(previous), reason: '$lane');
+          expect(duration, greaterThanOrEqualTo(1));
+          expect(start + duration, lessThanOrEqualTo(32 * 480));
+          expect(pitch, inInclusiveRange(0, 127));
+          previous = start;
+        }
+      }
+    }
+  });
+
   test('a score from outside is fitted to eight bars and three lanes', () {
     final fitted = fitScore([
       [

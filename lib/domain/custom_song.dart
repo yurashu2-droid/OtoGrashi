@@ -9,6 +9,13 @@ enum SongOrigin {
   catalog,
 }
 
+/// [raw] as one line of at most [maximum] characters, without the line breaks
+/// and control characters that the catalogue refuses in a name.
+String singleLine(String raw, int maximum) {
+  final line = raw.replaceAll(RegExp(r'[\s\u0000-\u001f\u007f]+'), ' ').trim();
+  return String.fromCharCodes(line.runes.take(maximum)).trimRight();
+}
+
 /// A song that is not built into the app: its name, who it is credited to, and
 /// its score (melody, bass, chords) in the format of the bundled songs. A
 /// project made with it carries a copy, so the song keeps playing even after
@@ -101,8 +108,7 @@ final class CustomSong {
   }
 
   static String _clean(String raw, int maximum, {String fallback = ''}) {
-    final line = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (line.isEmpty) return fallback;
-    return String.fromCharCodes(line.runes.take(maximum));
+    final line = singleLine(raw, maximum);
+    return line.isEmpty ? fallback : line;
   }
 }

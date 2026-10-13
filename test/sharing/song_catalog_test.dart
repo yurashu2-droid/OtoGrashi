@@ -161,13 +161,33 @@ void main() {
         'lanes': [..._lanes, <Object>[], <Object>[]],
       },
     });
+
+    // the server refuses line breaks, control characters and long names, so
+    // a name never leaves the phone with them
+    await catalog.post(
+      CustomSong(
+        id: 'local',
+        title: ' あさ\nの\u0007うた ${'あ' * 60}',
+        credit: ' \t ',
+        lanes: _lanes,
+      ),
+      SongRights.publicDomain,
+    );
+    final sent =
+        jsonDecode(utf8.decode(transport.requests.last.bytes))
+            as Map<String, dynamic>;
+    final title = sent['title'] as String;
+    expect(title, startsWith('あさ の うた あ'));
+    expect(title.runes, hasLength(40));
+    expect(sent.containsKey('credit'), isFalse);
+    expect(sent['rights'], 'public_domain');
   });
 
   test('using, reporting and removing go to the right place', () async {
     logIn();
     transport.respond = (method, uri) => _json({'ok': true, 'uses': 3});
     await catalog.countUse(_id);
-    await catalog.report(_id, SongReportReason.rights, note: ' そっくりです ');
+    await catalog.report(_id, SongReportReason.rights, note: ' そっくり\nです ');
     await catalog.remove(_id);
     expect(transport.requests.map((r) => '${r.method} ${r.uri.path}'), [
       'POST /v1/songs/$_id/use',
@@ -177,7 +197,7 @@ void main() {
     expect(transport.requests[0].headers.containsKey('X-Oto-Session'), isFalse);
     expect(jsonDecode(utf8.decode(transport.requests[1].bytes)), {
       'reason': 'rights',
-      'note': 'そっくりです',
+      'note': 'そっくり です',
     });
     expect(transport.requests[2].headers['X-Oto-Session'], _token);
   });
@@ -201,6 +221,29 @@ void main() {
     expect((await refused(404, 'song_not_found')).message, contains('公開されていません'));
     expect((await refused(400, 'invalid_lanes')).message, contains('別のMIDI'));
     expect((await refused(429, 'rate_limited')).message, contains('少し待って'));
+    expect((await refused(400, 'invalid_text')).message, contains('40文字'));
+    expect((await refused(400, 'own_song')).message, contains('通報できません'));
+    expect((await refused(403, 'poster_required')).message, contains('投稿した人'));
+    // a code this version does not know still reads as Japanese
+    for (final code in ['invalid_cursor', 'something_new']) {
+      final message = (await refused(400, code)).message;
+      expect(message, contains('もう一度'));
+      expect(message, isNot(contains('English')));
+    }
+    transport.respond = (method, uri) async => SharedHttpResponse(
+      502,
+      Stream.value(utf8.encode('<html>Bad Gateway</html>')),
+    );
+    await expectLater(
+      catalog.popular(),
+      throwsA(
+        isA<SongCatalogException>().having(
+          (error) => error.message,
+          'message',
+          contains('もう一度'),
+        ),
+      ),
+    );
     // an expired login asks for a new one
     logIn();
     expect((await refused(401, 'session_expired')).needsLogin, isTrue);

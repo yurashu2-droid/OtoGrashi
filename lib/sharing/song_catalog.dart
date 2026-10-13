@@ -148,18 +148,19 @@ final class ServerSongCatalog implements SongCatalog {
 
   @override
   Future<CustomSong> fetch(CatalogSong song) async {
-    final json = (await _call('GET', '/v1/songs/${song.id}'))['song'];
-    final score = json is Map ? json['score'] : null;
-    final fetched = CustomSong.tryFromJson(<String, Object?>{
-      // one entry in the phone's song list per catalogue song
-      'id': 'catalog-${song.id}',
-      'title': json is Map ? json['title'] : null,
-      'credit': json is Map ? json['credit'] : null,
-      'author': json is Map ? json['author'] : null,
-      'remoteId': song.id,
-      'origin': SongOrigin.catalog.name,
-      'lanes': score is Map ? score['lanes'] : (json is Map ? json['lanes'] : null),
-    });
+    final json = (await _call('GET', '/v1/songs/${_segment(song.id)}'))['song'];
+    final fetched = json is! Map
+        ? null
+        : CustomSong.tryFromJson(<String, Object?>{
+            // one entry in the phone's song list per catalogue song
+            'id': 'catalog-${song.id}',
+            'title': json['title'],
+            'credit': json['credit'],
+            'author': json['author'],
+            'remoteId': song.id,
+            'origin': SongOrigin.catalog.name,
+            'lanes': json['lanes'],
+          });
     if (fetched == null) {
       throw const SongCatalogException('この曲を読み込めませんでした。', code: 'invalid_song');
     }
@@ -168,7 +169,7 @@ final class ServerSongCatalog implements SongCatalog {
 
   @override
   Future<void> countUse(String id) async {
-    await _call('POST', '/v1/songs/$id/use', data: const {});
+    await _call('POST', '/v1/songs/${_segment(id)}/use', data: const {});
   }
 
   @override
@@ -197,13 +198,14 @@ final class ServerSongCatalog implements SongCatalog {
     SongReportReason reason, {
     String note = '',
   }) async {
+    final line = singleLine(note, 200);
     await _call(
       'POST',
-      '/v1/songs/$id/report',
+      '/v1/songs/${_segment(id)}/report',
       account: true,
       data: <String, dynamic>{
         'reason': reason.name,
-        if (note.trim().isNotEmpty) 'note': note.trim(),
+        if (line.isNotEmpty) 'note': line,
       },
     );
   }
@@ -215,8 +217,11 @@ final class ServerSongCatalog implements SongCatalog {
 
   @override
   Future<void> remove(String id) async {
-    await _call('DELETE', '/v1/songs/$id', account: true);
+    await _call('DELETE', '/v1/songs/${_segment(id)}', account: true);
   }
+
+  /// An id is one part of a path, whatever a list happened to contain.
+  static String _segment(String id) => Uri.encodeComponent(id);
 
   List<CatalogSong> _songs(Object? json) => [
     if (json is List)
@@ -254,10 +259,22 @@ final class ServerSongCatalog implements SongCatalog {
     'song_limit' => '投稿できるのは30曲までです。使わない曲を消してから投稿してください。',
     'post_limit' => '今日は、これ以上投稿できません。また明日お試しください。',
     'song_not_found' => 'この曲は、もう公開されていません。',
+    'own_song' => '自分で投稿した曲は通報できません。「自分の投稿をみる」から取り下げられます。',
+    'poster_required' => 'この曲を取り下げられるのは、投稿した人だけです。',
     'rate_limited' => '少し待ってから、もう一度お試しください。',
-    'body_too_large' => 'この曲は大きすぎて送れませんでした。',
-    final code? when code.startsWith('invalid_') =>
-      'この曲のデータを送れませんでした。別のMIDIで試してください。',
-    _ => error.message,
+    'body_too_large' || 'too_many_notes' => 'この曲は大きすぎて送れませんでした。',
+    'invalid_text' => '曲名は40文字まで、作者・出典は60文字までにしてください。',
+    'empty_melody' ||
+    'invalid_score' ||
+    'unsupported_score_version' ||
+    'invalid_beats' ||
+    'invalid_lanes' ||
+    'invalid_note' ||
+    'invalid_note_time' ||
+    'invalid_pitch' ||
+    'unsorted_notes' => 'この曲のデータを送れませんでした。別のMIDIで試してください。',
+    // something on this phone, already in the person's words
+    null when error.statusCode == null => error.message,
+    _ => 'うまくいきませんでした。もう一度お試しください。',
   };
 }

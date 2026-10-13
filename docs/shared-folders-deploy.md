@@ -10,7 +10,11 @@ Cloudflare の管理 API トークンを GitHub の Repository secret に登録�
 4. トークンから見えるアカウントが 1 つなら自動選択します。複数ある場合は同じ画面の Repository variable（または secret）`CLOUDFLARE_ACCOUNT_ID` に対象アカウントの 32 桁 ID を設定してください。複数候補から勝手に選択しません。
 5. Actions → **Deploy shared folders** → **Run workflow** を開き、**source_ref** に公開するコードのブランチまたはコミットを指定します。現在の開発ブランチは `claude/video-styles` です。実行入口の workflow はデフォルトブランチの `main` にも置き、バックエンドのコードは source_ref から取得します。push / pull request からは公開されません。Summary に実際に取得したコミットが残ります。
 
-成功すると Actions の Summary と `shared-folders-deployment-info` artifact 内の `deployment-info.json` に HTTPS URL が出ます。アプリの「みんなの音」から、この URL をサービスのアドレスに設定してください。ビルド時に固定する場合の変数名は `OTO_SHARED_API_URL` です。artifact にトークンは含まれません。
+成功すると Actions の Summary と `shared-folders-deployment-info` artifact 内の `deployment-info.json` に HTTPS URL が出ます。artifact にトークンは含まれません。
+
+この URL を、GitHub リポジトリの Settings → Secrets and variables → Actions → **Variables** に Repository variable `OTO_SHARED_API_URL` として登録してください（`https://…` の origin だけで、パスは付けません）。それ以降に作る IPA（workflow **iPhone unsigned Release IPA**）はこのサービスを最初から使い、「みんなの音」でアドレスを聞かれなくなります。曲タブの「みんなの曲」（MIDI から読み込んだ曲の投稿・一覧・通報）も同じサービスを使うので、同じ変数で使えるようになります。
+
+変数を登録していない IPA では、「みんなの音」の画面でこの URL を入力するまで、「みんなの曲」は「まだ準備中です」と表示されます。MIDI の読み込みと、読み込んだ曲で作ることは、サービスがなくても使えます。
 
 パスキーはこの HTTPS ドメインに紐づきます。友だちに公開した後は、Worker 名やドメインを気軽に変更しないでください。ドメインの変更だけでは既存のパスキーは移りません。Cloudflare の API トークンをアプリへ渡す必要はありません。
 
