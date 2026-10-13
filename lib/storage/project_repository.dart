@@ -385,6 +385,7 @@ final class SqliteProjectRepository implements ProjectRepository {
     required String relativePath,
     String? id,
     DateTime? createdAt,
+    bool replacePreviews = false,
   }) async {
     _validateRenderPath(relativePath);
     final export = CompletedExport(
@@ -400,6 +401,16 @@ final class SqliteProjectRepository implements ProjectRepository {
         <Object?>[projectId],
       );
       if (project.isEmpty) throw ProjectNotFound(projectId);
+      if (replacePreviews) {
+        // A song is listed as finished with the video that was just made
+        // (its preview). A later make, or the full-quality export, takes that
+        // place; videos exported in full stay.
+        _database.connection.execute(
+          'DELETE FROM completed_exports WHERE project_id = ? '
+          "AND relative_path LIKE '%-preview.mp4'",
+          <Object?>[projectId],
+        );
+      }
       _database.connection.execute(
         '''
         INSERT INTO completed_exports (

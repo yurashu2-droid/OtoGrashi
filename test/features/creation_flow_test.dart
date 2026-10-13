@@ -1251,14 +1251,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // the save and share tiles sit under the song card
-    await tester.scrollUntilVisible(
-      find.text('保存する'),
-      200,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('保存する'));
+    // share and save stay in reach at the bottom, without scrolling
+    expect(find.byTooltip('ホーム'), findsOneWidget);
+    await tester.tap(find.text('写真に保存'));
     await tester.pumpAndSettle();
     expect(delivery.saved, hasLength(1));
     expect(find.text('写真に保存しました'), findsOneWidget);

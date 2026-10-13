@@ -148,8 +148,8 @@ class _CreationFlowState extends State<CreationFlow> {
   String? _destinationId;
   var _sharingOpen = false;
   String? _openedInvitation;
-  // the finished song that has already played itself once
-  String? _revealedSong;
+  // what is remembered about the finished song while another tab is open
+  _FinishedSong? _finished;
 
   @override
   void didUpdateWidget(CreationFlow oldWidget) {
@@ -376,10 +376,40 @@ class _CreationFlowState extends State<CreationFlow> {
   }
 
   /// A song from a folder: those sounds become the collection, and the song
-  /// settings open (nothing is made until つくる).
+  /// settings open (nothing is made until つくる). A song already in progress
+  /// is never replaced without asking.
   Future<void> _makeSongFrom(List<ClipAsset> sounds) async {
     final controller = widget.controller;
-    controller.startNew();
+    final draft = controller.state;
+    var addToDraft = false;
+    if (draft.clips.isNotEmpty && draft.phase != CreationPhase.completed) {
+      final choice = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('つくりかけの曲があります'),
+          content: Text(
+            'いまの${draft.clips.length}つの音に足しますか？ それとも、新しい曲にしますか？',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('キャンセル'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('いまの曲に足す'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('新しい曲にする'),
+            ),
+          ],
+        ),
+      );
+      if (choice == null || !mounted) return;
+      addToDraft = choice;
+    }
+    if (!addToDraft) controller.startNew();
     for (final sound in sounds.take(6)) {
       await controller.addExisting(sound);
     }
@@ -462,16 +492,51 @@ class _CreationFlowState extends State<CreationFlow> {
     controller.beginChoosing();
   }
 
+  /// Adds a sound from a list to the song in progress. The person stays where
+  /// they are, so several sounds can be added in a row.
   Future<void> _reuseAsset(ClipAsset asset) async {
-    final before = widget.controller.state.clips.map((clip) => clip.id).toSet();
-    await widget.controller.addExisting(asset);
-    if (mounted) {
-      setState(() {
-        _tabIndex = 0;
-        _folderOpen = true;
-      });
-      await _nameNewRelayClip(before);
+    final controller = widget.controller;
+    // a finished song is left as it is: this starts the next one
+    if (controller.state.phase == CreationPhase.completed) {
+      controller.startNew();
     }
+    final before = controller.state.clips.map((clip) => clip.id).toSet();
+    final String message;
+    if (before.contains(asset.id)) {
+      message = 'この音は、もう入っています';
+    } else if (before.length >= 6) {
+      message = '曲に入れられるのは6つまでです';
+    } else {
+      await controller.addExisting(asset);
+      if (!mounted) return;
+      final count = controller.state.clips.length;
+      message = count > before.length
+          ? 'つくりかけの曲に入れました（$count/6）'
+          : '追加できませんでした。もう一度お試しください。';
+      await _nameNewRelayClip(before);
+      if (!mounted) return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          action: SnackBarAction(
+            label: '見る',
+            onPressed: () => setState(() {
+              _tabIndex = 0;
+              _folderOpen = true;
+            }),
+          ),
+        ),
+      );
+  }
+
+  /// The song in progress was deleted in the library: let go of it, or every
+  /// later recording would try to join a project that is gone.
+  void _projectDeleted(Project project) {
+    final controller = widget.controller;
+    if (controller.state.project?.id == project.id) controller.startNew();
   }
 
   Widget _settings() {
@@ -520,6 +585,7 @@ class _CreationFlowState extends State<CreationFlow> {
             embedded: true,
             onCreate: _startCaptureFromLibrary,
             onProjectSelected: _openProject,
+            onProjectDeleted: _projectDeleted,
             onAssetSelected: _reuseAsset,
           ),
         ),
@@ -552,13 +618,20 @@ class _CreationFlowState extends State<CreationFlow> {
 
   Widget _creationContent(CreationState state) {
     if (state.phase == CreationPhase.completed) {
-      final song = '${state.project?.id}:${state.project?.revision}';
+      final key = '${state.project?.id}:${state.project?.revision}';
+      var finished = _finished;
+      if (finished == null || finished.key != key) {
+        finished = _finished = _FinishedSong(key);
+      }
       return _CompletedScreen(
         controller: widget.controller,
         delivery: widget.delivery,
-        reveal: _revealedSong != song,
-        onRevealed: () => _revealedSong = song,
+        song: finished,
         onOpenLibrary: () => setState(() => _tabIndex = 1),
+        onClose: () {
+          setState(() => _folderOpen = false);
+          widget.controller.startNew();
+        },
       );
     }
     // Pressing つくる shows its own waiting screen until the song is ready.
@@ -1047,19 +1120,37 @@ class _CollectScreen extends StatelessWidget {
                           ),
                         ],
                       )
-                    : FilledButton(
-                        onPressed: controller.deferRendering
-                            ? controller.beginChoosing
-                            : controller.createPreview,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppTokens.ink,
-                          foregroundColor: Colors.white,
-                        ),
-                        child: Text(
-                          controller.deferRendering
-                              ? 'この音で曲をつくる  ↗'
-                              : 'この音で${state.durationSeconds}秒をつくる  ↗',
-                        ),
+                    : Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // the song chosen so far (also from the 曲 tab)
+                          if (controller.deferRendering) ...[
+                            Text(
+                              '曲は「${state.melody.label}」。次の画面で変えられます',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppTokens.mutedInk,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                          ],
+                          FilledButton(
+                            onPressed: controller.deferRendering
+                                ? controller.beginChoosing
+                                : controller.createPreview,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AppTokens.ink,
+                              foregroundColor: Colors.white,
+                            ),
+                            child: Text(
+                              controller.deferRendering
+                                  ? 'この音で曲をつくる  ↗'
+                                  : 'この音で${state.durationSeconds}秒をつくる  ↗',
+                            ),
+                          ),
+                        ],
                       ),
               ),
             )
@@ -1513,21 +1604,34 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
   }
 }
 
+/// What is remembered about a finished song while the person looks elsewhere
+/// (the 曲 tab): coming back neither replays it nor exports or saves it twice.
+final class _FinishedSong {
+  _FinishedSong(this.key);
+
+  /// project id and revision
+  final String key;
+  var revealed = false;
+  var saved = false;
+  var exportRecorded = false;
+  RenderedMedia? fullVideo;
+}
+
 class _CompletedScreen extends StatefulWidget {
   const _CompletedScreen({
     required this.controller,
     required this.delivery,
+    required this.song,
     required this.onOpenLibrary,
-    this.reveal = true,
-    this.onRevealed,
+    required this.onClose,
   });
   final CreationController controller;
   final MediaDeliveryGateway? delivery;
+  final _FinishedSong song;
   final VoidCallback onOpenLibrary;
 
-  /// The first look at this song: it starts playing by itself.
-  final bool reveal;
-  final VoidCallback? onRevealed;
+  /// Back to Home; the song stays in the library.
+  final VoidCallback onClose;
 
   @override
   State<_CompletedScreen> createState() => _CompletedScreenState();
@@ -1539,11 +1643,8 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   );
   late final MediaDeliveryGateway delivery =
       widget.delivery ?? PlatformMediaDeliveryGateway();
-  RenderedMedia? _fullVideo;
   String? _exportOperationId;
-  bool _exportRecorded = false;
   bool _busy = false;
-  bool _saved = false;
   String? _message;
   String? _busyStage;
   var _autoStarted = false;
@@ -1551,11 +1652,42 @@ class _CompletedScreenState extends State<_CompletedScreen> {
   @override
   void initState() {
     super.initState();
-    if (!widget.reveal) return;
+    // the first look at this song: it is kept as a finished work, and it
+    // starts playing by itself
+    if (_song.revealed) return;
+    _song.revealed = true;
     playback.addListener(_autoPlay);
     unawaited(HapticFeedback.mediumImpact());
-    widget.onRevealed?.call();
+    unawaited(_keepAsFinished());
   }
+
+  /// 「オトグラシに保存したよ」 has to be true before anything is shared: from
+  /// here on the song is listed as finished, with the video that was just
+  /// made, and is no longer brought back as a draft.
+  Future<void> _keepAsFinished() async {
+    final state = widget.controller.state;
+    final project = state.project;
+    final preview = state.preview;
+    final projects = widget.controller.projects;
+    if (project == null ||
+        preview == null ||
+        projects is! SqliteProjectRepository) {
+      return;
+    }
+    try {
+      await projects.recordCompletedExport(
+        projectId: project.id,
+        sourceRevision: project.revision,
+        relativePath: preview.relativePath,
+        replacePreviews: true,
+      );
+    } catch (_) {
+      // it can still be saved or shared, which records it as well
+    }
+  }
+
+  _FinishedSong get _song => widget.song;
+  bool get _saved => _song.saved;
 
   // the reveal: a finished song starts by itself, once
   void _autoPlay() {
@@ -1583,7 +1715,8 @@ class _CompletedScreenState extends State<_CompletedScreen> {
 
   Future<RenderedMedia> _ensureFullVideo() async {
     final project = widget.controller.state.project!;
-    var video = _fullVideo;
+    final song = _song;
+    var video = song.fullVideo;
     if (video == null || video.revision != project.revision) {
       final operationId = 'export-${DateTime.now().microsecondsSinceEpoch}';
       _exportOperationId = operationId;
@@ -1601,17 +1734,18 @@ class _CompletedScreenState extends State<_CompletedScreen> {
       } finally {
         if (_exportOperationId == operationId) _exportOperationId = null;
       }
-      _fullVideo = video;
-      _exportRecorded = false;
+      song.fullVideo = video;
+      song.exportRecorded = false;
     }
     final projects = widget.controller.projects;
-    if (!_exportRecorded && projects is SqliteProjectRepository) {
+    if (!song.exportRecorded && projects is SqliteProjectRepository) {
       await projects.recordCompletedExport(
         projectId: project.id,
         sourceRevision: project.revision,
         relativePath: video.relativePath,
+        replacePreviews: true,
       );
-      _exportRecorded = true;
+      song.exportRecorded = true;
     }
     return video;
   }
@@ -1630,7 +1764,7 @@ class _CompletedScreenState extends State<_CompletedScreen> {
       await delivery.saveToPhotos(video.relativePath);
       if (mounted) {
         setState(() {
-          _saved = true;
+          _song.saved = true;
           _message = '写真に保存しました';
         });
       }
@@ -1695,6 +1829,11 @@ class _CompletedScreenState extends State<_CompletedScreen> {
     return Scaffold(
       backgroundColor: AppTokens.surfaceColor,
       appBar: AppBar(
+        leading: IconButton(
+          onPressed: widget.onClose,
+          tooltip: 'ホーム',
+          icon: const Icon(Icons.close_rounded),
+        ),
         title: const Text('できあがり'),
         centerTitle: true,
         actions: const [
@@ -1779,42 +1918,6 @@ class _CompletedScreenState extends State<_CompletedScreen> {
               label: '完成した${state.durationSeconds}秒',
             ),
             const SizedBox(height: 10),
-            // what people came for, large and first
-            Row(
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: FilledButton.icon(
-                    onPressed: _busy ? null : _share,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppTokens.coral,
-                      foregroundColor: AppTokens.ink,
-                      minimumSize: const Size(0, 56),
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                    ),
-                    icon: const Icon(Icons.ios_share_rounded, size: 20),
-                    label: const Text('シェアする'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  flex: 2,
-                  child: OutlinedButton.icon(
-                    onPressed: _busy || _saved ? null : _save,
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(0, 56),
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                    ),
-                    icon: Icon(
-                      _saved ? Icons.check_rounded : Icons.download_rounded,
-                      size: 20,
-                    ),
-                    label: Text(_saved ? '保存済み' : '保存する'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
             Row(
               children: [
                 _ShareTile(
@@ -1836,22 +1939,15 @@ class _CompletedScreenState extends State<_CompletedScreen> {
                   label: '作品を見る',
                   onTap: widget.onOpenLibrary,
                 ),
+                const SizedBox(width: 8),
+                _ShareTile(
+                  icon: Icons.add_rounded,
+                  label: '新しくつくる',
+                  onTap: _busy ? null : widget.controller.startNew,
+                ),
               ],
             ),
             const SizedBox(height: 12),
-            if (_busy) ...[
-              const LinearProgressIndicator(),
-              const SizedBox(height: 7),
-              Text(
-                _busyStage ?? '動画を準備しています',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 7),
-            ],
-            if (_message != null) ...[
-              Text(_message!, textAlign: TextAlign.center),
-              const SizedBox(height: 7),
-            ],
             const Text(
               '映り込みや会話がないか、最後に確認してください。',
               textAlign: TextAlign.center,
@@ -1860,13 +1956,66 @@ class _CompletedScreenState extends State<_CompletedScreen> {
           ],
         ),
       ),
+      // what people came for stays in reach however small the phone is
       bottomNavigationBar: SafeArea(
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-          child: OutlinedButton(
-            onPressed: widget.controller.startNew,
-            child: const Text('新しくつくる'),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_busy) ...[
+                const LinearProgressIndicator(),
+                const SizedBox(height: 6),
+                Text(
+                  _busyStage ?? '動画を準備しています',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 8),
+              ] else if (_message != null) ...[
+                Text(
+                  _message!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 8),
+              ],
+              Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: FilledButton.icon(
+                      onPressed: _busy ? null : _share,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppTokens.coral,
+                        foregroundColor: AppTokens.ink,
+                        minimumSize: const Size(0, 56),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                      icon: const Icon(Icons.ios_share_rounded, size: 20),
+                      label: const Text('シェアする'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    flex: 2,
+                    child: OutlinedButton.icon(
+                      onPressed: _busy || _saved ? null : _save,
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 56),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                      icon: Icon(
+                        _saved ? Icons.check_rounded : Icons.download_rounded,
+                        size: 20,
+                      ),
+                      label: Text(_saved ? '保存済み' : '写真に保存'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
       ),

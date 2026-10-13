@@ -48,6 +48,38 @@ void main() {
       expect((await assets.list()).single.label, 'コップを置く音');
     });
 
+    test('a finished song lists its latest video, and keeps full exports', () async {
+      final asset = await assets.importFile(fixture.path);
+      final project = await _createProjectWith(projects, asset.id, 'song');
+      Future<void> finish(int revision, String file, {bool replace = true}) =>
+          projects.recordCompletedExport(
+            projectId: project.id,
+            sourceRevision: revision,
+            relativePath: 'renders/${project.id}/$revision/$file',
+            replacePreviews: replace,
+          );
+
+      // made once, then made again: only the newer video stands for the song
+      await finish(1, 'a-preview.mp4');
+      await finish(2, 'b-preview.mp4');
+      expect(
+        (await projects.listCompletedExports(project.id))
+            .map((e) => e.relativePath.split('/').last),
+        ['b-preview.mp4'],
+      );
+
+      // saving it in full quality takes the preview's place
+      await finish(2, 'c-full.mp4');
+      // a later make does not remove a video that was exported in full
+      await finish(3, 'd-preview.mp4');
+      expect(
+        (await projects.listCompletedExports(project.id))
+            .map((e) => e.relativePath.split('/').last)
+            .toSet(),
+        {'c-full.mp4', 'd-preview.mp4'},
+      );
+    });
+
     test('deleting one project keeps a shared original', () async {
       final asset = await assets.importFile(fixture.path);
       final first = await _createProjectWith(projects, asset.id, 'first');

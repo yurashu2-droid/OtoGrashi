@@ -23,6 +23,7 @@ final class LibraryScreen extends StatefulWidget {
     this.presentation,
     this.delivery,
     this.onProjectSelected,
+    this.onProjectDeleted,
     this.onAssetSelected,
     this.initialTabIndex = 0,
     this.onSettings,
@@ -36,6 +37,9 @@ final class LibraryScreen extends StatefulWidget {
   final MediaPresentationGateway? presentation;
   final MediaDeliveryGateway? delivery;
   final ProjectSelected? onProjectSelected;
+
+  /// A song was deleted here; whoever still holds it has to let go of it.
+  final ValueChanged<Project>? onProjectDeleted;
   final ValueChanged<ClipAsset>? onAssetSelected;
   final int initialTabIndex;
   final VoidCallback? onSettings;
@@ -392,6 +396,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
     if (confirmed != true) return;
     await widget.projects.deleteProject(project.id);
+    widget.onProjectDeleted?.call(project);
     if (!context.mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     messenger.showSnackBar(
