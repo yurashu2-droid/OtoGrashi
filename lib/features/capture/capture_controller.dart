@@ -75,7 +75,7 @@ final class CaptureController extends ChangeNotifier {
         _set(_state.copyWith(cameraFacing: facing, clearError: true));
       }
     } on MediaCaptureException catch (error) {
-      if (!_disposed) _set(_state.copyWith(message: error.message));
+      if (!_disposed) _set(_state.copyWith(message: captureProblem(error.code)));
     } finally {
       _switchingCamera = false;
       if (!_disposed) notifyListeners();
@@ -265,7 +265,7 @@ final class CaptureController extends ChangeNotifier {
       restore(
         message: error.code == MediaCaptureErrorCode.cancelled
             ? null
-            : error.message,
+            : captureProblem(error.code),
       );
     } catch (_) {
       restore(message: '動画を選べませんでした。もう一度お試しください。');
@@ -335,7 +335,7 @@ final class CaptureController extends ChangeNotifier {
             ? CapturePhase.interrupted
             : CapturePhase.failed,
         errorCode: error.code,
-        message: error.message,
+        message: captureProblem(error.code),
         requiresExplicitResume: error.code == MediaCaptureErrorCode.interrupted,
         clearResult: true,
       ),
@@ -361,3 +361,18 @@ final class CaptureController extends ChangeNotifier {
     super.dispose();
   }
 }
+
+/// What went wrong while recording or choosing a video, in the person's
+/// words: the native side only reports which kind of problem it was.
+String captureProblem(MediaCaptureErrorCode code) => switch (code) {
+  MediaCaptureErrorCode.permissionDenied =>
+    'カメラとマイクを使えません。iPhoneの「設定」でオトグラシに許可してください。',
+  MediaCaptureErrorCode.unavailable => 'カメラを準備できませんでした。もう一度お試しください。',
+  MediaCaptureErrorCode.interrupted => '録画が中断されました。もう一度お試しください。',
+  MediaCaptureErrorCode.incompleteCapture => 'うまく録れませんでした。もう一度お試しください。',
+  MediaCaptureErrorCode.noAudio =>
+    '音が入っていませんでした。マイクをふさがずに、もう一度録ってみてください。',
+  MediaCaptureErrorCode.tooShort => '短すぎました。もう少し長く録ってください。',
+  MediaCaptureErrorCode.invalidMedia => 'この動画は使えませんでした。別の動画で試してください。',
+  MediaCaptureErrorCode.cancelled => 'やめました。',
+};
