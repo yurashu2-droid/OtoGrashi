@@ -33,7 +33,8 @@ class _RollingTabBarState extends State<RollingTabBar>
   static const _ball = 52.0;
   static const _slots = [32.0, 124.0, 216.0];
   static const _labels = ['ホーム', '録る', '曲'];
-  static const _ghostInk = Color(0xFFB5B5B5);
+  // 3:1 against the white pill, the least an icon that is a control may have
+  static const _ghostInk = Color(0xFF949494);
   static const _roll = Cubic(0.45, 0.05, 0.3, 1.15);
 
   late final AnimationController _motion = AnimationController(

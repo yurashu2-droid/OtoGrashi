@@ -82,17 +82,17 @@ final class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 children: [
                   _UsageRow(
-                    label: '原本',
+                    label: '録った音（動画）',
                     value: usage.originalsBytes,
                     icon: Icons.video_library_outlined,
                   ),
                   _UsageRow(
-                    label: '完成した作品',
+                    label: 'つくった曲',
                     value: usage.completedBytes,
                     icon: Icons.movie_outlined,
                   ),
                   _UsageRow(
-                    label: '再生成できるキャッシュ',
+                    label: '一時ファイル',
                     value: usage.cacheBytes,
                     icon: Icons.cached,
                   ),
@@ -100,7 +100,7 @@ final class _SettingsScreenState extends State<SettingsScreen> {
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
                     child: OutlinedButton(
                       onPressed: usage.cacheBytes == 0 ? null : _clearCache,
-                      child: const Text('キャッシュを整理'),
+                      child: const Text('一時ファイルを消す'),
                     ),
                   ),
                 ],
@@ -201,8 +201,8 @@ final class _SettingsScreenState extends State<SettingsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('キャッシュを整理しますか？'),
-        content: const Text('原本と完成した作品はそのまま残ります。'),
+        title: const Text('一時ファイルを消しますか？'),
+        content: const Text('録った音と、つくった曲はそのまま残ります。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -210,7 +210,7 @@ final class _SettingsScreenState extends State<SettingsScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('整理'),
+            child: const Text('消す'),
           ),
         ],
       ),
@@ -220,7 +220,7 @@ final class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     setState(() => _usage = widget.usageLoader());
     ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('キャッシュを整理しました')));
+        .showSnackBar(const SnackBar(content: Text('一時ファイルを消しました')));
   }
 
   Future<void> _deleteDepthModel() async {

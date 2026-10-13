@@ -30,7 +30,7 @@ final class SongsScreen extends StatefulWidget {
 }
 
 class _SongsScreenState extends State<SongsScreen> {
-  static const _segments = ['じぶん', '友達', '曲をえらぶ'];
+  static const _segments = ['じぶん', '友だち', '曲をえらぶ'];
   var _segment = 0;
 
   @override
@@ -99,7 +99,8 @@ final class _Segmented extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    height: 44,
+    // 44pt to touch inside the 4pt rim
+    height: 52,
     padding: const EdgeInsets.all(4),
     decoration: BoxDecoration(
       color: AppTokens.tile,
@@ -145,7 +146,16 @@ final class _Segmented extends StatelessWidget {
                                   ? Colors.white
                                   : AppTokens.mutedInk,
                             ),
-                            child: Text(labels[i]),
+                            // large text shrinks rather than wrapping
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                ),
+                                child: Text(labels[i], maxLines: 1),
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -160,7 +170,7 @@ final class _Segmented extends StatelessWidget {
   );
 }
 
-/// 友達: sounds are shared through folders, so this leads to them.
+/// 友だち: sounds are shared through folders, so this leads to them.
 final class _FriendsEntry extends StatelessWidget {
   const _FriendsEntry({required this.onOpen});
 

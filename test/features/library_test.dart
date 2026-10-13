@@ -331,7 +331,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('完成'), findsOneWidget);
-    expect(find.text('完成版 1本を保存中'), findsOneWidget);
+    expect(find.text('完成した動画 1本'), findsOneWidget);
     await tester.tap(find.text('動画を見る'));
     await tester.pumpAndSettle();
     expect(find.byType(CompletedVideoScreen), findsOneWidget);

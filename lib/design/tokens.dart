@@ -13,7 +13,8 @@ abstract final class AppTokens {
   // Older screens call the accent "coral"; it now resolves to the pale red.
   static const coral = Color(0xFFF08F89);
   static const ink = Color(0xFF333333);
-  static const mutedInk = Color(0xFF8A8A8A);
+  // dark enough to read at caption sizes on the page ground (4.7:1)
+  static const mutedInk = Color(0xFF707070);
   static const hairline = Color(0xFFE9E9E9);
   static const tile = Color(0xFFF1F1F1);
   static const lavender = Color(0xFF9C84F0);

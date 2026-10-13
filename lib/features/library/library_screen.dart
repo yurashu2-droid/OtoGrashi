@@ -381,7 +381,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('作品を削除しますか？'),
-        content: const Text('使っている素材と完成版は残ります。あとから取り消せます。'),
+        content: const Text('録った音は残ります。削除した直後だけ「取り消す」で戻せます。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -402,6 +402,8 @@ class _LibraryScreenState extends State<LibraryScreen>
     messenger.showSnackBar(
       SnackBar(
         content: const Text('作品を削除しました'),
+        // long enough to notice it and reach 取り消す
+        duration: const Duration(seconds: 10),
         action: widget.projects is SqliteProjectRepository
             ? SnackBarAction(
                 label: '取り消す',
@@ -770,7 +772,7 @@ class _ProjectCardState extends State<_ProjectCard> {
                 ),
                 if (finished)
                   Text(
-                    '完成版 ${widget.completed.length}本を保存中',
+                    '完成した動画 ${widget.completed.length}本',
                     style: const TextStyle(color: AppTokens.mutedInk),
                   ),
                 const SizedBox(height: 10),
