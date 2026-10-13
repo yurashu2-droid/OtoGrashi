@@ -15,6 +15,9 @@ Arrangement arrangeEveryday({
   /// 原声を楽しむ: speech follows seeded syllable motifs (see [WordedSinger]),
   /// keeping each selected syllable intact across note boundaries.
   bool wordedSpeech = false,
+
+  /// An imported song's score, in place of the template's own.
+  List<List<List<int>>>? score,
 }) {
   if (clips.isEmpty) {
     throw const ArrangementRejected(
@@ -176,7 +179,9 @@ Arrangement arrangeEveryday({
       lanes[lane].add(clip);
     }
     for (var lane = 0; lane < 3; lane++) {
-      final notes = melodyTemplate.scoreNotes[lane];
+      final notes = (score ?? melodyTemplate.scoreNotes)[lane];
+      // an imported song may have no bass or no chords
+      if (notes.isEmpty) continue;
       final pitches = notes.map((n) => n[2]).toList()..sort();
       final nativeNote = _register(leads[lane]) ?? (lane == 1 ? 50 : 57);
       // ONE octave for a whole part, never independently wrap each note. This
@@ -451,7 +456,7 @@ Arrangement arrangeEveryday({
   }
   return Arrangement(
     templateId: midi
-        ? 'score-${melodyTemplate.scoreId ?? 'image-3part'}-128bpm-8bar'
+        ? 'score-${melodyTemplate.scoreId ?? (score == null ? 'image-3part' : 'imported')}-128bpm-8bar'
         : 'everyday-${style.name}-${melodyTemplate.name}-v3',
     templateVersion: 1,
     analysisVersion: 1,

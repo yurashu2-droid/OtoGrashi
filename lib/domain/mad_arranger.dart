@@ -27,6 +27,7 @@ Arrangement arrangeMad({
   required int seconds,
   bool collect = false,
   bool window = false,
+  List<List<List<int>>>? score,
 }) {
   if (seconds != 15 && seconds != 30) {
     throw const MediaContractException('Choose a 15 or 30 second MAD.');
@@ -57,7 +58,7 @@ Arrangement arrangeMad({
     melodic: melodyTemplate != MelodyTemplate.none,
     // any chosen song plays its own score; the other patterns keep the
     // bundled three-part score as the MAD tune
-    scoreNotes: melodyTemplate.scoreNotes,
+    scoreNotes: score ?? melodyTemplate.scoreNotes,
     total: seconds * _sampleRate,
   );
   if (collect) {

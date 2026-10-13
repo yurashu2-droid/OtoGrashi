@@ -11,7 +11,14 @@ Arrangement arrange({
   MelodyTemplate melodyTemplate = MelodyTemplate.none,
   PerformanceMode performanceMode = PerformanceMode.natural,
   int durationSeconds = 15,
+
+  /// The score of an imported song (see [MelodyTemplate.imported]); it takes
+  /// the place of the chosen template's own score.
+  List<List<List<int>>>? score,
 }) {
+  final notes = score == null || !melodyTemplate.isMidiScore
+      ? null
+      : fitScore(score);
   if (performanceMode == PerformanceMode.mad ||
       performanceMode == PerformanceMode.collect ||
       performanceMode == PerformanceMode.window) {
@@ -23,6 +30,7 @@ Arrangement arrange({
       seconds: durationSeconds,
       collect: performanceMode == PerformanceMode.collect,
       window: performanceMode == PerformanceMode.window,
+      score: notes,
     );
   }
   if (performanceMode != PerformanceMode.natural ||
@@ -36,6 +44,7 @@ Arrangement arrange({
       melodyTemplate: melodyTemplate,
       mode: performanceMode,
       seconds: durationSeconds,
+      score: notes,
     );
   }
   if (melodyTemplate != MelodyTemplate.none) {
@@ -45,6 +54,7 @@ Arrangement arrange({
       seed: seed,
       melodyTemplate: melodyTemplate,
       wordedSpeech: true,
+      score: notes,
     );
   }
   if (clips.isEmpty) {

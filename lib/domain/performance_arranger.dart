@@ -13,6 +13,7 @@ Arrangement arrangePerformance({
   required MelodyTemplate melodyTemplate,
   required PerformanceMode mode,
   required int seconds,
+  List<List<List<int>>>? score,
 }) {
   if (seconds != 15 && seconds != 30) {
     throw const MediaContractException('Choose a 15 or 30 second performance.');
@@ -26,6 +27,7 @@ Arrangement arrangePerformance({
     seed: seed,
     melodyTemplate: melodyTemplate,
     wordedSpeech: mode == PerformanceMode.natural,
+    score: score,
   );
   final roles = base.songRoles!;
   final events = <SoundEvent>[];
@@ -206,6 +208,7 @@ Arrangement arrangePerformance({
               style: ArrangementStyle.lively,
               seed: seed + 3,
               melodyTemplate: melodyTemplate,
+              score: score,
             );
       for (final e in arrangement.events) {
         final position = e.destinationStartSample + segment * 720000;
