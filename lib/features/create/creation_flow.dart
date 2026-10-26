@@ -618,6 +618,7 @@ class _CreationFlowState extends State<CreationFlow> {
             onCreate: _startCaptureFromLibrary,
             onProjectSelected: _openProject,
             onProjectDeleted: _projectDeleted,
+            onProjectRenamed: widget.controller.projectRenamed,
             onAssetSelected: _reuseAsset,
             onDeleteAsset: _deleteSound,
           ),

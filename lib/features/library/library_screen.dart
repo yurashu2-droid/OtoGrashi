@@ -24,6 +24,7 @@ final class LibraryScreen extends StatefulWidget {
     this.delivery,
     this.onProjectSelected,
     this.onProjectDeleted,
+    this.onProjectRenamed,
     this.onAssetSelected,
     this.onDeleteAsset,
     this.initialTabIndex = 0,
@@ -41,6 +42,9 @@ final class LibraryScreen extends StatefulWidget {
 
   /// A song was deleted here; whoever still holds it has to let go of it.
   final ValueChanged<Project>? onProjectDeleted;
+
+  /// A song was renamed here, with its new revision.
+  final ValueChanged<Project>? onProjectRenamed;
   final ValueChanged<ClipAsset>? onAssetSelected;
 
   /// Deletes a sound from the phone and every folder; completes with how many
@@ -210,6 +214,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                   ? null
                   : () => widget.onProjectSelected!(project),
               onDelete: () => _deleteProject(context, project),
+              onRename: () => _renameProject(context, project),
             ),
         ],
       ),
@@ -451,6 +456,53 @@ class _LibraryScreenState extends State<LibraryScreen>
     await _reload();
   }
 
+  Future<void> _renameProject(BuildContext context, Project project) async {
+    var draft = project.title;
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('作品の名前'),
+        content: TextFormField(
+          initialValue: draft,
+          autofocus: true,
+          maxLength: 40,
+          onChanged: (value) => draft = value,
+          onFieldSubmitted: (value) => Navigator.pop(dialogContext, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('キャンセル'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, draft),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    final title = chosen?.replaceAll(RegExp(r'\s+'), ' ').trim() ?? '';
+    if (title.isEmpty || title == project.title) return;
+    try {
+      // the newest revision: the piece may have been saved since the list loaded
+      final current = await widget.projects.load(project.id) ?? project;
+      final renamed = current.copyWith(
+        title: title,
+        revision: current.revision + 1,
+        updatedAt: DateTime.now().toUtc(),
+      );
+      await widget.projects.save(renamed, expectedRevision: current.revision);
+      widget.onProjectRenamed?.call(renamed);
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('名前を変えられませんでした')),
+      );
+      return;
+    }
+    await _reload();
+  }
+
   Future<void> _deleteProject(BuildContext context, Project project) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -677,6 +729,7 @@ final class _ProjectCard extends StatefulWidget {
     required this.onView,
     required this.onOpen,
     required this.onDelete,
+    required this.onRename,
   });
 
   final Project project;
@@ -686,6 +739,7 @@ final class _ProjectCard extends StatefulWidget {
   final VoidCallback? onView;
   final VoidCallback? onOpen;
   final VoidCallback onDelete;
+  final VoidCallback onRename;
 
   @override
   State<_ProjectCard> createState() => _ProjectCardState();
@@ -846,9 +900,11 @@ class _ProjectCardState extends State<_ProjectCard> {
                     PopupMenuButton<String>(
                       tooltip: '作品の操作',
                       onSelected: (value) {
+                        if (value == 'rename') widget.onRename();
                         if (value == 'delete') widget.onDelete();
                       },
                       itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'rename', child: Text('名前を変える')),
                         PopupMenuItem(value: 'delete', child: Text('削除')),
                       ],
                     ),

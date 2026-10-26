@@ -119,6 +119,35 @@ void main() {
     },
   );
 
+  testWidgets('a song can be renamed from its menu', (tester) async {
+    final projects = _LibraryProjects()..project = _project();
+    Project? renamed;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LibraryScreen(
+          projects: projects,
+          assets: _LibraryAssets(),
+          onCreate: () {},
+          onProjectRenamed: (project) => renamed = project,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('作品の操作'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('名前を変える'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), '  夕方の  セッション ');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+
+    expect(projects.project!.title, '夕方の セッション');
+    expect(projects.project!.revision, 2);
+    expect(renamed?.title, '夕方の セッション');
+    expect(find.text('夕方の セッション'), findsOneWidget);
+  });
+
   testWidgets('library shows an honest project action', (tester) async {
     final projects = _LibraryProjects()..project = _project();
     await tester.pumpWidget(

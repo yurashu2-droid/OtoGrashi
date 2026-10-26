@@ -841,6 +841,17 @@ void main() {
       media.renderRequests.single.arrangement.melodyTemplate,
       MelodyTemplate.canon,
     );
+    // a finished piece is named after its song and the day
+    for (var i = 0;
+        i < 50 && controller.state.project!.title == '今日の音';
+        i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    final today = DateTime.now();
+    expect(
+      controller.state.project!.title,
+      '${controller.state.songLabel}（${today.month}月${today.day}日）',
+    );
 
     controller.reviseSong();
     expect(controller.state.phase, CreationPhase.ready);

@@ -889,6 +889,36 @@ final class CreationController extends ChangeNotifier {
     }
   }
 
+  /// The names a piece has before it is finished.
+  static const placeholderTitles = {'今日の音', 'みんなの音'};
+
+  /// A finished piece that still has a placeholder name is named after its
+  /// song and the day: 「歓喜の歌（10月27日）」, so the library tells pieces apart.
+  Future<void> _nameFinished() async {
+    final project = _state.project;
+    if (project == null || !placeholderTitles.contains(project.title)) return;
+    final now = DateTime.now();
+    final updated = project.copyWith(
+      title: '${_state.songLabel}（${now.month}月${now.day}日）',
+      revision: project.revision + 1,
+      updatedAt: now.toUtc(),
+    );
+    try {
+      await projects.save(updated, expectedRevision: project.revision);
+    } catch (_) {
+      return; // something else saved first; the name can wait for the next one
+    }
+    if (_disposed || _state.project?.id != project.id) return;
+    _set(_state.copyWith(project: updated));
+  }
+
+  /// The library renamed [project]; the piece open here takes the new name
+  /// and revision, so its next save does not collide.
+  void projectRenamed(Project project) {
+    if (_disposed || _state.project?.id != project.id) return;
+    _set(_state.copyWith(project: project));
+  }
+
   Future<void> _requestArrangement({
     required ArrangementStyle style,
     required int seed,
@@ -1198,8 +1228,12 @@ final class CreationController extends ChangeNotifier {
         value = value.copyWith(phase: CreationPhase.completed);
       }
     }
+    final finished =
+        value.phase == CreationPhase.completed &&
+        _state.phase != CreationPhase.completed;
     _state = value;
     notifyListeners();
+    if (finished) unawaited(_nameFinished());
   }
 
   @override
