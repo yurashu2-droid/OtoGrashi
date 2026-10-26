@@ -167,7 +167,7 @@ test('post, list, read, one use per client and day, and the popular order', asyn
   assert.deepEqual(Object.keys(answer), ['song']);
   const song = answer.song, { status, lanes, ...summary } = song;
   assert.match(song.id, UUID); assert.equal(new Date(song.createdAt).toISOString(), song.createdAt);
-  assert.deepEqual(song, { id: song.id, title: 'あめのうた', credit: 'trad.', rights: 'own', author: 'はる', beats: 32, uses: 0, createdAt: song.createdAt, status: 'public', lanes: draft.lanes });
+  assert.deepEqual(song, { id: song.id, title: 'あめのうた', credit: 'trad.', rights: 'own', author: 'はる', poster: sha(`poster:${a.id}`).slice(0, 32), beats: 32, uses: 0, createdAt: song.createdAt, status: 'public', lanes: draft.lanes });
   // The content hash is the SHA-256 of the canonical JSON of {beats,lanes}; like the account, it never leaves the object.
   const [row] = await storage.exec('SELECT account_id,content_hash FROM songs WHERE id=?', song.id);
   assert.deepEqual(row, { account_id: a.id, content_hash: sha(JSON.stringify({ beats: 32, lanes: draft.lanes })) });
@@ -175,7 +175,7 @@ test('post, list, read, one use per client and day, and the popular order', asyn
 
   const list = await data(await call(main, '/v1/songs'));
   assert.deepEqual(list.songs[0], summary);
-  assert.deepEqual(Object.keys(list.songs[0]), ['id', 'title', 'credit', 'rights', 'author', 'beats', 'uses', 'createdAt']);
+  assert.deepEqual(Object.keys(list.songs[0]), ['id', 'title', 'credit', 'rights', 'author', 'poster', 'beats', 'uses', 'createdAt']);
   const fetched = await read(main, song.id);
   assert.equal(fetched.headers.get('Cache-Control'), 'no-store'); assert.deepEqual(await data(fetched), { song });
   // A session is not needed for a public song, and a broken one does not get in the way.
@@ -210,7 +210,7 @@ test('post, list, read, one use per client and day, and the popular order', asyn
   const popular = await data(await call(main, '/v1/songs/popular'));
   assert.deepEqual(Object.keys(popular), ['songs']);
   assert.deepEqual(popular.songs.slice(0, 5).map((s: any) => [s.id, s.uses]), [[second.id, 4], [song.id, 4], [third.id, 1], [fifth.id, 0], [fourth.id, 0]]);
-  assert.deepEqual(Object.keys(popular.songs[0]), ['id', 'title', 'credit', 'rights', 'author', 'beats', 'uses', 'createdAt']);
+  assert.deepEqual(Object.keys(popular.songs[0]), ['id', 'title', 'credit', 'rights', 'author', 'poster', 'beats', 'uses', 'createdAt']);
   assert.equal(popular.songs.length <= 30, true);
   assert.equal(popular.songs.slice(3).every((s: any) => s.uses === 0), true);
 });

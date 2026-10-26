@@ -15,14 +15,26 @@ type Note = [startTick: number, durationTicks: number, pitch: number];
 type Draft = { title: string; credit: string; rights: Rights; beats: 32 | 64; lanes: Note[][] };
 type Row = { seq: number; id: string; account_id: string; author: string; title: string; credit: string; rights: string; beats: number; created_at: string; uses: number; status: string };
 type Stored = Row & { lanes: string | null };
+// A row about to leave the object carries its poster key instead of anything that names the account.
+type Keyed<T extends Row = Row> = T & { poster: string };
 type Failure = { rpcError: { status: number; code: string; message: string } };
 
 // Account IDs and content hashes stay inside the object; these three views are all that leaves it.
-const summary = (r: Row) => ({ id: r.id, title: r.title, credit: r.credit, rights: r.rights as Rights, author: r.author, beats: r.beats, uses: r.uses, createdAt: r.created_at });
-const owned = (r: Row) => ({ ...summary(r), status: r.status as Status });
-const full = (r: Stored) => ({ ...owned(r), lanes: JSON.parse(r.lanes ?? '[]') as Note[][] });
+const summary = (r: Keyed) => ({ id: r.id, title: r.title, credit: r.credit, rights: r.rights as Rights, author: r.author, poster: r.poster, beats: r.beats, uses: r.uses, createdAt: r.created_at });
+const owned = (r: Keyed) => ({ ...summary(r), status: r.status as Status });
+const full = (r: Keyed<Stored>) => ({ ...owned(r), lanes: JSON.parse(r.lanes ?? '[]') as Note[][] });
+// The poster key lets an app hide everything one account posted without learning who that is:
+// the first 32 hex digits of SHA-256('poster:' + account ID), worked out when a row leaves.
+// A deleted account's rows carry a random stand-in ID, so they can never give its old key again.
+export const posterKey = async (accountId: string) => (await hash(`poster:${accountId}`)).slice(0, 32);
+async function keyed<T extends Row>(rows: T[]): Promise<Keyed<T>[]> {
+  const keys = new Map<string, Promise<string>>();
+  const key = (id: string) => { let k = keys.get(id); if (!k) keys.set(id, k = posterKey(id)); return k; };
+  return Promise.all(rows.map(async r => ({ ...r, poster: await key(r.account_id) })));
+}
+const one = async <T extends Row>(row: T) => (await keyed([row]))[0];
 
-const catalog = (env: Env) => env.SONGS.get(env.SONGS.idFromName('catalog'));
+export const catalog = (env: Env) => env.SONGS.get(env.SONGS.idFromName('catalog'));
 function notFound(): never { fail(404, 'not_found', 'Route not found.'); }
 function songId(value: string | undefined): string {
   if (!value || !UUID.test(value)) fail(400, 'invalid_id', 'Invalid song ID.');
@@ -193,24 +205,24 @@ export class SongCatalog extends DurableObject<Env> {
     });
   }
   list(cursor?: string) {
-    return this.run(() => {
+    return this.run(async () => {
       const before = cursor === undefined ? Number.MAX_SAFE_INTEGER : cursorSeq(cursor);
       // One row more than a page tells whether another page follows.
       const rows = this.ctx.storage.sql.exec<Row>(`SELECT ${FIELDS} FROM songs WHERE status='public' AND seq<? ORDER BY seq DESC LIMIT ${SONG_LIMITS.page + 1}`, before).toArray();
       const page = rows.slice(0, SONG_LIMITS.page);
-      return { songs: page.map(summary), ...(rows.length > page.length ? { next: page[page.length - 1].seq.toString(36) } : {}) };
+      return { songs: (await keyed(page)).map(summary), ...(rows.length > page.length ? { next: page[page.length - 1].seq.toString(36) } : {}) };
     });
   }
   popular() {
-    return this.run(() => ({ songs: this.ctx.storage.sql.exec<Row>(
-      `SELECT ${FIELDS} FROM songs WHERE status='public' ORDER BY uses DESC, seq DESC LIMIT ${SONG_LIMITS.page}`).toArray().map(summary) }));
+    return this.run(async () => ({ songs: (await keyed(this.ctx.storage.sql.exec<Row>(
+      `SELECT ${FIELDS} FROM songs WHERE status='public' ORDER BY uses DESC, seq DESC LIMIT ${SONG_LIMITS.page}`).toArray())).map(summary) }));
   }
   read(id: string, accountId?: string) {
-    return this.run(() => ({ song: full(this.visible<Stored>(id, accountId, `${FIELDS},lanes`)) }));
+    return this.run(async () => ({ song: full(await one(this.visible<Stored>(id, accountId, `${FIELDS},lanes`))) }));
   }
   mine(accountId: string) {
-    return this.run(() => ({ songs: this.ctx.storage.sql.exec<Row>(
-      `SELECT ${FIELDS} FROM songs WHERE account_id=? AND status!='removed' ORDER BY seq DESC`, accountId).toArray().map(owned) }));
+    return this.run(async () => ({ songs: (await keyed(this.ctx.storage.sql.exec<Row>(
+      `SELECT ${FIELDS} FROM songs WHERE account_id=? AND status!='removed' ORDER BY seq DESC`, accountId).toArray())).map(owned) }));
   }
   post(input: Draft & { accountId: string; author: string }) {
     return this.run(async () => {
@@ -219,7 +231,7 @@ export class SongCatalog extends DurableObject<Env> {
       const contentHash = await hash(`{"beats":${input.beats},"lanes":${lanes}}`);
       // Nothing below awaits, so the checks and the insert cannot interleave with another post.
       const same = sql.exec<Stored>(`SELECT ${FIELDS},lanes FROM songs WHERE account_id=? AND content_hash=? AND status!='removed'`, input.accountId, contentHash).toArray()[0];
-      if (same) return { created: false, song: full(same) };
+      if (same) return { created: false, song: full(await one(same)) };
       const now = new Date().toISOString();
       // Removed songs still count for the day they were posted, so deleting does not buy more posts.
       const today = sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM (SELECT created_at FROM songs WHERE account_id=? ORDER BY seq DESC LIMIT ${SONG_LIMITS.postsPerDay}) WHERE created_at>=?`,
@@ -230,7 +242,7 @@ export class SongCatalog extends DurableObject<Env> {
       const id = crypto.randomUUID();
       sql.exec('INSERT INTO songs (id,account_id,author,title,credit,rights,beats,lanes,content_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
         id, input.accountId, input.author, input.title, input.credit, input.rights, input.beats, lanes, contentHash, now);
-      return { created: true, song: full(this.find<Stored>(id, `${FIELDS},lanes`)!) };
+      return { created: true, song: full(await one(this.find<Stored>(id, `${FIELDS},lanes`)!)) };
     });
   }
   use(id: string, client: string) {
@@ -272,10 +284,10 @@ export class SongCatalog extends DurableObject<Env> {
     });
   }
   reported() {
-    return this.run(() => {
+    return this.run(async () => {
       const sql = this.ctx.storage.sql;
-      const songs = sql.exec<Row>(`SELECT ${FIELDS} FROM songs JOIN (SELECT song_id, MAX(rowid) AS latest FROM song_reports GROUP BY song_id) r ON r.song_id=songs.id
-        WHERE status!='removed' ORDER BY r.latest DESC LIMIT ${SONG_LIMITS.reported}`).toArray();
+      const songs = await keyed(sql.exec<Row>(`SELECT ${FIELDS} FROM songs JOIN (SELECT song_id, MAX(rowid) AS latest FROM song_reports GROUP BY song_id) r ON r.song_id=songs.id
+        WHERE status!='removed' ORDER BY r.latest DESC LIMIT ${SONG_LIMITS.reported}`).toArray());
       // Reports leave without the reporting account: the operator judges the song, not the reporter.
       return { songs: songs.map(song => ({ ...owned(song), reports: sql.exec<{ reason: string; note: string; created_at: string }>(
         'SELECT reason,note,created_at FROM song_reports WHERE song_id=? ORDER BY rowid', song.id).toArray()
@@ -283,7 +295,7 @@ export class SongCatalog extends DurableObject<Env> {
     });
   }
   moderate(id: string, action: 'hide' | 'restore' | 'remove') {
-    return this.run(() => {
+    return this.run(async () => {
       const sql = this.ctx.storage.sql, song = this.find(id);
       if (!song || song.status === 'removed') fail(404, 'song_not_found', 'Song not found.');
       const status: Status = action === 'hide' ? 'hidden' : action === 'restore' ? 'public' : 'removed';
@@ -293,7 +305,25 @@ export class SongCatalog extends DurableObject<Env> {
         // Restoring settles the reports made so far; later ones start from zero.
         if (status === 'public') sql.exec('DELETE FROM song_reports WHERE song_id=?', song.id);
       });
-      return { song: { ...owned(song), status } };
+      return { song: { ...owned(await one(song)), status } };
+    });
+  }
+  // A deleted account takes its songs with it: each one still listed becomes the same tombstone its
+  // poster's DELETE leaves, and every row of the account, old tombstones too, loses the display name,
+  // the words and the score hash, and gets a random stand-in for the account ID. Reports the account
+  // made go as well; a song they hid stays hidden for the operator. Running it again changes nothing.
+  removeAccount(accountId: string) {
+    return this.run(() => {
+      const sql = this.ctx.storage.sql;
+      this.ctx.storage.transactionSync(() => {
+        for (const song of sql.exec<{ seq: number; id: string; status: string }>('SELECT seq,id,status FROM songs WHERE account_id=?', accountId).toArray()) {
+          if (song.status !== 'removed') sql.exec('DELETE FROM song_reports WHERE song_id=?', song.id);
+          sql.exec("UPDATE songs SET status='removed', lanes=NULL, account_id=?, author='', title='', credit='', content_hash='' WHERE seq=?",
+            `deleted:${crypto.randomUUID()}`, song.seq);
+        }
+        sql.exec('DELETE FROM song_reports WHERE account_id=?', accountId);
+      });
+      return { ok: true as const };
     });
   }
 }

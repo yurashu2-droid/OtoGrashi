@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { generateRegistrationOptions, generateAuthenticationOptions, verifyRegistrationResponse, verifyAuthenticationResponse, type RegistrationResponseJSON, type AuthenticationResponseJSON } from '@simplewebauthn/server';
 import { bodyJson, fail, hash, token, text, json, errorResponse, type Env } from './index';
-import { accountSongRoute } from './songs';
+import { accountSongRoute, catalog } from './songs';
 import browser from './passkey-browser.txt';
 
 const HEX = /^[0-9a-f]{64}$/;
@@ -111,6 +111,7 @@ export class AuthAccounts extends DurableObject<Env> {
     const s=p.split('/'); if((s[1]==='v1'&&s[2]==='songs')||p==='/v1/account/songs') return await accountSongRoute(request,this.env,s,()=>this.account(request));
     const a=await this.account(request);
     if(request.method==='GET' && p==='/v1/account') return json({account:a});
+    if(request.method==='DELETE' && p==='/v1/account') { await this.deleteAccount(a.id); return json({ok:true}); }
     if(post&&p==='/v1/auth/logout') { this.remove('session',await hash(request.headers.get('X-Oto-Session')!)); return json({ok:true}); }
     if(request.method==='GET'&&p==='/v1/account/folders') {
       const ids=this.get<string[]>('memberships',a.id)??[],folders=[];
@@ -140,6 +141,23 @@ export class AuthAccounts extends DurableObject<Env> {
       if(!result) fail(404,'folder_not_found','Folder is unavailable.'); this.remember(a.id,m[1]); return json(result);
     }
     fail(404,'not_found','Route not found.');
+  }
+  // Deleting an account removes everything tied to it, in an order a retry can repeat: its folders
+  // first, then its songs, and only then the records that let it log in, in one transaction. A failure
+  // part-way leaves the session working, and every step accepts having already run.
+  private async deleteAccount(accountId: string): Promise<void> {
+    const quota=this.get<Quota>('quota',accountId);
+    // The quota's folder is included in case a creation stopped before it was remembered.
+    const ids=new Set([...(this.get<string[]>('memberships',accountId)??[]),...(quota?[quota.folderId]:[])]);
+    for(const id of ids) await this.env.FOLDERS.get(this.env.FOLDERS.idFromName(id)).accountDeparted({accountId});
+    const songs=await catalog(this.env).removeAccount(accountId);
+    if('rpcError' in songs) fail(songs.rpcError.status,songs.rpcError.code,songs.rpcError.message);
+    const sql=this.ctx.storage.sql;
+    this.ctx.storage.transactionSync(()=>{
+      sql.exec("DELETE FROM auth_records WHERE kind IN ('credential','session') AND json_extract(data,'$.accountId')=?",accountId);
+      sql.exec("DELETE FROM auth_records WHERE kind IN ('flow','code') AND (json_extract(data,'$.verified')=? OR json_extract(data,'$.account.id')=?)",accountId,accountId);
+      sql.exec("DELETE FROM auth_records WHERE kind IN ('account','quota','memberships') AND id=?",accountId);
+    });
   }
   private remember(accountId:string,id:string) { const ids=this.get<string[]>('memberships',accountId)??[]; if(!ids.includes(id)) { ids.push(id); this.set('memberships',accountId,ids); } }
 }

@@ -139,6 +139,9 @@ export default {
       }
       if (url.search) fail(400, 'invalid_path', 'Query parameters are not supported.');
       if (request.method === 'GET') { const asset = authAsset(url.pathname); if (asset) return asset; }
+      // Deleting an account is rare and does a lot of work, so it shares the entry limit too.
+      if (request.method === 'DELETE' && url.pathname === '/v1/account' && !(await env.ENTRY_LIMIT.limit({ key: actor })).success)
+        fail(429, 'rate_limited', 'Please wait before trying again.');
       const accountRoute = url.pathname.startsWith('/v1/auth/') || url.pathname === '/v1/account' || url.pathname === '/v1/account/folders' || url.pathname === '/v1/account/songs';
       if (accountRoute) return await env.AUTH_ACCOUNTS.get(env.AUTH_ACCOUNTS.idFromName('accounts')).fetch(request);
       const create = request.method === 'POST' && url.pathname === '/v1/folders';
@@ -200,6 +203,20 @@ export class SharedFolder extends DurableObject<Env> {
       const digest=await hash(t); const hashes=m.hashes??(m.hash?[m.hash]:[]); if(!hashes.includes(digest)) hashes.push(digest); m.hashes=hashes.slice(-10);m.hash=m.hashes[0];this.save(s);
       return {folder:this.view(s),membership:{folderId:s.id,memberId:m.id,token:t,role:m.role,title:s.title}};
     }).catch(e => { if(e instanceof ApiError) return {rpcError:{status:e.status,code:e.code,message:e.message}}; throw e; });
+  }
+  // A deleted account leaves each folder the way its member could: the owner's folder closes as the
+  // owner's DELETE closes it (members dropped, every stored object deleted), anyone else leaves as the
+  // member DELETE removes them. A folder that is missing, closed or already left needs nothing.
+  async accountDeparted(input: { accountId: string }): Promise<{ ok: true }> {
+    return this.exclusive(async () => {
+      const s = this.load(), m = s && !s.closed ? s.members.find(x => x.accountId === input.accountId) : undefined;
+      if (!s || !m) return { ok: true as const };
+      if (m.role === 'owner') {
+        s.closed = true; s.members = []; delete s.invite; this.save(s); await this.schedule(s);
+        await this.cleanup(s);
+      } else { s.members = s.members.filter(x => x.id !== m.id); this.save(s); }
+      return { ok: true as const };
+    });
   }
   private async member(s: FolderState, request: Request): Promise<Member> {
     const bearer = request.headers.get('Authorization') ?? '';

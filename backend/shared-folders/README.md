@@ -37,7 +37,8 @@ simulates truncation after the HTTP boundary; it is excluded from the deployment
 bundle. Near-quota fixtures use test-only SQLite inspection rather than uploading
 a GiB. `test/songs.test.ts` covers the song catalogue the same way: every score
 rule, paging, the account limits, use counting, reports, removal and the
-operator secret. `build` is a dry run and does not deploy. Dependencies and lockfile are
+operator secret. `test/account.test.ts` covers deleting an account and the
+`poster` key. `build` is a dry run and does not deploy. Dependencies and lockfile are
 pinned together; the current Wrangler release depends on a Miniflare 5 alpha,
 which is development tooling only. SimpleWebAuthn ships in the Worker and its
 same-origin browser bundle; no external CDN is required.
@@ -102,8 +103,8 @@ parameters. The implementation logs no request headers, bodies or credentials;
 Worker observability is disabled in the supplied config. Do not add middleware
 or logs that record secrets.
 
-The general API limiter allows 120 requests/minute; create/join, and posting or
-reporting a song, share an
+The general API limiter allows 120 requests/minute; create/join, posting or
+reporting a song, and deleting an account share an
 additional 10 requests/minute limit keyed by a hash of the Cloudflare client IP.
 People sharing a NAT also share the IP-based entry limits. Cloudflare rate limits are per-location guardrails, not an
 exact global cap or billing protection. Required bindings fail closed if absent.
@@ -156,6 +157,29 @@ after losing a passkey. Local synthetic WebAuthn verification cannot prove actua
 Face ID, iCloud synchronization or two-phone behavior; verify those on a deployed
 HTTPS origin before public launch.
 
+## Deleting an account
+
+| Route | Needs | Answer |
+| --- | --- | --- |
+| `DELETE /v1/account` | account (`X-Oto-Session`) | `{ok: true}`; 401 `account_required` without a session, `session_expired` for an unknown one, 429 `rate_limited` past the entry limit |
+
+The app's in-app account deletion calls this once. It removes, in this order:
+every folder the account is in (a folder it owns closes exactly as the owner's
+`DELETE /v1/folders/<id>` closes it, so the other members lose access and its
+clips and thumbnails are deleted from R2; in any other folder the account leaves
+as `DELETE /v1/folders/<id>/members/<memberId>` would, and clips it added there
+stay with that folder); its songs (each one still listed becomes the same
+tombstone as the poster's `DELETE`, and every row of the account, older
+tombstones too, loses its display name, title, credit and score hash and gets a
+random stand-in for the account ID; reports the account made on other songs are
+deleted, while a song they helped hide stays hidden for the operator); and last,
+in one transaction, the account, its passkey credentials, sessions, login flows
+and codes, its folder quota and its membership list. Each step accepts having
+run before, so if a request fails part-way the same session can simply call
+`DELETE` again. Afterwards the old session answers 401 `session_expired`, and the
+passkey no longer logs in: it can be deleted from the device, and registering
+again creates a new, empty account.
+
 ## Song catalogue
 
 `SongCatalog` (binding `SONGS`, migration `v3`, one instance named `catalog`)
@@ -179,10 +203,13 @@ JSON, `no-store` and without query strings; errors are `{error:{code,message}}`.
 | `GET /v1/admin/songs/reported` | operator | `{songs}`, each with its `reports` |
 | `POST /v1/admin/songs/<id>/hide`, `/restore`, `/remove` | operator | `{song}` with its new `status` |
 
-A list entry is `{id, title, credit, rights, author, beats, uses, createdAt}`;
+A list entry is `{id, title, credit, rights, author, poster, beats, uses, createdAt}`;
 the account's list adds `status`, and a single song adds `status` and `lanes`.
-`author` is the poster's display name when posting. Account IDs never leave the
-object.
+`author` is the poster's display name when posting. `poster` is an opaque key,
+the same on every song of one account and different between accounts, so the
+app can let someone block a poster and hide all their songs: the first 32 hex
+digits of SHA-256 of `poster:` followed by the account ID. Account IDs never
+leave the object.
 
 A post is `{title, credit?, rights, score}` in at most 64 KiB: a title of up to
 40 characters, a credit for the composer or source of up to 60, and `rights`,
