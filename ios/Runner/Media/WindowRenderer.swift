@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreML
+import CryptoKit
 import CoreText
 import Metal
 import SceneKit
@@ -13,11 +14,48 @@ import Vision
 /// phone and kept in Application Support.
 final class DepthModelStore: @unchecked Sendable {
   static let shared = DepthModelStore()
+  /// One fixed revision, and every file checked byte for byte before it is used, so a change
+  /// or a damaged download upstream can never reach a phone.
   private static let base =
-    "https://huggingface.co/apple/coreml-depth-anything-v2-small/resolve/main/DepthAnythingV2SmallF16.mlpackage/"
-  private static let files = [
-    "Manifest.json", "Data/com.apple.CoreML/model.mlmodel", "Data/com.apple.CoreML/weights/weight.bin",
+    "https://huggingface.co/apple/coreml-depth-anything-v2-small/resolve/cfef6f6f2a70783dedc0bfae40cecbc2052285d3/DepthAnythingV2SmallF16.mlpackage/"
+  private static let files: [(String, FileCheck)] = [
+    ("Manifest.json", .gitBlob("b1ff9c6ab81057143ea82aab2796a7e54e3a8823")),
+    ("Data/com.apple.CoreML/model.mlmodel",
+     .sha256("44ac97a3efcfd52113183fb2862ff59cd0368e9ec2e30a90a54980dd11407042")),
+    ("Data/com.apple.CoreML/weights/weight.bin",
+     .sha256("fa60d9b6a155734f59029ebb882fd54e549bfaee3539c1a9cbd2cbbab64a0fed")),
   ]
+
+  /// How a downloaded file is known to be the published one: Hugging Face lists large files by
+  /// SHA-256 and small ones by their git blob id.
+  enum FileCheck {
+    case sha256(String)
+    case gitBlob(String)
+  }
+
+  /// Hashes [file] in pieces, so the 50 MB weights never sit in memory at once.
+  static func matches(_ file: URL, _ check: FileCheck) throws -> Bool {
+    let handle = try FileHandle(forReadingFrom: file)
+    defer { try? handle.close() }
+    func feed(_ update: (Data) -> Void) throws {
+      while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { update(chunk) }
+    }
+    func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {
+      digest.map { String(format: "%02x", $0) }.joined()
+    }
+    switch check {
+    case .sha256(let want):
+      var hash = SHA256()
+      try feed { hash.update(data: $0) }
+      return hex(hash.finalize()) == want
+    case .gitBlob(let want):
+      let size = (try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.intValue ?? 0
+      var hash = Insecure.SHA1()
+      hash.update(data: Data("blob \(size)\u{0}".utf8))
+      try feed { hash.update(data: $0) }
+      return hex(hash.finalize()) == want
+    }
+  }
   private let lock = NSLock()
   private var downloading = false
   private var progressSource: Progress?
@@ -77,7 +115,7 @@ final class DepthModelStore: @unchecked Sendable {
     let fm = FileManager.default
     let package = folder.appendingPathComponent("DepthAnythingV2SmallF16.mlpackage", isDirectory: true)
     try? fm.removeItem(at: package)
-    for file in Self.files {
+    for (file, check) in Self.files {
       let target = package.appendingPathComponent(file)
       try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
       guard let url = URL(string: Self.base + file) else { throw DepthModelError("bad url") }
@@ -97,6 +135,10 @@ final class DepthModelStore: @unchecked Sendable {
         }
         self.lock.lock(); self.progressSource = task.progress; self.lock.unlock()
         task.resume()
+      }
+      guard (try? Self.matches(temp, check)) == true else {
+        try? fm.removeItem(at: temp)
+        throw DepthModelError("download damaged")
       }
       try fm.moveItem(at: temp, to: target)
     }

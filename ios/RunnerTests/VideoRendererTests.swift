@@ -1204,6 +1204,17 @@ final class VideoRendererTests: XCTestCase {
     XCTAssertGreaterThan(white, 20, "\(note) (frames)")
   }
 
+  func testDownloadedFilesAreCheckedByTheirPublishedHashes() throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try Data("hello".utf8).write(to: file)
+    defer { try? FileManager.default.removeItem(at: file) }
+    let sha = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    XCTAssertTrue(try DepthModelStore.matches(file, .sha256(sha)))
+    XCTAssertTrue(try DepthModelStore.matches(file, .gitBlob("b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0")))
+    XCTAssertFalse(try DepthModelStore.matches(file, .sha256(String(repeating: "0", count: 64))))
+    XCTAssertFalse(try DepthModelStore.matches(file, .gitBlob(String(repeating: "0", count: 40))))
+  }
+
   func testDepthModelStoreRemoveLeavesItAbsent() {
     // nothing is downloaded here, so there is no model to lose
     let status = DepthModelStore.shared.remove()
