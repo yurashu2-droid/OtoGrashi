@@ -226,6 +226,44 @@ void main() {
       );
     },
   );
+  test('a login that runs out is remembered until the next login', () async {
+    store.values[sessionKey] = jsonEncode({
+      'server': origin,
+      'token': token,
+      'expiresAt': '2020-01-01T00:00:00Z',
+      'account': accountJson(),
+    });
+    expect(await service.account(), isNull);
+    expect(await service.expiredAccount(), 'Name');
+
+    authFlow();
+    await service.signIn();
+    expect(await service.expiredAccount(), isNull);
+
+    // the server ending it counts the same
+    transport.respond = (method, uri) async => SharedHttpResponse(
+      401,
+      Stream.value(
+        utf8.encode(
+          jsonEncode({
+            'error': {'code': 'session_expired', 'message': 'again'},
+          }),
+        ),
+      ),
+    );
+    await expectLater(service.restoreMemberships(), throwsA(isA<SharedFolderException>()));
+    expect(await service.account(), isNull);
+    expect(await service.expiredAccount(), 'Name');
+
+    // logging out on purpose is not an expiry
+    authFlow();
+    transport.requests.clear(); // the login reads its state from the first request
+    await service.signIn();
+    transport.respond = (method, uri) async => jsonResponse({'ok': true});
+    await service.signOut();
+    expect(await service.expiredAccount(), isNull);
+  });
+
   test('deleting the account asks the server, then forgets it here', () async {
     authFlow();
     await service.signIn();

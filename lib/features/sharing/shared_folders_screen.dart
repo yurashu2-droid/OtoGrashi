@@ -31,6 +31,9 @@ class SharedFoldersScreen extends StatefulWidget {
 class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
   List<SharedFolderMembership> _folders = [];
   SharedAccount? _account;
+
+  /// Who was logged in before the login ran out, while it has not been renewed.
+  String? _expired;
   String? _error;
   bool _loading = true;
   bool _authBusy = false;
@@ -57,11 +60,15 @@ class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
   Future<void> _load() async {
     try {
       final account = await widget.service.account();
+      final expired = account == null
+          ? await widget.service.expiredAccount()
+          : null;
       final folders = await widget.service.listMemberships();
       if (mounted) {
         setState(() {
           _folders = folders;
           _account = account;
+          _expired = expired;
           _error = null;
           _loading = false;
         });
@@ -248,7 +255,10 @@ class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      _account == null
+                      _account == null && _expired != null
+                          ? 'ログインの期限が切れました${_expired!.isEmpty ? '' : '（${_expired!}さん）'}。'
+                                'もう一度ログインすると、共有フォルダが戻ります。'
+                          : _account == null
                           ? 'パスキーで登録・ログインできます。Face IDなど、いつもの端末認証で続けます。'
                           : '無料アカウントは、自分の共有フォルダを${_account!.maxOwnedFolders}つ作れます。友だちのフォルダにも参加できます。',
                     ),
@@ -263,7 +273,13 @@ class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
                           ? null
                           : (_account == null ? _signIn : _signOut),
                       icon: Icon(_account == null ? Icons.login : Icons.logout),
-                      label: Text(_account == null ? 'パスキーで続ける' : 'ログアウト'),
+                      label: Text(
+                        _account != null
+                            ? 'ログアウト'
+                            : _expired != null
+                            ? 'もう一度ログイン'
+                            : 'パスキーで続ける',
+                      ),
                     ),
                     if (_account != null)
                       TextButton.icon(

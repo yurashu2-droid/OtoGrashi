@@ -135,6 +135,8 @@ final class SharedFolderService {
 
   String _sessionKey(Uri server) =>
       'shared.session.${Uri.encodeComponent(server.toString())}';
+  String _expiredKey(Uri server) =>
+      'shared.expired.${Uri.encodeComponent(server.toString())}';
   String _creationKey(Uri server, String id) =>
       'shared.creation.${Uri.encodeComponent(server.toString())}.$id';
   Future<Map<String, dynamic>?> _session(Uri server) async {
@@ -142,10 +144,14 @@ final class SharedFolderService {
     if (raw == null) return null;
     try {
       final j = jsonDecode(raw) as Map<String, dynamic>;
-      SharedAccount.fromJson(j['account'] as Map<String, dynamic>);
-      if (j['server'] != server.toString() ||
-          !_hex(j['token']) ||
-          !DateTime.parse(j['expiresAt'] as String).isAfter(DateTime.now())) {
+      final account = SharedAccount.fromJson(
+        j['account'] as Map<String, dynamic>,
+      );
+      if (j['server'] != server.toString() || !_hex(j['token'])) {
+        throw const FormatException();
+      }
+      if (!DateTime.parse(j['expiresAt'] as String).isAfter(DateTime.now())) {
+        await _markExpired(server, account.displayName);
         throw const FormatException();
       }
       return j;
@@ -153,6 +159,18 @@ final class SharedFolderService {
       await _clearSession(server);
       return null;
     }
+  }
+
+  /// Remembers that a login ran out rather than being ended, so the sharing
+  /// screen can say why the folders went away and that logging in brings
+  /// them back.
+  Future<void> _markExpired(Uri server, String name) =>
+      _store.write(_expiredKey(server), name);
+
+  /// The display name of a login that ran out, until the next login.
+  Future<String?> expiredAccount() async {
+    final server = await configuredServer();
+    return server == null ? null : _store.read(_expiredKey(server));
   }
 
   Future<SharedAccount?> account() async {
@@ -267,6 +285,7 @@ final class SharedFolderService {
       _creationIds.remove(key);
       await _clearSession(server);
     }
+    await _store.delete(_expiredKey(server));
     await _store.write(
       _sessionKey(server),
       jsonEncode({
@@ -571,7 +590,15 @@ final class SharedFolderService {
         code = error['code'];
       } catch (_) {}
       if (session != null && response.statusCode == 401) {
-        await _clearSession(sharedOrigin(session['server']));
+        final server = sharedOrigin(session['server']);
+        final account = session['account'];
+        await _markExpired(
+          server,
+          account is Map && account['displayName'] is String
+              ? account['displayName'] as String
+              : '',
+        );
+        await _clearSession(server);
       }
       message = switch (code) {
         'account_required' ||
