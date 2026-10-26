@@ -81,10 +81,46 @@ final class SqliteAssetRepository implements AssetRepository {
   SqliteAssetRepository(
     this._database, {
     this._inspector = const RejectingAssetInspector(),
-  });
+  }) {
+    _nameRecordings();
+  }
 
   final ProjectDatabase _database;
   final AssetInspector _inspector;
+
+  /// The camera's own file names: an id, which no one should have to read.
+  static final generatedLabel = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}$');
+
+  /// What a recording is called until the person names it: when it was
+  /// taken, which stays the same wherever the sound is listed.
+  static String recordedLabel(DateTime at) {
+    final local = at.toLocal();
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '録った音 ${local.month}/${local.day} '
+        '${two(local.hour)}:${two(local.minute)}';
+  }
+
+  /// Sounds recorded before recordings were named still carry their file
+  /// name; they are named after when their file was written.
+  void _nameRecordings() {
+    final rows = _database.connection.select(
+      'SELECT id, relative_path, label FROM assets',
+    );
+    for (final row in rows) {
+      if (!generatedLabel.hasMatch(row['label'] as String)) continue;
+      DateTime at;
+      try {
+        at = _resolveRelative(row['relative_path'] as String).statSync().modified;
+      } catch (_) {
+        continue;
+      }
+      if (at.millisecondsSinceEpoch <= 0) continue;
+      _database.connection.execute(
+        'UPDATE assets SET label = ? WHERE id = ?',
+        <Object?>[recordedLabel(at), row['id']],
+      );
+    }
+  }
 
   @override
   Future<ClipAsset> importManagedStaging(String relativePath) async {
@@ -133,7 +169,12 @@ final class SqliteAssetRepository implements AssetRepository {
         height: inspection.height,
         rotation: inspection.rotation,
         sha256: digest.toString(),
-        label: p.basenameWithoutExtension(sourcePath),
+        label: switch (p.basenameWithoutExtension(sourcePath)) {
+          final name when generatedLabel.hasMatch(name) => recordedLabel(
+            DateTime.now(),
+          ),
+          final name => name,
+        },
       );
       _database.transaction(() {
         _database.connection.execute(

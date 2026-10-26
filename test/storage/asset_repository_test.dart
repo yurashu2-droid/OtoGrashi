@@ -29,10 +29,10 @@ void main() {
 
   test('the newest sounds come first, whatever they are called', () async {
     expect(await assets.listNewest(), isEmpty);
-    // a recording is named after its file, which is a random id
-    final first = await importSound('ffffffff-0000-4000-8000-000000000001');
-    final second = await importSound('00000000-0000-4000-8000-000000000002');
-    final third = await importSound('88888888-0000-4000-8000-000000000003');
+    // names that sort in another order than the sounds were added
+    final first = await importSound('zz-cup');
+    final second = await importSound('aa-door');
+    final third = await importSound('mm-kettle');
 
     expect((await assets.list()).map((sound) => sound.id), [
       second,
@@ -53,6 +53,26 @@ void main() {
     // a new name does not make a sound any newer
     await assets.rename(first, 'あさのコップ');
     expect((await assets.listNewest(limit: 1)).single.id, third);
+  });
+
+  test('a recording is named after when it was taken, not its file', () async {
+    final id = await importSound('ffffffff-0000-4000-8000-000000000001');
+    final named = (await assets.list()).singleWhere((sound) => sound.id == id);
+    expect(named.label, startsWith('録った音 '));
+    expect(named.label, isNot(contains('ffffffff')));
+    expect(
+      SqliteAssetRepository.recordedLabel(DateTime(2026, 10, 27, 9, 5)),
+      '録った音 10/27 09:05',
+    );
+
+    // one kept from before gets its name when storage opens again
+    database.connection.execute(
+      'UPDATE assets SET label = ? WHERE id = ?',
+      ['ffffffff-0000-4000-8000-000000000001', id],
+    );
+    final reopened = SqliteAssetRepository(database, inspector: const _Inspector());
+    final renamed = (await reopened.list()).singleWhere((sound) => sound.id == id);
+    expect(renamed.label, startsWith('録った音 '));
   });
 
   test('the order survives deleting a sound and reopening storage', () async {
