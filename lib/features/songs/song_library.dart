@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../../domain/custom_song.dart';
 import '../../media/midi_file_picker.dart';
 import '../../sharing/song_catalog.dart';
+import '../../storage/poster_blocks.dart';
 import '../../storage/song_repository.dart';
 import 'midi_song_reader.dart';
 
@@ -26,9 +27,11 @@ final class SongLibrary extends ChangeNotifier {
     this._picker,
     this._reader,
     this._signIn,
-  });
+    PosterBlocks? blocks,
+  }) : _blocks = blocks ?? MemoryPosterBlocks();
 
   final SongRepository _songs;
+  final PosterBlocks _blocks;
   final SongCatalog? _catalog;
   final MidiFilePicker? _picker;
   final MidiSongReader? _reader;
@@ -38,6 +41,12 @@ final class SongLibrary extends ChangeNotifier {
 
   /// The songs kept on this phone, newest first.
   List<CustomSong> local = const [];
+
+  /// The people whose songs this phone does not show.
+  List<BlockedPoster> blocked = const [];
+
+  /// Songs hidden one by one: blocked when the catalogue gave no poster key.
+  final _hidden = <String>{};
 
   CatalogPhase catalogPhase = CatalogPhase.loading;
   String? catalogMessage;
@@ -70,8 +79,22 @@ final class SongLibrary extends ChangeNotifier {
     } catch (_) {
       local = const [];
     }
+    try {
+      blocked = await _blocks.list();
+    } catch (_) {
+      // the lists then simply show everyone
+    }
     _changed();
   }
+
+  bool _shows(CatalogSong song) =>
+      !_hidden.contains(song.id) &&
+      !blocked.any((person) => person.poster == song.poster);
+
+  List<CatalogSong> _shown(List<CatalogSong> songs) => [
+    for (final song in songs)
+      if (_shows(song)) song,
+  ];
 
   Future<void> _loadCatalog() async {
     final catalog = _catalog;
@@ -89,9 +112,9 @@ final class SongLibrary extends ChangeNotifier {
       }
       final page = await catalog.newest();
       final most = await catalog.popular();
-      newest = page.songs;
+      newest = _shown(page.songs);
       _next = page.next;
-      popular = most;
+      popular = _shown(most);
       catalogPhase = CatalogPhase.loaded;
     } on SongCatalogException catch (error) {
       catalogPhase = error.code == 'server_missing'
@@ -115,7 +138,7 @@ final class SongLibrary extends ChangeNotifier {
       final known = newest.map((song) => song.id).toSet();
       newest = [
         ...newest,
-        for (final song in page.songs)
+        for (final song in _shown(page.songs))
           if (known.add(song.id)) song,
       ];
       _next = page.next;
@@ -211,6 +234,27 @@ final class SongLibrary extends ChangeNotifier {
         if (other.id != song.id) other,
     ];
     _changed();
+  }
+
+  /// Stops showing everything [song]'s poster has posted, on this phone.
+  Future<void> block(CatalogSong song) async {
+    final poster = song.poster;
+    if (poster == null) {
+      _hidden.add(song.id);
+    } else {
+      await _blocks.block(BlockedPoster(poster: poster, name: song.author));
+      blocked = await _blocks.list();
+    }
+    newest = _shown(newest);
+    popular = _shown(popular);
+    _changed();
+  }
+
+  /// Shows that person's songs again.
+  Future<void> unblock(String poster) async {
+    await _blocks.unblock(poster);
+    blocked = await _blocks.list();
+    await _loadCatalog();
   }
 
   Future<List<CatalogSong>> mine() =>

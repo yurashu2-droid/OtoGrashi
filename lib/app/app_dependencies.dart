@@ -4,6 +4,7 @@ import '../media/media_presentation_gateway.dart';
 import '../media/platform_media_gateway.dart';
 import '../storage/asset_repository.dart';
 import '../storage/draft_pointer.dart';
+import '../storage/poster_blocks.dart';
 import '../storage/folder_repository.dart';
 import '../storage/profile_store.dart';
 import '../storage/project_database.dart';
@@ -23,6 +24,7 @@ final class AppDependencies {
     this.folders,
     this.sharedFolders,
     this.songs,
+    this.posterBlocks,
   });
 
   final ProjectDatabase database;
@@ -35,6 +37,7 @@ final class AppDependencies {
   final FolderRepository? folders;
   final SharedFolderService? sharedFolders;
   final SongRepository? songs;
+  final PosterBlocks? posterBlocks;
 
   static Future<AppDependencies> bootstrap() async {
     final media = PlatformMediaGateway();
@@ -55,6 +58,7 @@ final class AppDependencies {
       folders: SqliteFolderRepository(database),
       sharedFolders: SharedFolderService(database: database, assets: assets),
       songs: SqliteSongRepository(database),
+      posterBlocks: SqlitePosterBlocks(database),
     );
   }
 

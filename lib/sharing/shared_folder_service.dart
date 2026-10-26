@@ -303,6 +303,20 @@ final class SharedFolderService {
     }
   }
 
+  /// Deletes the logged-in account on the server, with its folders (closed
+  /// when it owns them, left otherwise) and its posted songs, then forgets it
+  /// here. What is on this phone itself (sounds, pieces, songs) stays.
+  Future<void> deleteAccount() async {
+    final server = await configuredServer();
+    if (server == null) throw const SharedFolderException('共有サーバーを設定してください。');
+    final session = await _requireSession(server);
+    await _json('DELETE', server.resolve('/v1/account'), session: session);
+    final key = _creationKey(server, session['account']['id'] as String);
+    await _store.delete(key);
+    _creationIds.remove(key);
+    await _clearSession(server);
+  }
+
   Future<void> restoreMemberships() async {
     final server = await configuredServer();
     if (server == null) throw const SharedFolderException('共有サーバーを設定してください。');

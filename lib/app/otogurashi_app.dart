@@ -146,6 +146,7 @@ class _CreationHostState extends State<_CreationHost> {
               catalog: sharing == null ? null : ServerSongCatalog(sharing),
               picker: const PlatformMidiFilePicker(),
               reader: readMidiSong,
+              blocks: dependencies.posterBlocks,
               signIn: sharing == null
                   ? null
                   : () async {

@@ -412,6 +412,7 @@ final class _PostSheet extends StatefulWidget {
 
 final class _PostSheetState extends State<_PostSheet> {
   SongRights? _rights;
+  var _agreed = false;
 
   @override
   Widget build(BuildContext context) => SafeArea(
@@ -454,14 +455,23 @@ final class _PostSheetState extends State<_PostSheet> {
               borderRadius: BorderRadius.circular(16),
             ),
             child: const Text(
-              '市販の曲や、アニメ・ゲーム・ボカロの曲など、ほかの人が権利を持っている曲は投稿できません。'
-              '見つかったときは削除されます。',
+              '投稿のルール\n'
+              '・市販の曲や、アニメ・ゲーム・ボカロの曲など、ほかの人が権利を持っている曲は投稿できません。\n'
+              '・人を傷つける名前や、不快な内容は投稿できません。\n'
+              'ルールに合わない曲は、通報を受けて非公開・削除されます。くり返す人は投稿できなくなることがあります。',
               style: TextStyle(fontSize: 13, height: 1.5, color: AppTokens.ink),
             ),
           ),
-          const SizedBox(height: 16),
+          CheckboxListTile(
+            value: _agreed,
+            onChanged: (value) => setState(() => _agreed = value ?? false),
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('ルールを守って投稿します'),
+          ),
+          const SizedBox(height: 8),
           FilledButton(
-            onPressed: _rights == null
+            onPressed: _rights == null || !_agreed
                 ? null
                 : () => Navigator.pop(context, _rights),
             child: const Text('投稿する'),

@@ -4,6 +4,7 @@ import '../../design/tokens.dart';
 import '../../domain/custom_song.dart';
 import '../../domain/melody_template.dart';
 import '../../sharing/song_catalog.dart';
+import '../../storage/poster_blocks.dart';
 import 'midi_song_reader.dart';
 import 'song_library.dart';
 import 'song_sheets.dart';
@@ -357,6 +358,72 @@ final class _SongChoicesState extends State<_SongChoices> {
     }
   }
 
+  /// Hides everything this song's poster has posted, on this phone.
+  Future<void> _block(CatalogSong song) async {
+    final library = widget.library;
+    if (library == null) return;
+    final who = song.author.isEmpty ? 'この人' : '${song.author}さん';
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('$whoの曲を表示しませんか？'),
+        content: const Text(
+          'この端末では、この人が投稿した曲が見えなくなります。'
+          '「表示しない人」から、いつでも戻せます。'
+          '困った内容なら「通報する」も使ってください。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('キャンセル'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('表示しない'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true) return;
+    await library.block(song);
+    _say('$whoの曲を表示しないようにしました');
+  }
+
+  /// The people hidden from the catalogue, each with a way back.
+  Future<void> _showBlocked() async {
+    final library = widget.library;
+    if (library == null) return;
+    final back = await showModalBottomSheet<BlockedPoster>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(20, 4, 12, 20),
+          children: [
+            Text('表示しない人', style: Theme.of(sheetContext).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            for (final person in library.blocked)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  person.name.isEmpty ? '名前のない人' : '${person.name}さん',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: TextButton(
+                  onPressed: () => Navigator.pop(sheetContext, person),
+                  child: const Text('表示する'),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (back == null) return;
+    await library.unblock(back.poster);
+    _say('${back.name.isEmpty ? 'この人' : '${back.name}さん'}の曲を、また表示します');
+  }
+
   Future<void> _report(CatalogSong song) async {
     final library = widget.library;
     if (library == null) return;
@@ -497,7 +564,10 @@ final class _SongChoicesState extends State<_SongChoices> {
                   onMake: widget.onMakeWithSong == null
                       ? null
                       : () => _take(song),
-                  menu: [('通報する', () => _report(song))],
+                  menu: [
+                    ('通報する', () => _report(song)),
+                    ('この人の曲を表示しない', () => _block(song)),
+                  ],
                 ),
               ),
             if (!_popular && library.hasMore)
@@ -508,13 +578,21 @@ final class _SongChoicesState extends State<_SongChoices> {
           ],
         ),
       },
-      if (library.canPost)
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton(
-            onPressed: _showMine,
-            child: const Text('自分の投稿をみる'),
-          ),
+      if (library.canPost || library.blocked.isNotEmpty)
+        Wrap(
+          alignment: WrapAlignment.end,
+          children: [
+            if (library.blocked.isNotEmpty)
+              TextButton(
+                onPressed: _showBlocked,
+                child: Text('表示しない人（${library.blocked.length}人）'),
+              ),
+            if (library.canPost)
+              TextButton(
+                onPressed: _showMine,
+                child: const Text('自分の投稿をみる'),
+              ),
+          ],
         ),
     ];
   }

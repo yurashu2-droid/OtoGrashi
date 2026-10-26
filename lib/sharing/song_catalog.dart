@@ -27,6 +27,7 @@ final class CatalogSong {
     this.rights,
     this.createdAt,
     this.status = 'public',
+    this.poster,
   });
 
   /// Null unless [json] has at least an id and a title.
@@ -42,6 +43,7 @@ final class CatalogSong {
     final uses = json['uses'];
     final created = json['createdAt'];
     final status = json['status'];
+    final poster = json['poster'];
     return CatalogSong(
       id: id,
       title: title,
@@ -53,6 +55,7 @@ final class CatalogSong {
           .firstOrNull,
       createdAt: created is String ? DateTime.tryParse(created) : null,
       status: status is String ? status : 'public',
+      poster: poster is String && poster.isNotEmpty ? poster : null,
     );
   }
 
@@ -68,6 +71,10 @@ final class CatalogSong {
 
   /// `public`, or `hidden` for the poster's own song under review.
   final String status;
+
+  /// The same for every song of one poster, and nothing else about them:
+  /// what blocking someone hides by.
+  final String? poster;
 }
 
 /// A problem with the catalogue, already worded for the person. [code] is the

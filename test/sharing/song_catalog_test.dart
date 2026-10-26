@@ -81,6 +81,7 @@ void main() {
     expect(first.songs.single.title, 'ゆうがたのうた');
     expect(first.songs.single.uses, 12);
     expect(first.songs.single.rights, SongRights.publicDomain);
+    expect(first.songs.single.poster, 'poster-haru');
     expect(first.next, '2a');
     final second = await catalog.newest(after: first.next);
     expect(second.next, isNull);
@@ -289,6 +290,7 @@ Map<String, Object?> _listed(String id, String title, {int uses = 0}) => {
   'beats': 32,
   'uses': uses,
   'createdAt': '2026-10-14T00:00:00.000Z',
+  'poster': 'poster-haru',
 };
 
 Future<SharedHttpResponse> _json(Object body, [int status = 200]) async =>

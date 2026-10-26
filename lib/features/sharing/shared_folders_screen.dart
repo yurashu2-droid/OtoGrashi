@@ -131,6 +131,30 @@ class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
     }
   }
 
+  Future<void> _deleteAccount() async {
+    if (_authBusy ||
+        !await _confirm(
+          context,
+          'アカウントを削除',
+          'サーバーから、このアカウントと、自分がつくった共有フォルダ（中の音も）、'
+              '参加中のフォルダの参加、みんなに投稿した曲が消えます。元には戻せません。'
+              'この端末の音や作品はそのまま残ります。',
+        )) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _authBusy = true);
+    try {
+      await widget.service.deleteAccount();
+      if (mounted) _notice(context, 'アカウントを削除しました');
+    } catch (e) {
+      if (mounted) _notice(context, _message(e));
+    } finally {
+      await _load();
+      if (mounted) setState(() => _authBusy = false);
+    }
+  }
+
   Future<void> _form({required bool join, String? initial}) async {
     Uri? server;
     try {
@@ -241,6 +265,15 @@ class _SharedFoldersScreenState extends State<SharedFoldersScreen> {
                       icon: Icon(_account == null ? Icons.login : Icons.logout),
                       label: Text(_account == null ? 'パスキーで続ける' : 'ログアウト'),
                     ),
+                    if (_account != null)
+                      TextButton.icon(
+                        onPressed: _authBusy ? null : _deleteAccount,
+                        style: TextButton.styleFrom(
+                          foregroundColor: Theme.of(context).colorScheme.error,
+                        ),
+                        icon: const Icon(Icons.person_remove_outlined),
+                        label: const Text('アカウントを削除'),
+                      ),
                   ],
                 ),
               ),

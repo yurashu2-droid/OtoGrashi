@@ -171,6 +171,12 @@ void main() {
     expect(find.textContaining('ほかの人が権利を持っている曲は投稿できません'), findsOneWidget);
     await tester.tap(find.text('自分でつくった曲'));
     await tester.pumpAndSettle();
+    // nor before agreeing to the rules
+    expect(tester.widget<FilledButton>(post).onPressed, isNull);
+    await tester.ensureVisible(find.text('ルールを守って投稿します'));
+    await tester.tap(find.text('ルールを守って投稿します'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(post);
     await tester.tap(post);
     await tester.pumpAndSettle();
 
@@ -209,6 +215,44 @@ void main() {
     await tester.pumpAndSettle();
     expect(songs.kept, isEmpty);
     expect(find.text('じぶんのうた'), findsNothing);
+  });
+
+  testWidgets('someone can be hidden from the catalogue, and shown again', (
+    tester,
+  ) async {
+    final catalog = _FakeCatalog()
+      ..listed = [
+        _listed('r1', 'ゆうがたのうた', author: 'はる', poster: 'p-haru'),
+        _listed('r2', 'あさのうた', author: 'なつ', poster: 'p-natsu'),
+        _listed('r3', 'よるのうた', author: 'はる', poster: 'p-haru'),
+      ];
+    final library = SongLibrary(songs: _MemorySongs(), catalog: catalog);
+    addTearDown(library.dispose);
+    await open(tester, library);
+
+    await tester.tap(find.byTooltip('ゆうがたのうたのメニュー'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('この人の曲を表示しない'));
+    await tester.pumpAndSettle();
+    expect(find.text('はるさんの曲を表示しませんか？'), findsOneWidget);
+    await tester.tap(find.text('表示しない'));
+    await tester.pumpAndSettle();
+    // everything はる posted is gone, and nobody else's
+    expect(find.text('ゆうがたのうた'), findsNothing);
+    expect(find.text('よるのうた'), findsNothing);
+    expect(find.text('あさのうた'), findsOneWidget);
+    // blocking is not a report
+    expect(catalog.reported, isEmpty);
+
+    await reveal(tester, find.text('表示しない人（1人）'));
+    await tester.tap(find.text('表示しない人（1人）'));
+    await tester.pumpAndSettle();
+    expect(find.text('はるさん'), findsOneWidget);
+    await tester.tap(find.text('表示する'));
+    await tester.pumpAndSettle();
+    expect(library.blocked, isEmpty);
+    await reveal(tester, find.text('よるのうた'));
+    expect(find.text('ゆうがたのうた'), findsOneWidget);
   });
 
   testWidgets('a person can see their own posts and take one down', (
@@ -273,7 +317,15 @@ CatalogSong _listed(
   String title, {
   String author = '',
   int uses = 0,
-}) => CatalogSong(id: id, title: title, credit: '', author: author, uses: uses);
+  String? poster,
+}) => CatalogSong(
+  id: id,
+  title: title,
+  credit: '',
+  author: author,
+  uses: uses,
+  poster: poster,
+);
 
 final class _MemorySongs implements SongRepository {
   final kept = <CustomSong>[];

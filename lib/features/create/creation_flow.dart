@@ -570,10 +570,15 @@ class _CreationFlowState extends State<CreationFlow> {
       return const Scaffold(body: Center(child: Text('設定を読み込めません')));
     }
     final saveName = widget.onOwnerName;
+    final sharing = widget.sharedFolders;
     return SettingsScreen(
       usageLoader: projects.storageUsage,
       clearCache: projects.clearRegenerableCache,
       ownerName: widget.controller.ownerName,
+      accountName: sharing == null
+          ? null
+          : () async => (await sharing.account())?.displayName,
+      onDeleteAccount: sharing?.deleteAccount,
       onOwnerName: saveName == null
           ? null
           : (name) async {

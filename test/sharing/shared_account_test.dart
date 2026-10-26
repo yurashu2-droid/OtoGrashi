@@ -226,6 +226,35 @@ void main() {
       );
     },
   );
+  test('deleting the account asks the server, then forgets it here', () async {
+    authFlow();
+    await service.signIn();
+    expect((await service.listMemberships()).single.folderId, folderId);
+
+    // the server cannot be reached: nothing here changes, so it can be retried
+    transport.respond = (method, uri) async => SharedHttpResponse(
+      429,
+      Stream.value(
+        utf8.encode(
+          jsonEncode({
+            'error': {'code': 'rate_limited', 'message': 'wait'},
+          }),
+        ),
+      ),
+    );
+    await expectLater(service.deleteAccount(), throwsA(isA<SharedFolderException>()));
+    expect(await service.account(), isNotNull);
+
+    transport.respond = (method, uri) async => jsonResponse({'ok': true});
+    await service.deleteAccount();
+    final request = transport.requests.last;
+    expect('${request.method} ${request.uri.path}', 'DELETE /v1/account');
+    expect(request.headers['X-Oto-Session'], token);
+    expect(await service.account(), isNull);
+    // the folders this account joined are gone from this phone too
+    expect(await service.listMemberships(), isEmpty);
+  });
+
   test('switching account clears old memberships before restoration', () async {
     seed('previous');
     db.connection.execute('INSERT INTO shared_memberships VALUES (?,?)', [
