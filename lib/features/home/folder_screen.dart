@@ -390,9 +390,15 @@ class _FolderScreenState extends State<FolderScreen> {
     final sounds = _sounds ?? const <ClipAsset>[];
     if (sounds.isEmpty || _busy) return;
     setState(_stop);
-    // nothing picked: the newest sounds, up to six
+    // nothing picked: the newest sounds shown under the chosen tag, up to six
+    final shown = [
+      for (final sound in sounds)
+        if (_filter == null || (_tags[sound.id]?.contains(_filter) ?? false))
+          sound,
+    ];
+    if (shown.isEmpty) return;
     final chosen = _picked.isEmpty
-        ? sounds.take(FolderScreen.maxPerSong).toList()
+        ? shown.take(FolderScreen.maxPerSong).toList()
         : sounds.where((s) => _picked.contains(s.id)).toList();
     setState(() => _busy = true);
     try {

@@ -32,6 +32,26 @@ void main() {
     expect(cup.file.existsSync(), isFalse);
   });
 
+  testWidgets('making a song takes the sounds under the chosen tag', (
+    tester,
+  ) async {
+    final store = await _Store.open(tester);
+    final trip = await store.folders.create('旅');
+    final cup = await store.record(tester, 'コップ', trip);
+    await store.record(tester, 'ドア', trip);
+    await tester.runAsync(() => store.folders.setTags(cup.id, ['いえ']));
+    List<ClipAsset>? chosen;
+    await _openFolder(tester, store, trip, onMakeSong: (sounds) async {
+      chosen = sounds;
+    });
+
+    await tester.tap(find.text('いえ').first); // the pill; the sound's own tag sits below
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('この音で曲をつくる'));
+    await tester.pumpAndSettle();
+    expect(chosen?.map((sound) => sound.label), ['コップ']);
+  });
+
   testWidgets('a sound that songs still use stays, and the screen says why', (
     tester,
   ) async {
@@ -242,6 +262,7 @@ Future<void> _openFolder(
   _Store store,
   SoundFolder folder, {
   AssetRepository? assets,
+  Future<void> Function(List<ClipAsset> sounds)? onMakeSong,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -256,7 +277,7 @@ Future<void> _openFolder(
                     folders: store.folders,
                     assets: assets ?? store.assets,
                     onCapture: (_) async {},
-                    onMakeSong: (_) async {},
+                    onMakeSong: onMakeSong ?? (_) async {},
                   ),
                 ),
               ),
