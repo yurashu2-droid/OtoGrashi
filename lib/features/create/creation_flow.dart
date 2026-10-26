@@ -241,6 +241,8 @@ class _CreationFlowState extends State<CreationFlow> {
         (ids.contains(_destinationId) ? _destinationId : null) ??
         destinations.firstOrNull?.id;
     final intoCollection = folder == null;
+    // sounds recorded while the song already had six: kept, but not in it
+    var keptOutside = 0;
     await Navigator.of(context).push<void>(
       // A fade, so the shutter (a Hero shared with the tab bar's mic ball)
       // is what visibly travels and grows into place.
@@ -255,7 +257,10 @@ class _CreationFlowState extends State<CreationFlow> {
           media: widget.media,
           presentation: widget.controller.presentation,
           fromPhotos: fromPhotos,
-          recordedClipCount: widget.controller.state.clips.length,
+          // only a recording meant for the song can find it full
+          recordedClipCount: intoCollection
+              ? widget.controller.state.clips.length
+              : 0,
           destinations: [for (final d in destinations) (id: d.id, title: d.title)],
           initialDestination: destination,
           onDestination: (id) {
@@ -271,6 +276,7 @@ class _CreationFlowState extends State<CreationFlow> {
               }
             } else {
               newId = (await controller.importCaptured(captured))?.id;
+              if (newId != null && intoCollection) keptOutside++;
             }
             if (newId == null) return false;
             final target = destination;
@@ -285,6 +291,19 @@ class _CreationFlowState extends State<CreationFlow> {
         fullscreenDialog: true,
       ),
     );
+    if (mounted && keptOutside > 0) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              '曲に入れられるのは6つまでなので、'
+              '${keptOutside == 1 ? 'いまの音' : 'いまの$keptOutsideつの音'}は'
+              '${folders == null ? 'ストック' : 'フォルダ'}に入れました',
+            ),
+          ),
+        );
+    }
     if (mounted) await _nameNewRelayClip(before);
   }
 

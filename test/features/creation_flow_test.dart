@@ -1727,6 +1727,36 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('the camera says when the song already has six sounds', (
+    tester,
+  ) async {
+    for (final (count, shown) in const [(5, false), (6, true)]) {
+      final capture = CaptureController(
+        _FakeMedia(),
+        operationIdFactory: () => 'full-$count',
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CaptureScreen(
+            controller: capture,
+            testFixture: true,
+            recordedClipCount: count,
+            onMediaReady: () {},
+          ),
+        ),
+      );
+      await capture.prepare();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        find.text('曲の音は6つでいっぱいです。録った音はフォルダに入ります'),
+        shown ? findsOneWidget : findsNothing,
+        reason: '$count sounds',
+      );
+      await tester.pumpWidget(const SizedBox());
+      capture.dispose();
+    }
+  });
+
   testWidgets('capture Task 7 visual QA screens', (tester) async {
     tester.view.physicalSize = const Size(375, 812);
     tester.view.devicePixelRatio = 1;

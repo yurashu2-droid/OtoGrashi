@@ -245,6 +245,9 @@ final class _CaptureScreenState extends State<CaptureScreen> {
     if (state.phase == CapturePhase.completed && _playback.error != null) {
       return '再生できませんでした。撮り直すか、別の動画を選んでください。';
     }
+    if (widget.recordedClipCount >= 6 && state.phase == CapturePhase.ready) {
+      return '曲の音は6つでいっぱいです。録った音はフォルダに入ります';
+    }
     return null;
   }
 
