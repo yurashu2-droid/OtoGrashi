@@ -193,4 +193,31 @@ void main() {
     expect(melody.any((e) => e.stretch! < 1), isTrue, reason: 'a long note holds its vowel');
     expect(Arrangement.fromJson(a.toJson()).toJson(), a.toJson());
   });
+
+  test('speech is sung word by word in every song, within the event limit', () {
+    // whole syllables at spoken speed: a syllable starts where the last left off
+    for (final melody in [
+      MelodyTemplate.odeToJoy,
+      MelodyTemplate.furElise,
+      MelodyTemplate.fate,
+      MelodyTemplate.midiScore,
+    ]) {
+      for (final seconds in [15, 30]) {
+        final a = arrange(
+          clips: [_clip(0), _clip(3), _clip(4)],
+          style: ArrangementStyle.lively,
+          seed: 7,
+          melodyTemplate: melody,
+          performanceMode: PerformanceMode.mad,
+          durationSeconds: seconds,
+        );
+        expect(a.events.length, lessThanOrEqualTo(Arrangement.maxEvents),
+            reason: '${melody.name} $seconds');
+        final sung = a.events.where((e) => e.role == 'melody').toList();
+        expect(sung, isNotEmpty, reason: melody.name);
+        // the onset of a syllable is said, not stretched
+        expect(sung.any((e) => e.stretch == 1), isTrue, reason: melody.name);
+      }
+    }
+  });
 }
