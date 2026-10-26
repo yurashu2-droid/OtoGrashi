@@ -1482,25 +1482,33 @@ class _ArrangeScreenState extends State<_ArrangeScreen> {
               onMode: widget.controller.selectPerformance,
               onDuration: widget.controller.selectDuration,
             ),
-            const _SectionLabel('雰囲気'),
-            const SizedBox(height: 8),
-            // wraps instead of overflowing with large text
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final (style, label) in const [
-                  (ArrangementStyle.sparse, 'ぽつぽつ'),
-                  (ArrangementStyle.swaying, 'ゆらゆら'),
-                  (ArrangementStyle.lively, 'にぎやか'),
-                ])
-                  _PillChoice(
-                    label: label,
-                    selected: state.style == style,
-                    onTap: () => widget.controller.selectStyle(style),
-                  ),
-              ],
-            ),
+            // MAD, あつめる and とびだす build their own arc; the mood would
+            // change nothing there, so it is not offered
+            if (!const {
+              PerformanceMode.mad,
+              PerformanceMode.collect,
+              PerformanceMode.window,
+            }.contains(state.performanceMode)) ...[
+              const _SectionLabel('雰囲気'),
+              const SizedBox(height: 8),
+              // wraps instead of overflowing with large text
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final (style, label) in const [
+                    (ArrangementStyle.sparse, 'ぽつぽつ'),
+                    (ArrangementStyle.swaying, 'ゆらゆら'),
+                    (ArrangementStyle.lively, 'にぎやか'),
+                  ])
+                    _PillChoice(
+                      label: label,
+                      selected: state.style == style,
+                      onTap: () => widget.controller.selectStyle(style),
+                    ),
+                ],
+              ),
+            ],
             if (path != null ||
                 !widget.controller.deferRendering ||
                 state.phase == CreationPhase.failed) ...[
