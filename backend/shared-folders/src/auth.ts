@@ -149,7 +149,7 @@ export class AuthAccounts extends DurableObject<Env> {
     const quota=this.get<Quota>('quota',accountId);
     // The quota's folder is included in case a creation stopped before it was remembered.
     const ids=new Set([...(this.get<string[]>('memberships',accountId)??[]),...(quota?[quota.folderId]:[])]);
-    for(const id of ids) await this.env.FOLDERS.get(this.env.FOLDERS.idFromName(id)).accountDeparted({accountId});
+    for(const id of ids) await this.env.FOLDERS.get(this.env.FOLDERS.idFromName(id)).accountDeparted({accountId,deleteClips:true});
     const songs=await catalog(this.env).removeAccount(accountId);
     if('rpcError' in songs) fail(songs.rpcError.status,songs.rpcError.code,songs.rpcError.message);
     const sql=this.ctx.storage.sql;

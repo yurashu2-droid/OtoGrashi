@@ -118,6 +118,21 @@ test('deleting an account closes its folder, leaves the others, takes its songs 
   const aInB = await join(theirsId, theirs.membership.token, a, 'A in B');
   const bucket = await mf.getR2Bucket('FILES');
   assert.equal((await bucket.list({ prefix: `${ownedId}/` })).objects.length, 1);
+  // In b's folder: a clip of a's with a thumbnail, an unfinished upload of a's, and a clip and an unfinished upload of b's.
+  const aClip = (await data(await upload(theirsId, aInB.membership.token, new Uint8Array([7, 7])))).clip;
+  const bClip = (await data(await upload(theirsId, theirs.membership.token, new Uint8Array([8, 8])))).clip;
+  await data(await mf.dispatchFetch(`${origin}/v1/folders/${theirsId}/clips/${aClip.id}/thumbnail`, { method: 'PUT', body: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1]),
+    headers: { 'CF-Connecting-IP': `account-${++sequence}`, Authorization: `Bearer ${aInB.membership.token}`, 'Content-Type': 'image/png' } }));
+  const folderStorage = await mf.unsafeGetDurableObjectStorage(name, 'SharedFolder', { name: theirsId });
+  const state = JSON.parse(String((await folderStorage.exec('SELECT data FROM folder_state'))[0].data));
+  const aPending = `${theirsId}/clips/${'a'.repeat(64)}/unfinished`, bPending = `${theirsId}/clips/${'b'.repeat(64)}/unfinished`;
+  state.pending['a'.repeat(64)] = { key: aPending, size: 2, expires: Date.now() + 600000, memberId: aInB.membership.memberId };
+  state.pending['b'.repeat(64)] = { key: bPending, size: 2, expires: Date.now() + 600000, memberId: theirs.membership.memberId };
+  await folderStorage.exec('UPDATE folder_state SET data=?', JSON.stringify(state));
+  await bucket.put(aPending, 'partial'); await bucket.put(bPending, 'partial');
+  const theirKeys = async () => (await bucket.list({ prefix: `${theirsId}/` })).objects.map(o => o.key).sort();
+  const before = await theirKeys();
+  assert.equal(before.length, 5);
   assert.deepEqual((await records(a)).sort(), ['account', 'code', 'credential', 'flow', 'memberships', 'quota', 'session']);
 
   // a's songs: one public, one already removed by a, one hidden by reports. b's songs: one a reported, one a helped hide.
@@ -147,6 +162,14 @@ test('deleting an account closes its folder, leaves the others, takes its songs 
   await refused(await call(`/v1/folders/${theirsId}`, { token: aInB.membership.token }), 401, 'unauthorized');
   const left = await data(await call(`/v1/folders/${theirsId}`, { token: theirs.membership.token }));
   assert.deepEqual(left.folder.members.map((m: any) => [m.displayName, m.role]), [['Owner', 'owner']]);
+  // a's clip, its thumbnail and a's unfinished upload are deleted; b's clip and b's unfinished upload stay.
+  assert.deepEqual(left.folder.clips.map((c: any) => c.id), [bClip.id]);
+  await refused(await call(`/v1/folders/${theirsId}/clips/${aClip.id}/file`, { token: theirs.membership.token }), 404, 'clip_not_found');
+  assert.deepEqual(new Uint8Array(await (await call(`/v1/folders/${theirsId}/clips/${bClip.id}/file`, { token: theirs.membership.token })).arrayBuffer()), new Uint8Array([8, 8]));
+  const after = await theirKeys();
+  assert.equal(after.length, 2); assert.equal(after.includes(bPending), true);
+  assert.equal(after.every(key => before.includes(key)) && after.some(key => key.includes(`/clips/${bClip.id}/`)), true);
+  assert.deepEqual(Object.keys(JSON.parse(String((await folderStorage.exec('SELECT data FROM folder_state'))[0].data)).pending), ['b'.repeat(64)]);
   assert.deepEqual((await data(await call('/v1/account/folders', { session: b.session }))).folders.map((f: any) => f.folder.id), [theirsId]);
 
   // a's songs are gone from every list and read; their rows keep nothing that names a.
@@ -177,12 +200,15 @@ test('deleting again after a partial run, and deleting a fresh account, both wor
   const a = await account('Halfway'), b = await account('Host');
   const owned = await ownFolder(a), theirs = await ownFolder(b);
   const aInB = await join(theirs.folder.id, theirs.membership.token, a, 'A in B');
+  await data(await upload(theirs.folder.id, aInB.membership.token, new Uint8Array([9, 9])));
   const song = await post(a), removed = await post(a), bSong = await post(b);
   await data(await report(bSong.id, a), 201);
   // As if an earlier DELETE stopped after its folder and song steps: the owned folder is closed, b's folder
   // is left, one song is already a scrubbed tombstone. The account also remembers a folder that never existed.
   await data(await call(`/v1/folders/${owned.folder.id}`, { method: 'DELETE', token: owned.membership.token }));
   await data(await call(`/v1/folders/${theirs.folder.id}/members/${aInB.membership.memberId}`, { method: 'DELETE', token: aInB.membership.token }));
+  // Leaving the ordinary way keeps the member's clips in the folder.
+  assert.equal((await data(await call(`/v1/folders/${theirs.folder.id}`, { token: theirs.membership.token }))).folder.clips.length, 1);
   const songs = await catalog();
   await songs.exec("UPDATE songs SET status='removed', lanes=NULL, author='', account_id=? WHERE id=?", `deleted:${randomUUID()}`, removed.id);
   const storage = await auth(), memberships = JSON.parse(String((await storage.exec("SELECT data FROM auth_records WHERE kind='memberships' AND id=?", a.id))[0].data));

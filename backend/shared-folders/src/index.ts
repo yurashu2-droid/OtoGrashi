@@ -24,7 +24,8 @@ interface Metadata {
 }
 interface Clip extends Metadata { id: string; memberId: string; memberName: string; createdAt: string; hasThumbnail: boolean }
 interface StoredClip { clip: Clip; key: string; thumbnailKey?: string }
-interface Reservation { key: string; size: number; expires: number }
+// memberId is recorded from now on so that a deleted account's unfinished uploads can be found; older reservations lack it.
+interface Reservation { key: string; size: number; expires: number; memberId?: string }
 interface FolderState {
   id: string; title: string; createdAt: string; closed: boolean; members: Member[];
   clips: Record<string, StoredClip>; pending: Record<string, Reservation>;
@@ -206,14 +207,22 @@ export class SharedFolder extends DurableObject<Env> {
   }
   // A deleted account leaves each folder the way its member could: the owner's folder closes as the
   // owner's DELETE closes it (members dropped, every stored object deleted), anyone else leaves as the
-  // member DELETE removes them. A folder that is missing, closed or already left needs nothing.
-  async accountDeparted(input: { accountId: string }): Promise<{ ok: true }> {
+  // member DELETE removes them. With deleteClips (account deletion only) a leaving member's clips,
+  // thumbnails and unfinished uploads go too, as the clip DELETE removes them; the membership goes in
+  // the same save. A folder that is missing, closed or already left needs nothing.
+  async accountDeparted(input: { accountId: string; deleteClips?: boolean }): Promise<{ ok: true }> {
     return this.exclusive(async () => {
       const s = this.load(), m = s && !s.closed ? s.members.find(x => x.accountId === input.accountId) : undefined;
       if (!s || !m) return { ok: true as const };
       if (m.role === 'owner') {
         s.closed = true; s.members = []; delete s.invite; this.save(s); await this.schedule(s);
         await this.cleanup(s);
+      } else if (input.deleteClips) {
+        for (const [clipId, stored] of Object.entries(s.clips)) if (stored.clip.memberId === m.id) {
+          s.garbage.push(stored.key); if (stored.thumbnailKey) s.garbage.push(stored.thumbnailKey); delete s.clips[clipId];
+        }
+        for (const [clipId, reservation] of Object.entries(s.pending)) if (reservation.memberId === m.id) { s.garbage.push(reservation.key); delete s.pending[clipId]; }
+        s.members = s.members.filter(x => x.id !== m.id); this.save(s); await this.schedule(s); await this.cleanup(s);
       } else { s.members = s.members.filter(x => x.id !== m.id); this.save(s); }
       return { ok: true as const };
     });
@@ -309,7 +318,7 @@ export class SharedFolder extends DurableObject<Env> {
         clips.reduce((n, c) => n + c.clip.sizeBytes, 0) + reservations.reduce((n, r) => n + r.size, 0) + meta.sizeBytes > LIMITS.maxFolderBytes)
         fail(409, 'folder_limit', 'Folder storage limit reached.');
       const key = `${id}/clips/${clipId}/${crypto.randomUUID()}`;
-      s.pending[clipId] = { key, size: meta.sizeBytes, expires: Date.now() + TEN_MINUTES };
+      s.pending[clipId] = { key, size: meta.sizeBytes, expires: Date.now() + TEN_MINUTES, memberId: m.id };
       this.save(s); await this.schedule(s);
       try {
         await this.putVideo(request, key, meta);

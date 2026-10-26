@@ -166,9 +166,12 @@ HTTPS origin before public launch.
 The app's in-app account deletion calls this once. It removes, in this order:
 every folder the account is in (a folder it owns closes exactly as the owner's
 `DELETE /v1/folders/<id>` closes it, so the other members lose access and its
-clips and thumbnails are deleted from R2; in any other folder the account leaves
-as `DELETE /v1/folders/<id>/members/<memberId>` would, and clips it added there
-stay with that folder); its songs (each one still listed becomes the same
+clips and thumbnails are deleted from R2; in any other folder the account's
+clips, their thumbnails and its unfinished uploads are deleted from the folder
+and from R2 as the clip `DELETE` deletes them, and the account leaves as
+`DELETE /v1/folders/<id>/members/<memberId>` would; an ordinary leave, by
+contrast, keeps the member's clips, and clips left behind that way before the
+account was deleted can no longer be traced to it); its songs (each one still listed becomes the same
 tombstone as the poster's `DELETE`, and every row of the account, older
 tombstones too, loses its display name, title, credit and score hash and gets a
 random stand-in for the account ID; reports the account made on other songs are
