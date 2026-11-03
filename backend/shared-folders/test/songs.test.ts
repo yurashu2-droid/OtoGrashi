@@ -19,7 +19,7 @@ before(async () => {
   const compiled = await build({ entryPoints: ['src/index.ts'], bundle: true, write: false, format: 'esm', external: ['cloudflare:workers'], target: 'es2022', loader: { '.txt': 'text' } });
   const start = async (name: string, bindings?: Record<string, string>): Promise<Api> => {
     const mf = new Miniflare({ ...convertV4MiniflareOptions({ name, modules: true, script: compiled.outputFiles[0].text, compatibilityDate: '2025-10-11',
-      durableObjects: { AUTH_ACCOUNTS: { className: 'AuthAccounts', useSQLite: true }, FOLDERS: { className: 'SharedFolder', useSQLite: true }, SONGS: { className: 'SongCatalog', useSQLite: true } },
+      durableObjects: { AUTH_ACCOUNTS: { className: 'AuthAccounts', useSQLite: true }, FOLDERS: { className: 'SharedFolder', useSQLite: true }, SONGS: { className: 'SongCatalog', useSQLite: true }, BUDGET: { className: 'StorageBudget', useSQLite: true } },
       r2Buckets: ['FILES'], ...(bindings ? { bindings } : {}),
       ratelimits: { API_LIMIT: { namespace_id: '1002', simple: { limit: 120, period: 60 } }, ENTRY_LIMIT: { namespace_id: '1001', simple: { limit: 10, period: 60 } } } }), unsafeInspectDurableObjects: true });
     await mf.ready; return { mf, name };

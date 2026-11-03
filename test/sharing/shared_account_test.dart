@@ -416,6 +416,32 @@ void main() {
       );
     },
   );
+  test('a full shared store says so instead of a generic failure', () async {
+    seed();
+    for (final (code, words) in [
+      ('storage_full', 'いっぱい'),
+      ('storage_busy', '混み合って'),
+    ]) {
+      transport.respond = (_, _) async => SharedHttpResponse(
+        503,
+        Stream.value(
+          utf8.encode(
+            jsonEncode({
+              'error': {'code': code},
+            }),
+          ),
+        ),
+      );
+      await expectLater(
+        service.createFolder('Folder', 'Name'),
+        throwsA(
+          isA<SharedFolderException>()
+              .having((e) => e.code, 'code', code)
+              .having((e) => e.message, 'message', contains(words)),
+        ),
+      );
+    }
+  });
   test(
     'failed creation reuses secure UUID after restart then clears on success',
     () async {

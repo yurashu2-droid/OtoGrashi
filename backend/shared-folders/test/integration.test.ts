@@ -14,7 +14,7 @@ before(async () => {
   const compiled = await build({ stdin: { resolveDir: process.cwd(), contents: `
     import worker, { SharedFolder as Base } from './src/index.ts';
     export default worker;
-    export { AuthAccounts } from './src/index.ts';
+    export { AuthAccounts, StorageBudget } from './src/index.ts';
     export class SharedFolder extends Base {
       fetch(request) {
         if (request.headers.get('X-Test-Truncated') === 'yes') {
@@ -24,7 +24,7 @@ before(async () => {
       }
     }` }, bundle: true, write: false, format: 'esm', external: ['cloudflare:workers'], target: 'es2022', loader: {'.txt':'text'} });
   mf = new Miniflare({ ...convertV4MiniflareOptions({ name: 'sharing', modules: true, script: compiled.outputFiles[0].text, compatibilityDate: '2025-10-11',
-    durableObjects: { AUTH_ACCOUNTS: { className: 'AuthAccounts', useSQLite: true }, FOLDERS: { className: 'SharedFolder', useSQLite: true } }, r2Buckets: ['FILES'],
+    durableObjects: { AUTH_ACCOUNTS: { className: 'AuthAccounts', useSQLite: true }, FOLDERS: { className: 'SharedFolder', useSQLite: true }, BUDGET: { className: 'StorageBudget', useSQLite: true } }, r2Buckets: ['FILES'],
     ratelimits: { API_LIMIT: { namespace_id: '1002', simple: { limit: 120, period: 60 } }, ENTRY_LIMIT: { namespace_id: '1001', simple: { limit: 10, period: 60 } } } }), unsafeInspectDurableObjects: true });
   await mf.ready;
 });
@@ -154,6 +154,34 @@ test('clip deletion frees storage and close removes private objects permanently'
   await data(await call(`/v1/folders/${id}`, 'GET', t), 404);
   await data(await upload(id, t, bytes), 404);
   assert.equal((await (await mf.getR2Bucket('FILES')).list({ prefix: `${id}/` })).objects.length, 0);
+});
+test('the service-wide budget keeps R2 inside its free allowance and gives room back', async () => {
+  const totals = await mf.unsafeGetDurableObjectStorage('sharing', 'StorageBudget', { name: 'budget' });
+  const total = async (name: string) => Number((await totals.exec('SELECT value FROM totals WHERE name=?', name))[0]?.value ?? 0);
+  const month = new Date().toISOString().slice(0, 7);
+  const f = await folder(); const id = f.folder.id; const t = f.membership.token;
+  const bytes = new Uint8Array([11, 22, 33]); const clipId = digest(bytes);
+  const before = await total('bytes'), writes = await total(`writes:${month}`);
+  await data(await upload(id, t, bytes));
+  assert.equal(await total('bytes'), before + 3); assert.equal(await total(`writes:${month}`), writes + 1);
+  // Near-budget fixtures avoid writing gigabytes or a million objects merely to test the stop.
+  await totals.exec('UPDATE totals SET value=value+? WHERE name=?', 8_000_000_000 - before - 4, 'bytes');
+  const full = await data(await upload(id, t, new Uint8Array([1, 2])), 503); assert.equal(full.error.code, 'storage_full');
+  assert.equal((await (await mf.getR2Bucket('FILES')).list({ prefix: `${id}/clips/${digest(new Uint8Array([1, 2]))}/` })).objects.length, 0);
+  const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2]);
+  const thumb = await mf.dispatchFetch(`${origin}/v1/folders/${id}/clips/${clipId}/thumbnail`, { method: 'PUT', body: png, headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'image/png' } });
+  assert.equal(thumb.status, 503);
+  await data(await upload(id, t, new Uint8Array([3])));
+  await data(await call(`/v1/folders/${id}/clips/${clipId}`, 'DELETE', t));
+  await data(await upload(id, t, new Uint8Array([4, 5])));
+  const reads = await total(`reads:${month}`);
+  await totals.exec('INSERT INTO totals (name,value) VALUES (?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value', `reads:${month}`, 8_000_000);
+  const busy = await data(await call(`/v1/folders/${id}/clips/${digest(new Uint8Array([3]))}/file`, 'GET', t), 503); assert.equal(busy.error.code, 'storage_busy');
+  await totals.exec('UPDATE totals SET value=? WHERE name=?', reads, `reads:${month}`);
+  await data(await call(`/v1/folders/${id}`, 'DELETE', t));
+  assert.equal(await total('bytes'), 8_000_000_000 - 4);
+  await totals.exec('UPDATE totals SET value=? WHERE name=?', before, 'bytes');
+  assert.equal((await totals.exec('SELECT COUNT(*) AS n FROM stored WHERE key>=? AND key<?', `${id}/`, `${id}0`))[0].n, 0);
 });
 test('origin, IDs, internal initialization and secret-free fragment landing', async () => {
   const f = await folder(); const id = f.folder.id; const t = f.membership.token;

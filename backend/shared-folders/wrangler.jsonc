@@ -17,6 +17,10 @@
       {
         "name": "SONGS",
         "class_name": "SongCatalog"
+      },
+      {
+        "name": "BUDGET",
+        "class_name": "StorageBudget"
       }
     ]
   },
@@ -37,6 +41,12 @@
       "tag": "v3",
       "new_sqlite_classes": [
         "SongCatalog"
+      ]
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": [
+        "StorageBudget"
       ]
     }
   ],

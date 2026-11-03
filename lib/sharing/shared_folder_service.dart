@@ -616,6 +616,8 @@ final class SharedFolderService {
         'owner_cannot_leave' => 'フォルダをつくった人は、フォルダを閉じて退出してください。',
         'folder_limit' => '共有フォルダの容量か素材数が上限に達しました。',
         'clip_too_large' => '動画は50MB以内にしてください。',
+        'storage_full' => 'みんなの置き場がいっぱいのため、いまは音を入れられません。しばらくしてからお試しください。',
+        'storage_busy' => 'いまは混み合っているため、音を受け取れません。しばらくしてからお試しください。',
         'body_too_large' => '送信するデータが大きすぎます。',
         'upload_pending' => 'この音は送信中です。少し待ってから更新してください。',
         'upload_timeout' ||

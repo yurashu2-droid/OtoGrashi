@@ -4,7 +4,8 @@ Implements the v1 contract in `../../docs/superpowers/specs/2026-10-05-r2-shared
 One SQLite Durable Object holds each folder's membership, invitation hashes,
 clip metadata and reservations. A separate SQLite Durable Object verifies
 passkeys and manages account sessions and the free owned-folder quota. A third
-one holds the public [song catalogue](#song-catalogue).
+one holds the public [song catalogue](#song-catalogue), and a fourth keeps the
+[storage budget](#storage-budget).
 The R2 bucket must stay private. Cloudflare credentials never belong in the app.
 
 The account contract is in
@@ -108,6 +109,19 @@ reporting a song, and deleting an account share an
 additional 10 requests/minute limit keyed by a hash of the Cloudflare client IP.
 People sharing a NAT also share the IP-based entry limits. Cloudflare rate limits are per-location guardrails, not an
 exact global cap or billing protection. Required bindings fail closed if absent.
+
+## Storage budget
+
+Workers and SQLite Durable Objects on the Workers Free plan are never billed; past
+their daily allowance requests fail. R2 bills past its free allowance (10 GB stored,
+1 million Class A and 10 million Class B operations a month), so one `StorageBudget`
+Durable Object counts what the folders use and stops them a fifth short of each:
+8 GB stored, 800,000 writes and lists, and 8,000,000 reads per UTC month
+(`BUDGET` in `src/budget.ts`). A clip or thumbnail that would pass it is refused
+with 503 `storage_full`, a download with 503 `storage_busy`; deleting a clip or
+closing a folder gives its room back, and emptying a folder is never refused.
+This holds only while the account stays on the Workers Free plan and nothing else
+uses R2 in it.
 
 The per-object queue serializes reads/mutations across R2 awaits; revocation and
 deletion cannot race upload publication. File uploads stream through a bounded

@@ -1,12 +1,14 @@
 import { DurableObject } from 'cloudflare:workers';
 import { AuthAccounts, authAsset } from './auth';
 import { SongCatalog, songRoute } from './songs';
-export { AuthAccounts, SongCatalog };
+import { StorageBudget, budget } from './budget';
+export { AuthAccounts, SongCatalog, StorageBudget };
 
 export interface Env {
   AUTH_ACCOUNTS: DurableObjectNamespace<AuthAccounts>;
   FOLDERS: DurableObjectNamespace<SharedFolder>;
   SONGS: DurableObjectNamespace<SongCatalog>;
+  BUDGET: DurableObjectNamespace<StorageBudget>;
   FILES: R2Bucket;
   ENTRY_LIMIT: RateLimit;
   API_LIMIT: RateLimit;
@@ -254,13 +256,14 @@ export class SharedFolder extends DurableObject<Env> {
       // Tombstone remains permanently; alarm retries deletion after crashes or R2 errors.
       let cursor: string | undefined;
       do {
+        await budget(this.env).listed();
         const list = await this.env.FILES.list({ prefix: `${s.id}/`, cursor });
         if (list.objects.length) await this.env.FILES.delete(list.objects.map(o => o.key));
         cursor = list.truncated ? list.cursor : undefined;
       } while (cursor);
-      s.garbage = [];
+      await budget(this.env).releaseFolder(s.id); s.garbage = [];
     } else if (s.garbage.length) {
-      await this.env.FILES.delete(s.garbage); s.garbage = [];
+      await this.env.FILES.delete(s.garbage); await budget(this.env).release(s.garbage); s.garbage = [];
     }
     this.save(s);
     if (s.closed) await this.ctx.storage.deleteAlarm(); else await this.schedule(s);
@@ -320,6 +323,10 @@ export class SharedFolder extends DurableObject<Env> {
       const key = `${id}/clips/${clipId}/${crypto.randomUUID()}`;
       s.pending[clipId] = { key, size: meta.sizeBytes, expires: Date.now() + TEN_MINUTES, memberId: m.id };
       this.save(s); await this.schedule(s);
+      if (!(await budget(this.env).store(key, meta.sizeBytes))) {
+        delete s.pending[clipId]; this.save(s); await this.schedule(s);
+        fail(503, 'storage_full', 'Shared storage is full for now. Please try again later.');
+      }
       try {
         await this.putVideo(request, key, meta);
         stored = { key, clip: { ...meta, id: clipId, memberId: m.id, memberName: m.displayName, createdAt: new Date().toISOString(), hasThumbnail: false } };
@@ -349,6 +356,8 @@ export class SharedFolder extends DurableObject<Env> {
       const key = `${id}/thumbnails/${clipId}/${crypto.randomUUID()}`;
       // Persist staged object for crash recovery before writing.
       s.garbage.push(key); this.save(s); await this.schedule(s);
+      // A refused thumbnail stays in garbage, whose cleanup deletes nothing that was written.
+      if (!(await budget(this.env).store(key, bytes.length))) fail(503, 'storage_full', 'Shared storage is full for now. Please try again later.');
       await this.env.FILES.put(key, bytes, { httpMetadata: { contentType: type } });
       if (stored.thumbnailKey) s.garbage.push(stored.thumbnailKey);
       stored.thumbnailKey = key; stored.clip.hasThumbnail = true;
@@ -358,6 +367,7 @@ export class SharedFolder extends DurableObject<Env> {
     if (p.length === 7 && request.method === 'GET' && (p[6] === 'file' || p[6] === 'thumbnail')) {
       const key = p[6] === 'file' ? stored.key : stored.thumbnailKey;
       if (!key) fail(404, 'thumbnail_not_found', 'Thumbnail not found.');
+      if (!(await budget(this.env).read())) fail(503, 'storage_busy', 'Shared storage is busy for now. Please try again later.');
       const object = await this.env.FILES.get(key);
       if (!object) fail(404, 'file_not_found', 'File not found.');
       return new Response(object.body, { headers: { 'Content-Type': object.httpMetadata?.contentType ?? 'application/octet-stream',
