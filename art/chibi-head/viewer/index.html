@@ -135,7 +135,7 @@ spin.onclick = () => {
 if (matchMedia("(prefers-reduced-motion: reduce)").matches) spin.click();
 setBg(BGS[0]);
 
-new GLTFLoader().load("chibi_head.glb", gltf => {
+new GLTFLoader().load("chibi_head.gltf.json", gltf => {
   scene.add(gltf.scene);
   gltf.scene.traverse(o => {
     if (o.isMesh && o.material.name === "Face") faceMat = o.material;

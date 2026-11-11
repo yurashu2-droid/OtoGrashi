@@ -11,9 +11,12 @@
   chibi_head.blend                        Blender ファイル
   preview_*.png                           確認用レンダリング
 """
+import base64
+import json
 import math
 import os
 import random
+import struct
 
 import bpy  # bmesh / mathutils より先に読み込む（pip版bpy対策）
 import bmesh
@@ -318,9 +321,24 @@ def build():
 
     bpy.ops.export_scene.gltf(filepath=os.path.join(OUT, "chibi_head.glb"),
                               export_format="GLB", export_apply=True)
+    write_viewer_gltf()
     render_previews()
     bpy.ops.file.pack_all()
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(OUT, "chibi_head.blend"))
+
+
+def write_viewer_gltf():
+    """glb をバイナリ埋め込みの glTF(JSON) にしてビューア用に書き出す。
+    アーティファクトは .glb を配信できないので .json の名前にする。"""
+    data = open(os.path.join(OUT, "chibi_head.glb"), "rb").read()
+    json_len = struct.unpack("<I", data[12:16])[0]
+    gltf = json.loads(data[20:20 + json_len])
+    bin_start = 20 + json_len + 8
+    gltf["buffers"][0]["uri"] = ("data:application/octet-stream;base64,"
+                                 + base64.b64encode(data[bin_start:]).decode())
+    os.makedirs(os.path.join(OUT, "viewer"), exist_ok=True)
+    with open(os.path.join(OUT, "viewer", "chibi_head.gltf.json"), "w") as f:
+        json.dump(gltf, f, separators=(",", ":"))
 
 
 def render_previews():
