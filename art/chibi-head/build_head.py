@@ -21,7 +21,8 @@ import struct
 import bpy  # bmesh / mathutils より先に読み込む（pip版bpy対策）
 import bmesh
 from mathutils import Matrix, Vector
-from PIL import Image, ImageDraw
+import numpy as np
+from PIL import Image, ImageDraw, ImageOps
 
 OUT = os.path.dirname(os.path.abspath(__file__))
 random.seed(7)
@@ -247,16 +248,65 @@ def torus_bm(major, minor, z_scale, seg=64, ring=20):
 
 
 # ---- 頭の形 -------------------------------------------------------------
+HEAD_BOTTOM, HEAD_HEIGHT = -1.5, 2.7  # 頭の下端と高さ（実寸）
+
+
+def load_head_profiles(path, n=241):
+    """手描きの輪郭（左＝正面、右＝横顔で左向き）から、高さごとの寸法を読む。
+    返り値は h=0(あご)〜1(頭頂) の各段での (横幅の半分, 顔側の端の y, 後頭部側の端の y)。
+    y は -Y が顔側。"""
+    img = Image.open(path).convert("L")
+    w, h = img.size
+    ink = np.array(img) < 128
+    mid = w // 2 + 60  # 左右の絵の境目
+
+    def solid(part):
+        # 外側を塗りつぶし、それ以外（線と内側）を図形とみなす
+        outside = Image.fromarray(np.where(part, 0, 255).astype(np.uint8))
+        outside = ImageOps.expand(outside, border=2, fill=255)
+        ImageDraw.floodfill(outside, (0, 0), 128)
+        return (np.array(outside)[2:-2, 2:-2] != 128)
+
+    def rows(mask):
+        ys = np.nonzero(mask.any(axis=1))[0]
+        top, bottom = ys.min(), ys.max()
+        out = []
+        for i in range(n):
+            y = int(round(bottom - (bottom - top) * i / (n - 1)))
+            xs = np.nonzero(mask[y])[0]
+            out.append((xs.min(), xs.max()) if len(xs) else (np.nan, np.nan))
+        arr = np.array(out, dtype=float)
+        for c in range(2):  # 抜けを補間してから軽くならす
+            col = arr[:, c]
+            ok = ~np.isnan(col)
+            col[~ok] = np.interp(np.nonzero(~ok)[0], np.nonzero(ok)[0], col[ok])
+            arr[:, c] = np.convolve(np.pad(col, 4, mode="edge"), np.ones(9) / 9, "valid")
+        return arr, bottom - top
+
+    front, fh = rows(solid(ink[:, :mid]))
+    side, sh = rows(solid(ink[:, mid:]))
+    half_w = (front[:, 1] - front[:, 0]) / 2 / fh * HEAD_HEIGHT
+    axis = (side[:, 0].min() + side[:, 1].max()) / 2
+    y_front = (side[:, 0] - axis) / sh * HEAD_HEIGHT
+    y_back = (side[:, 1] - axis) / sh * HEAD_HEIGHT
+    return np.stack([half_w, y_front, y_back], axis=1)
+
+
+PROFILE = load_head_profiles(os.path.join(OUT, "head_outline.png"))
+
+
 def head_deform(v):
-    """単位球の点を、餅のような頭の形に移す。
-    頬（中心より下）がいちばん横に張り、あごは平たく、前面の下側が前にふくらむ。"""
+    """単位球の点を、手描き輪郭どおりの頭に移す。
+    球の高さ z を輪郭の段 h に、各段の断面は横幅と、横顔の前端〜後端で決まる楕円。"""
     x, y, z = v
-    w = 1.08 + 0.14 * math.exp(-((z + 0.35) / 0.4) ** 2) - 0.08 * max(0.0, z)
-    zz = z * 0.95 if z >= 0 else -0.84 * (-z) ** 0.72
-    yy = y * 0.86
-    if y < 0:  # 頬〜口元を前へ
-        yy -= 0.10 * (-y) * math.exp(-((z + 0.35) / 0.35) ** 2)
-    return Vector((x * w, yy, zz))
+    h = min(max((z + 1) / 2, 0.0), 1.0)
+    f = h * (len(PROFILE) - 1)
+    i = min(int(f), len(PROFILE) - 2)
+    half_w, y_front, y_back = PROFILE[i] + (PROFILE[i + 1] - PROFILE[i]) * (f - i)
+    c = math.hypot(x, y)
+    dx, dy = (x / c, y / c) if c > 1e-6 else (0.0, 0.0)
+    yc, half_d = (y_front + y_back) / 2, (y_back - y_front) / 2
+    return Vector((half_w * dx, yc + half_d * dy, HEAD_BOTTOM + HEAD_HEIGHT * h))
 
 
 def sphere_dir(phi, el):
@@ -300,7 +350,9 @@ def hair_lock(phi, el0, el1, width, swing=0.0, flick=0.25, curl=0.0, steps=18, l
         el = el0 + (el1 - el0) * t
         p = head_point(ph, el, lift + flick * t ** 2.2)
         pts.append(p)
-        ws.append(width * (1 - t ** 2.5) * (1 + 0.15 * math.sin(t * math.pi)) + 0.012)
+        # 毛先近くまで幅を保ち、最後に丸く閉じる
+        ws.append(width * math.sqrt(max(0.0, 1 - t ** 5)) * (1 + 0.12 * math.sin(t * math.pi))
+                  + 0.02)
     if curl:
         end, prev = pts[-1], pts[-2]
         t = (end - prev).normalized()
@@ -385,12 +437,12 @@ def build():
                                 math.radians(sw), fl, lift=1.05 + w * 0.32)
             add_object(f"HairStreak{i}", ribbon_bm(pts, ws, flat=0.5), [m_hair_dark], root)
 
-    # 帽子：前に傾けた半球＋折り返し＋ポンポン（つばが目のすぐ上に来る）
+    # 帽子：後ろに傾けた半球＋折り返し＋ポンポン（つばは顔側で高く、後ろで下がる）
     hat = bpy.data.objects.new("HatRoot", None)
     bpy.context.collection.objects.link(hat)
     hat.parent = root
     hat.matrix_local = (Matrix.Translation((0, 0, 0.12))
-                        @ Matrix.Rotation(math.radians(6), 4, "X"))
+                        @ Matrix.Rotation(math.radians(-10), 4, "X"))
 
     bm = sphere_bm(radius=1.12, scale=(1, 1, 1.3))
     cut(bm, (0, 0, 0.3), (0, 0, 1))
@@ -453,7 +505,7 @@ def render_previews():
     scene.camera = cam
     target = Vector((0, 0, 0.45))
     for name, az, el in (("front", 0, 5), ("threequarter", 38, 12), ("side", 90, 5),
-                         ("back", 180, 10), ("ref", -42, 12)):
+                         ("back", 180, 10), ("ref", 40, 12)):
         a, e = math.radians(az), math.radians(el)
         cam.location = target + 9.5 * Vector((math.sin(a) * math.cos(e),
                                               -math.cos(a) * math.cos(e), math.sin(e)))
