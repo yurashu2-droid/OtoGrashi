@@ -70,10 +70,10 @@ controls.enableDamping = true;
 controls.enablePan = false;
 controls.autoRotate = true; controls.autoRotateSpeed = 1.6;
 
-// 縦長の画面でも頭全体（幅約3.4・高さ約3.6）が収まる距離にする
+// 縦長の画面でも頭全体（髪の跳ねを含めて幅約4・高さ約3.8）が収まる距離にする
 function fitDistance(aspect) {
   const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-  return Math.max(2.0 / t, 1.9 / (t * aspect));
+  return Math.max(2.1 / t, 2.2 / (t * aspect));
 }
 function resize() {
   const { clientWidth: w, clientHeight: h } = stage;

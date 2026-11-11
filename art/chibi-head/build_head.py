@@ -31,7 +31,8 @@ SKIN = "#FFE1D2"
 BLUSH = "#FFB3A7"
 FRECKLE = "#DDA08C"
 LINE = "#3A2A2A"
-HAIR = "#6B4A3A"
+HAIR = "#8C6844"
+HAIR_DARK = "#5A3F2C"
 HAT = "#E8604C"
 HAT_BAND = "#FFF4E0"
 HAT_ACCENT = "#2F3E6E"
@@ -61,24 +62,26 @@ def save_aa(img, name, size):
     return path
 
 
+FACE_HALF = 1.3  # 顔テクスチャが覆う範囲（頭の実寸 ±1.3）
 EXPRESSIONS = ("smile", "tongue", "wink", "surprised", "sleepy")
 TONGUE = "#E8797A"
 MOUTH_IN = "#8A3B3B"
 
 
 def make_face_texture(expression="smile"):
-    """顔。頭を正面から投影するので、中心(0,0)=頭の中心、範囲は±1。"""
+    """顔。頭を正面から平行投影する。座標は変形後の頭の実寸で、画像の端 = ±FACE_HALF。"""
     s = 2048
     img = Image.new("RGB", (s, s), hex_rgb(SKIN))
     d = ImageDraw.Draw(img)
 
+    k = s / (2 * FACE_HALF)  # 実寸 1 あたりのピクセル
+
     def px(x, z):
-        return ((x / 2 + 0.5) * s, (0.5 - z / 2) * s)
+        return (s / 2 + x * k, s / 2 - z * k)
 
     def blob(x, z, rx, rz, col):
         cx, cy = px(x, z)
-        d.ellipse([cx - rx * s / 2, cy - rz * s / 2, cx + rx * s / 2, cy + rz * s / 2],
-                  fill=hex_rgb(col))
+        d.ellipse([cx - rx * k, cy - rz * k, cx + rx * k, cy + rz * k], fill=hex_rgb(col))
 
     def stroke(points, width, col):
         for i in range(len(points) - 1):
@@ -91,21 +94,21 @@ def make_face_texture(expression="smile"):
         return [(cx + rx * math.cos(math.radians(a)), cz + rz * math.sin(math.radians(a)))
                 for a in [a0 + (a1 - a0) * i / n for i in range(n + 1)]]
 
-    eye_z, mouth_z = -0.26, -0.43
+    eye_x, eye_z, mouth_z = 0.42, -0.2, -0.47
     for side in (-1, 1):
-        blob(side * 0.50, -0.46, 0.17, 0.10, BLUSH)
-        for fx, fz in ((0.40, -0.35), (0.50, -0.31), (0.59, -0.36)):
-            blob(side * fx, fz, 0.022, 0.022, FRECKLE)
+        blob(side * 0.62, -0.43, 0.11, 0.065, BLUSH)
+        for fx, fz in ((0.50, -0.34), (0.60, -0.31), (0.70, -0.35), (0.56, -0.40)):
+            blob(side * fx, fz, 0.016, 0.016, FRECKLE)
 
     def eye_happy(side):  # 上向きの弧（にっこり閉じ目）
-        stroke(arc(side * 0.36, eye_z, 0.115, 0.085, 20, 160), 0.026, LINE)
+        stroke(arc(side * eye_x, eye_z, 0.115, 0.085, 20, 160), 0.026, LINE)
 
     def eye_closed(side):  # 横一文字（目をつむる）
-        stroke(arc(side * 0.36, eye_z + 0.04, 0.11, 0.035, 200, 340), 0.026, LINE)
+        stroke(arc(side * eye_x, eye_z + 0.04, 0.11, 0.035, 200, 340), 0.026, LINE)
 
     def eye_open(side, r=0.06):
-        blob(side * 0.36, eye_z + 0.01, r * 1.6, r * 2.0, LINE)
-        blob(side * 0.36 + 0.025, eye_z + 0.05, r * 0.5, r * 0.5, "#FFFFFF")
+        blob(side * eye_x, eye_z + 0.01, r * 1.6, r * 2.0, LINE)
+        blob(side * eye_x + 0.025, eye_z + 0.05, r * 0.5, r * 0.5, "#FFFFFF")
 
     if expression == "smile":
         for side in (-1, 1):
@@ -124,11 +127,11 @@ def make_face_texture(expression="smile"):
     elif expression == "surprised":
         for side in (-1, 1):
             eye_open(side, 0.07)
-            stroke(arc(side * 0.36, eye_z + 0.2, 0.08, 0.03, 20, 160), 0.018, HAIR)  # 眉
+            stroke(arc(side * eye_x, eye_z + 0.2, 0.08, 0.03, 20, 160), 0.018, HAIR)  # 眉
         blob(0, mouth_z - 0.02, 0.07, 0.09, MOUTH_IN)
     elif expression == "sleepy":
         for side in (-1, 1):
-            stroke(arc(side * 0.36, eye_z, 0.11, 0.05, 200, 340), 0.026, LINE)
+            stroke(arc(side * eye_x, eye_z, 0.11, 0.05, 200, 340), 0.026, LINE)
         stroke(arc(0, mouth_z, 0.04, 0.025, 200, 340, 8), 0.018, LINE)
         blob(0.23, mouth_z - 0.02, 0.05, 0.06, "#BFE3F2")  # よだれ
     else:
@@ -243,6 +246,75 @@ def torus_bm(major, minor, z_scale, seg=64, ring=20):
     return bm
 
 
+# ---- 頭の形 -------------------------------------------------------------
+def head_deform(v):
+    """単位球の点を、餅のような頭の形に移す。
+    頬（中心より下）がいちばん横に張り、あごは平たく、前面の下側が前にふくらむ。"""
+    x, y, z = v
+    w = 1.08 + 0.14 * math.exp(-((z + 0.35) / 0.4) ** 2) - 0.08 * max(0.0, z)
+    zz = z * 0.95 if z >= 0 else -0.84 * (-z) ** 0.72
+    yy = y * 0.86
+    if y < 0:  # 頬〜口元を前へ
+        yy -= 0.10 * (-y) * math.exp(-((z + 0.35) / 0.35) ** 2)
+    return Vector((x * w, yy, zz))
+
+
+def sphere_dir(phi, el):
+    """方位 phi（0=正面、+で右＝+X）、仰角 el の単位ベクトル。"""
+    return Vector((math.sin(phi) * math.cos(el), -math.cos(phi) * math.cos(el), math.sin(el)))
+
+
+def head_point(phi, el, lift=1.0):
+    return head_deform(sphere_dir(phi, el)) * lift
+
+
+def ribbon_bm(points, widths, flat=0.35, sides=8):
+    """点列に沿った平たい帯（断面は楕円）。幅は頭の外向きに対して横方向。"""
+    bm = bmesh.new()
+    rings = []
+    n = len(points)
+    for i, p in enumerate(points):
+        t = (points[min(i + 1, n - 1)] - points[max(i - 1, 0)]).normalized()
+        out = p.normalized()
+        b = t.cross(out).normalized()
+        nn = b.cross(t).normalized()
+        w = widths[i]
+        rings.append([bm.verts.new(p + b * math.cos(a) * w + nn * math.sin(a) * w * flat)
+                      for a in [2 * math.pi * k / sides for k in range(sides)]])
+    for i in range(n - 1):
+        for k in range(sides):
+            bm.faces.new([rings[i][k], rings[i][(k + 1) % sides],
+                          rings[i + 1][(k + 1) % sides], rings[i + 1][k]])
+    for ring in (rings[0], rings[-1][::-1]):
+        bm.faces.new(ring[::-1])
+    return bm
+
+
+def hair_lock(phi, el0, el1, width, swing=0.0, flick=0.25, curl=0.0, steps=18, lift=1.05):
+    """生え際(el0)から el1 まで頭に沿って下り、毛先で外へ跳ねる房。
+    swing: 毛先の左右への流れ（ラジアン）、curl: 毛先の巻き（ラジアン）。"""
+    pts, ws = [], []
+    for i in range(steps + 1):
+        t = i / steps
+        ph = phi + swing * t ** 1.5 + 0.06 * math.sin(t * 7 + phi * 3)
+        el = el0 + (el1 - el0) * t
+        p = head_point(ph, el, lift + flick * t ** 2.2)
+        pts.append(p)
+        ws.append(width * (1 - t ** 2.5) * (1 + 0.15 * math.sin(t * math.pi)) + 0.012)
+    if curl:
+        end, prev = pts[-1], pts[-2]
+        t = (end - prev).normalized()
+        side = t.cross(end.normalized()).normalized() * (1 if curl > 0 else -1)
+        r = 0.07
+        center = end + side * r
+        for j in range(1, 13):
+            a = abs(curl) * j / 12
+            pts.append(center - side * r * math.cos(a) + t * r * math.sin(a)
+                       + end.normalized() * 0.01 * j)
+            ws.append(0.045)
+    return pts, ws
+
+
 def build():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     face_png = [make_face_texture(e) for e in EXPRESSIONS][0]
@@ -251,6 +323,7 @@ def build():
     m_skin = unlit("Skin", SKIN)
     m_face = unlit("Face", image_path=face_png)
     m_hair = unlit("Hair", HAIR)
+    m_hair_dark = unlit("HairDark", HAIR_DARK)
     m_hat = unlit("Hat", image_path=hat_png)
     m_brim = unlit("Brim", image_path=brim_png)
     m_pom = unlit("Pom", POM)
@@ -258,45 +331,66 @@ def build():
 
     root = bpy.data.objects.new("ChibiHead", None)
     bpy.context.collection.objects.link(root)
-    root.scale = (1.08, 1.0, 0.96)  # 少し横長のちび頭
 
-    # 頭：正面(-Y)向きの面だけ顔テクスチャ。UV は正面からの平行投影。
-    bm = sphere_bm()
+    # 頭：単位球を head_deform で変形。正面向きの面だけ顔テクスチャ。
+    # UV は変形後の実寸を正面から平行投影（FACE_HALF で正規化）。
+    bm = sphere_bm(seg=64, rings=32)
+    for f in bm.faces:
+        f.material_index = 1 if f.calc_center_median().normalized().y < -0.2 else 0
+    for v in bm.verts:
+        v.co = head_deform(v.co)
     uv = bm.loops.layers.uv.verify()
     for f in bm.faces:
-        f.material_index = 1 if f.normal.y < -0.2 else 0
         for loop in f.loops:
-            loop[uv].uv = (loop.vert.co.x / 2 + 0.5, loop.vert.co.z / 2 + 0.5)
+            co = loop.vert.co
+            loop[uv].uv = (co.x / (2 * FACE_HALF) + 0.5, co.z / (2 * FACE_HALF) + 0.5)
     add_object("Head", bm, [m_skin, m_face], root)
 
-    # 後ろ髪：頭より一回り大きい殻の後ろ側
-    bm = sphere_bm(radius=1.07)
-    cut(bm, (0, -0.1, 0), (0, 1, -0.3))
-    cut(bm, (0, 0, -0.7), (0, 0, 1))  # あごより上で切りそろえる
-    add_object("HairBack", bm, [m_hair], root)
+    # 髪のかたまり：頭を少し膨らませた殻から、顔の部分をくり抜く。
+    # 切り口は房で隠す。
+    bm = sphere_bm(seg=64, rings=32)
+    face_cut = [f for f in bm.faces
+                if (c := f.calc_center_median().normalized()).z < 0.18
+                and (c.y < -0.2 or c.z < -0.55)]
+    bmesh.ops.delete(bm, geom=face_cut, context="FACES")
+    for v in bm.verts:
+        v.co = head_deform(v.co) * 1.04
+    add_object("HairMass", bm, [m_hair], root)
 
-    # 生え際：房のすき間から肌が見えないよう、額の上を覆う
-    bm = sphere_bm(radius=1.015)
-    cut(bm, (0, 0, 0.3), (0, 0, 1))
-    add_object("HairCap", bm, [m_hair], root)
+    # 房：(方位°, 生え際の仰角°, 毛先の仰角°, 幅, 流れ°, 跳ね, 巻き°)
+    locks = [
+        # 前髪（短め、左右に流れる）
+        (-50, 24, -8, 0.27, -14, 0.10, 0), (-27, 24, -4, 0.26, 8, 0.08, 0),
+        (-6, 24, -2, 0.24, -10, 0.06, 0), (16, 24, -6, 0.27, 12, 0.08, 0),
+        (38, 24, -3, 0.26, -6, 0.10, 0), (58, 22, -10, 0.27, 14, 0.12, 0),
+        # 横髪（外へ跳ねる）
+        (-72, 20, -26, 0.30, -12, 0.26, 0), (-94, 18, -30, 0.31, 10, 0.32, 0),
+        (-116, 16, -28, 0.30, -8, 0.28, 0), (76, 20, -27, 0.30, 12, 0.27, 0),
+        (98, 18, -31, 0.31, -10, 0.33, 0), (120, 16, -27, 0.30, 8, 0.28, 0),
+        # 後ろ髪
+        (140, 14, -30, 0.32, 10, 0.24, 0), (162, 14, -34, 0.32, -8, 0.20, 0),
+        (-176, 14, -33, 0.33, 6, 0.20, 0), (-154, 14, -32, 0.32, 8, 0.22, 0),
+        (-136, 14, -30, 0.32, -10, 0.24, 0),
+        # はみ出した巻き毛
+        (-86, 12, -6, 0.10, -24, 0.40, 320),
+        (68, 8, 2, 0.09, 22, 0.38, -280),
+    ]
+    for i, (ph, e0, e1, w, sw, fl, cu) in enumerate(locks):
+        pts, ws = hair_lock(math.radians(ph), math.radians(e0), math.radians(e1), w,
+                            math.radians(sw), fl, math.radians(cu))
+        add_object(f"HairLock{i}", ribbon_bm(pts, ws), [m_hair], root)
+        if cu == 0:  # 濃い色の筋（イラストの描線の代わり）
+            pts, ws = hair_lock(math.radians(ph + (5 if i % 2 else -5)), math.radians(e0 - 6),
+                                math.radians(e1 + (e0 - e1) * 0.25), w * 0.22,
+                                math.radians(sw), fl, lift=1.05 + w * 0.32)
+            add_object(f"HairStreak{i}", ribbon_bm(pts, ws, flat=0.5), [m_hair_dark], root)
 
-    # 前髪・横髪：つぶした球の房を額に沿って並べる
-    for i, deg in enumerate((-78, -58, -38, -17, 4, 24, 44, 63, 80)):
-        phi = math.radians(deg)
-        elev = math.radians(13 + random.uniform(-3, 3))
-        pos = Vector((math.sin(phi) * math.cos(elev), -math.cos(phi) * math.cos(elev),
-                      math.sin(elev))) * 0.97
-        roll = math.radians(random.uniform(-22, 22) + deg * 0.25)
-        length = 0.25 + random.uniform(-0.04, 0.05) + abs(deg) / 300
-        mat = (Matrix.Translation(pos) @ Matrix.Rotation(phi, 4, "Z")
-               @ Matrix.Rotation(roll, 4, "Y") @ Matrix.Diagonal((0.21, 0.11, length, 1)))
-        add_object(f"HairTuft{i}", sphere_bm(seg=20, rings=12), [m_hair], root, mat)
-
-    # 帽子：後ろに傾けた半球＋折り返し＋ポンポン
+    # 帽子：前に傾けた半球＋折り返し＋ポンポン（つばが目のすぐ上に来る）
     hat = bpy.data.objects.new("HatRoot", None)
     bpy.context.collection.objects.link(hat)
     hat.parent = root
-    hat.matrix_local = Matrix.Rotation(math.radians(-15), 4, "X")
+    hat.matrix_local = (Matrix.Translation((0, 0, 0.12))
+                        @ Matrix.Rotation(math.radians(6), 4, "X"))
 
     bm = sphere_bm(radius=1.12, scale=(1, 1, 1.3))
     cut(bm, (0, 0, 0.3), (0, 0, 1))
@@ -359,7 +453,7 @@ def render_previews():
     scene.camera = cam
     target = Vector((0, 0, 0.45))
     for name, az, el in (("front", 0, 5), ("threequarter", 38, 12), ("side", 90, 5),
-                         ("back", 180, 10)):
+                         ("back", 180, 10), ("ref", -42, 12)):
         a, e = math.radians(az), math.radians(el)
         cam.location = target + 9.5 * Vector((math.sin(a) * math.cos(e),
                                               -math.cos(a) * math.cos(e), math.sin(e)))
