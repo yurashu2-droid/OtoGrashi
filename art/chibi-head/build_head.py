@@ -5,7 +5,8 @@
   python3 build_head.py                            # pip install bpy 済みの環境
 
 出力（このファイルと同じフォルダ）:
-  face.png / hat_pattern.png / brim.png   テクスチャ
+  face_<表情>.png / hat_pattern.png / brim.png   テクスチャ
+                                          （glb には face_smile を貼る。他の表情は差し替え用）
   chibi_head.glb                          Unlit の glTF
   chibi_head.blend                        Blender ファイル
   preview_*.png                           確認用レンダリング
@@ -57,7 +58,12 @@ def save_aa(img, name, size):
     return path
 
 
-def make_face_texture():
+EXPRESSIONS = ("smile", "tongue", "wink", "surprised", "sleepy")
+TONGUE = "#E8797A"
+MOUTH_IN = "#8A3B3B"
+
+
+def make_face_texture(expression="smile"):
     """顔。頭を正面から投影するので、中心(0,0)=頭の中心、範囲は±1。"""
     s = 2048
     img = Image.new("RGB", (s, s), hex_rgb(SKIN))
@@ -78,19 +84,53 @@ def make_face_texture():
                 k = t / 20
                 blob(x0 + (x1 - x0) * k, z0 + (z1 - z0) * k, width, width, col)
 
+    def arc(cx, cz, rx, rz, a0, a1, n=16):
+        return [(cx + rx * math.cos(math.radians(a)), cz + rz * math.sin(math.radians(a)))
+                for a in [a0 + (a1 - a0) * i / n for i in range(n + 1)]]
+
+    eye_z, mouth_z = -0.26, -0.43
     for side in (-1, 1):
         blob(side * 0.50, -0.46, 0.17, 0.10, BLUSH)
         for fx, fz in ((0.40, -0.35), (0.50, -0.31), (0.59, -0.36)):
             blob(side * fx, fz, 0.022, 0.022, FRECKLE)
-        # 閉じた目（上向きの弧）
-        arc = [(side * 0.36 + 0.115 * math.cos(a), -0.26 + 0.085 * math.sin(a))
-               for a in [math.radians(20 + 140 * i / 16) for i in range(17)]]
-        stroke(arc, 0.026, LINE)
-    # 口（にっこり）
-    smile = [(0.075 * math.cos(a), -0.43 + 0.06 * math.sin(a))
-             for a in [math.radians(200 + 140 * i / 12) for i in range(13)]]
-    stroke(smile, 0.022, LINE)
-    return save_aa(img, "face.png", (1024, 1024))
+
+    def eye_happy(side):  # 上向きの弧（にっこり閉じ目）
+        stroke(arc(side * 0.36, eye_z, 0.115, 0.085, 20, 160), 0.026, LINE)
+
+    def eye_closed(side):  # 横一文字（目をつむる）
+        stroke(arc(side * 0.36, eye_z + 0.04, 0.11, 0.035, 200, 340), 0.026, LINE)
+
+    def eye_open(side, r=0.06):
+        blob(side * 0.36, eye_z + 0.01, r * 1.6, r * 2.0, LINE)
+        blob(side * 0.36 + 0.025, eye_z + 0.05, r * 0.5, r * 0.5, "#FFFFFF")
+
+    if expression == "smile":
+        for side in (-1, 1):
+            eye_happy(side)
+        stroke(arc(0, mouth_z, 0.075, 0.06, 200, 340, 12), 0.022, LINE)
+    elif expression == "tongue":
+        for side in (-1, 1):
+            eye_closed(side)
+        blob(0.03, mouth_z - 0.035, 0.11, 0.10, TONGUE)
+        stroke(arc(0, mouth_z + 0.03, 0.09, 0.04, 200, 340, 12), 0.022, LINE)
+    elif expression == "wink":
+        eye_open(-1)
+        eye_happy(1)
+        blob(0, mouth_z - 0.01, 0.13, 0.10, MOUTH_IN)
+        blob(0, mouth_z + 0.035, 0.15, 0.06, SKIN)  # 上を削って D の形に
+    elif expression == "surprised":
+        for side in (-1, 1):
+            eye_open(side, 0.07)
+            stroke(arc(side * 0.36, eye_z + 0.2, 0.08, 0.03, 20, 160), 0.018, HAIR)  # 眉
+        blob(0, mouth_z - 0.02, 0.07, 0.09, MOUTH_IN)
+    elif expression == "sleepy":
+        for side in (-1, 1):
+            stroke(arc(side * 0.36, eye_z, 0.11, 0.05, 200, 340), 0.026, LINE)
+        stroke(arc(0, mouth_z, 0.04, 0.025, 200, 340, 8), 0.018, LINE)
+        blob(0.23, mouth_z - 0.02, 0.05, 0.06, "#BFE3F2")  # よだれ
+    else:
+        raise ValueError(expression)
+    return save_aa(img, f"face_{expression}.png", (1024, 1024))
 
 
 def make_hat_texture():
@@ -202,7 +242,8 @@ def torus_bm(major, minor, z_scale, seg=64, ring=20):
 
 def build():
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    face_png, hat_png, brim_png = make_face_texture(), make_hat_texture(), make_brim_texture()
+    face_png = [make_face_texture(e) for e in EXPRESSIONS][0]
+    hat_png, brim_png = make_hat_texture(), make_brim_texture()
 
     m_skin = unlit("Skin", SKIN)
     m_face = unlit("Face", image_path=face_png)
