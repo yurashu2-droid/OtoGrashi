@@ -1,0 +1,505 @@
+<title>オトグラシ スタック試作</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Zen+Kaku+Gothic+New:wght@400;700&family=Zen+Kurenaido&display=swap">
+<style>
+/* レイアウト: 机に見立てた1枚のステージに3つの小物を底揃えで並べ、その下に操作、最後に作り方 */
+:root {
+  --paper: #f6f1e7;
+  --desk: #ece4d2;
+  --panel: #fffaf0;
+  --ink: #1d1b22;
+  --muted: #6b6574;
+  --line: #ddd4c1;
+  --accent: #b9a5f5;
+  --accent-ink: #2a2147;
+  --rec: #ff6b6b;
+  --shadow-rgba: 70, 52, 30, 0.2;
+  --outline-rgb: 29, 27, 34;
+  --font-display: "Zen Kurenaido", "Hiragino Maru Gothic ProN", "Yu Gothic", sans-serif;
+  --font-body: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+  --font-dot: "DotGothic16", "Zen Kaku Gothic New", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #16141b; --desk: #24202d; --panel: #1e1b25; --ink: #f1ecdf; --muted: #a59fb1;
+    --line: #37323f; --accent: #b9a5f5; --accent-ink: #1d1730; --rec: #ff7b7b;
+    --shadow-rgba: 0, 0, 0, 0.42; --outline-rgb: 9, 8, 13; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #16141b; --desk: #24202d; --panel: #1e1b25; --ink: #f1ecdf; --muted: #a59fb1;
+  --line: #37323f; --accent: #b9a5f5; --accent-ink: #1d1730; --rec: #ff7b7b;
+  --shadow-rgba: 0, 0, 0, 0.42; --outline-rgb: 9, 8, 13; color-scheme: dark;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.75;
+}
+.wrap {
+  max-width: 920px;
+  margin: 0 auto;
+  padding-block: 28px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+header { display: flex; flex-direction: column; gap: 6px; }
+.wordmark { font-family: var(--font-display); font-size: 20px; letter-spacing: 0.08em; color: var(--muted); }
+h1 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: clamp(26px, 5vw, 38px); line-height: 1.3; text-wrap: balance; }
+.lede { margin: 0; max-width: 34em; color: var(--muted); }
+
+/* ステージ */
+.stage {
+  background: var(--desk);
+  border-radius: 22px;
+  padding: 20px 16px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-evenly;
+  align-items: flex-end;
+  gap: 20px 16px;
+  min-height: 200px;
+}
+.stage.is-column { flex-direction: column; align-items: center; }
+.prop { display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; }
+.prop canvas {
+  display: block;
+  image-rendering: pixelated;
+  cursor: grab;
+  touch-action: pan-y;
+  border-radius: 8px;
+  -webkit-user-select: none; user-select: none;
+}
+.prop canvas:active { cursor: grabbing; }
+.prop canvas:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.prop-meta { display: flex; align-items: center; gap: 10px; }
+.prop-name { font-weight: 700; }
+.prop-size { font-family: var(--font-dot); font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+.play {
+  font: inherit; font-family: var(--font-display); font-size: 16px;
+  border: 0; border-radius: 999px; padding: 4px 14px;
+  background: var(--accent); color: var(--accent-ink); cursor: pointer;
+}
+.play:hover { filter: brightness(1.06); }
+.play:active { transform: translateY(1px); }
+
+/* 操作 */
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px 24px; align-items: end; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field label { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; font-size: 13px; }
+.field output { font-family: var(--font-dot); font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.field input[type="range"] { width: 100%; accent-color: var(--accent); margin: 0; }
+.field .ends { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.toggles { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
+.toggles label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.toggles input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.ghost {
+  font: inherit; font-size: 13px; font-weight: 700; color: var(--ink);
+  background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 4px 14px; cursor: pointer;
+}
+.ghost:hover { border-color: var(--muted); }
+
+/* 作り方 */
+h2 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 24px; }
+.how { display: flex; flex-direction: column; gap: 16px; }
+.how-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px 16px; }
+.tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; }
+.tabs button { font: inherit; font-size: 13px; font-weight: 700; color: var(--muted); background: transparent; border: 0; border-radius: 999px; padding: 3px 14px; cursor: pointer; }
+.tabs button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px 28px; counter-reset: step; }
+.steps li { counter-increment: step; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.steps li::before { content: counter(step); font-family: var(--font-dot); font-size: 13px; color: var(--accent-ink); background: var(--accent); width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; }
+.steps b { font-size: 15px; }
+.steps p { margin: 0; color: var(--muted); font-size: 14px; }
+figure { margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+figcaption { font-family: var(--font-dot); font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+.scroll { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.scroll img { display: block; max-width: none; image-rendering: pixelated; }
+footer { color: var(--muted); font-size: 13px; }
+footer a { color: inherit; }
+.err { color: var(--rec); font-weight: 700; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="wordmark">オトグラシ</div>
+    <h1>3つの音を、回せるドット絵に</h1>
+    <p class="lede">コップ・水・キーボード。4方向の絵から輪切りを彫って、1pxずつ積んでいます。横にドラッグで回転、タップで音が鳴ります。</p>
+  </header>
+
+  <section class="stage" id="stage" aria-label="小物のステージ"></section>
+
+  <section class="controls" aria-label="表示の調整">
+    <div class="field">
+      <label for="squash">見下ろす角度 <output id="squash-out" for="squash"></output></label>
+      <input id="squash" type="range" min="0.5" max="1" step="0.01" value="0.75">
+      <div class="ends"><span>横ぎみ</span><span>真上</span></div>
+    </div>
+    <div class="field">
+      <label for="spacing">層のすき間 <output id="spacing-out" for="spacing"></output></label>
+      <input id="spacing" type="range" min="0" max="2" step="0.05" value="1">
+      <div class="ends"><span>ぺたんこ</span><span>ばらす</span></div>
+    </div>
+    <div class="field">
+      <label for="reveal">積む層 <output id="reveal-out" for="reveal"></output></label>
+      <input id="reveal" type="range" min="0.02" max="1" step="0.01" value="1">
+      <div class="ends"><span>底だけ</span><span>全部</span></div>
+    </div>
+    <div class="toggles">
+      <label><input id="auto" type="checkbox" checked> 自動で回す</label>
+      <label><input id="sound" type="checkbox" checked> 音を鳴らす</label>
+      <button class="ghost" id="reset" type="button">元に戻す</button>
+    </div>
+  </section>
+
+  <section class="how" aria-labelledby="how-title">
+    <div class="how-head">
+      <h2 id="how-title">作り方</h2>
+      <div class="tabs" id="tabs" role="group" aria-label="見る小物"></div>
+    </div>
+    <ol class="steps">
+      <li><b>4面図を描く</b><p>上・横・前・後ろを同じ縮尺で。今回は画像生成を使わず、Pythonでドットを直接打ちました。</p></li>
+      <li><b>輪切りに彫る</b><p>4枚すべてに収まる部分だけを残し、高さ1pxごとの断面にします。色は一番近い面の絵から取ります。</p></li>
+      <li><b>積んで回す</b><p>断面を下から順に、同じ角度で回し、縦に0.75倍つぶし、1pxずつ持ち上げて描きます。</p></li>
+    </ol>
+    <figure>
+      <div class="scroll"><img id="views-img" alt=""></div>
+      <figcaption id="views-cap"></figcaption>
+    </figure>
+    <figure>
+      <div class="scroll"><img id="strip-img" alt=""></div>
+      <figcaption id="strip-cap"></figcaption>
+    </figure>
+  </section>
+
+  <footer>輪切りの生成は <a href="https://github.com/danielwh2/sprite-stacking">danielwh2/sprite-stacking</a>（MIT）のスライサー。このページの描画は、その手順どおりに書いた小さなソフトウェアラスタライザです。</footer>
+</div>
+
+<script>
+const STACKS = /*__STACKS__*/null;
+
+const SOUND_LABEL = { cup: "コトッ", faucet: "ジャー", laptop: "カタカタ" };
+const START_TURN = { cup: -0.5, faucet: 0.7, laptop: -0.6 };
+const BOUNCE_HEADROOM = 1.12;
+
+const $ = (id) => document.getElementById(id);
+const stage = $("stage");
+const ui = { squash: $("squash"), spacing: $("spacing"), reveal: $("reveal"), auto: $("auto"), sound: $("sound") };
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+if (reduceMotion) ui.auto.checked = false;
+
+const LE = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+const pack = (r, g, b, a) => (LE ? ((a << 24) | (b << 16) | (g << 8) | r) : ((r << 24) | (g << 16) | (b << 8) | a)) >>> 0;
+const alphaOf = LE ? (c) => c >>> 24 : (c) => c & 255;
+
+let colors = { shadow: 0, outline: 0 };
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  const s = cs.getPropertyValue("--shadow-rgba").split(",").map(Number);
+  const o = cs.getPropertyValue("--outline-rgb").split(",").map(Number);
+  colors = { shadow: pack(s[0], s[1], s[2], Math.round(s[3] * 255)), outline: pack(o[0], o[1], o[2], 255) };
+  dirty = true;
+}
+
+const props = [];
+let dirty = true;
+let selected = 0;
+
+function loadImage(src) {
+  return new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; });
+}
+
+async function loadStack(s) {
+  const im = await loadImage(s.strip);
+  if (im.width % s.count !== 0 || im.width / s.count !== s.w || im.height !== s.h) {
+    throw new Error(s.name + ": ストリップの寸法が層数と合いません");
+  }
+  const c = document.createElement("canvas");
+  c.width = im.width; c.height = im.height;
+  const g = c.getContext("2d");
+  g.drawImage(im, 0, 0);
+  const src = new Uint32Array(g.getImageData(0, 0, im.width, im.height).data.buffer);
+  const foot = new Uint8Array(s.w * s.h);
+  for (let z = 0; z < s.count; z++)
+    for (let y = 0; y < s.h; y++)
+      for (let x = 0; x < s.w; x++)
+        if (alphaOf(src[y * im.width + z * s.w + x])) foot[y * s.w + x] = 1;
+  const diag = Math.ceil(Math.hypot(s.w, s.h));
+  return { ...s, src, stripW: im.width, foot, diag, bw: diag + 8, bh: 0, turn: START_TURN[s.name] || 0, vel: 0, kick: -1e9, drag: null };
+}
+
+function buildProp(p, i) {
+  const el = document.createElement("div");
+  el.className = "prop";
+  const cv = document.createElement("canvas");
+  cv.tabIndex = 0;
+  cv.setAttribute("role", "img");
+  cv.setAttribute("aria-label", p.label + "のドット絵。ドラッグか左右キーで回転");
+  const meta = document.createElement("div");
+  meta.className = "prop-meta";
+  meta.innerHTML = '<span class="prop-name"></span><span class="prop-size"></span>';
+  meta.children[0].textContent = p.label;
+  meta.children[1].textContent = p.count + "層 " + p.w + "×" + p.h + "px";
+  const btn = document.createElement("button");
+  btn.type = "button"; btn.className = "play"; btn.id = "play-" + p.name;
+  btn.textContent = "♪ " + SOUND_LABEL[p.name];
+  btn.setAttribute("aria-label", p.label + "の音を鳴らす");
+  btn.addEventListener("click", () => kick(i));
+  meta.appendChild(btn);
+  el.append(cv, meta);
+  stage.appendChild(el);
+  p.canvas = cv; p.ctx = cv.getContext("2d");
+
+  cv.addEventListener("pointerdown", (e) => {
+    cv.setPointerCapture(e.pointerId);
+    p.drag = { x: e.clientX, moved: 0, t: performance.now() };
+    p.vel = 0;
+  });
+  cv.addEventListener("pointermove", (e) => {
+    if (!p.drag) return;
+    const dx = e.clientX - p.drag.x;
+    p.drag.x = e.clientX; p.drag.moved += Math.abs(dx);
+    p.turn -= dx * 0.014; p.vel = -dx * 0.014 * 60;
+    dirty = true;
+  });
+  const end = (e) => {
+    if (!p.drag) return;
+    const tap = p.drag.moved < 6 && performance.now() - p.drag.t < 500;
+    p.drag = null;
+    if (tap && e.type === "pointerup") { p.vel = 0; kick(i); }
+  };
+  cv.addEventListener("pointerup", end);
+  cv.addEventListener("pointercancel", end);
+  cv.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft") { p.turn += 0.2; dirty = true; e.preventDefault(); }
+    else if (e.key === "ArrowRight") { p.turn -= 0.2; dirty = true; e.preventDefault(); }
+    else if (e.key === "Enter" || e.key === " ") { kick(i); e.preventDefault(); }
+  });
+}
+
+/* ---- 描画: 1x のアートピクセルバッファに積み、輪郭は最後に1回だけ引く ---- */
+function sizeBuffers() {
+  const squash = +ui.squash.value, spacing = +ui.spacing.value;
+  for (const p of props) {
+    const bh = Math.ceil(p.diag * squash) + Math.ceil((p.count - 1) * spacing * BOUNCE_HEADROOM) + 10;
+    if (bh !== p.bh || p.canvas.width !== p.bw) {
+      p.bh = bh;
+      p.canvas.width = p.bw; p.canvas.height = bh;
+      p.img = p.ctx.createImageData(p.bw, bh);
+      p.buf = new Uint32Array(p.img.data.buffer);
+      p.solid = new Uint8Array(p.bw * bh);
+    }
+  }
+  layout();
+}
+
+function layout() {
+  if (!props.length) return;
+  const cs = getComputedStyle(stage);
+  const inner = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const total = props.reduce((a, p) => a + p.bw, 0);
+  const rowScale = Math.floor((inner - 16 * (props.length - 1)) / total);
+  const column = rowScale < 3;
+  const scale = column ? Math.max(2, Math.min(4, Math.floor(inner / Math.max(...props.map((p) => p.bw))))) : Math.min(5, rowScale);
+  stage.classList.toggle("is-column", column);
+  for (const p of props) {
+    p.canvas.style.width = p.bw * scale + "px";
+    p.canvas.style.height = p.bh * scale + "px";
+  }
+}
+
+function render(p, now) {
+  const squash = +ui.squash.value;
+  const t = (now - p.kick) / 1000;
+  const bounce = t < 1.2 ? 1 - 0.3 * Math.exp(-6 * t) * Math.cos(18 * t) : 1;
+  const spacing = +ui.spacing.value * Math.min(bounce, BOUNCE_HEADROOM);
+  const nShow = Math.max(1, Math.round(p.count * +ui.reveal.value));
+  const { bw, bh, buf, solid, src, stripW, w, h, foot } = p;
+  buf.fill(0); solid.fill(0);
+  const ca = Math.cos(p.turn), sa = Math.sin(p.turn);
+  const cx = bw >> 1;
+  const baseY = bh - Math.ceil((p.diag * squash) / 2) - 5;
+  const R = Math.ceil((p.diag * squash) / 2) + 1;
+  const ox = (w - 1) * 0.5, oy = (h - 1) * 0.5; // 対称な回転中心 (偶数サイズでもぶれない)
+
+  // 地面の影: 全層の足あとを +2,+3 ずらして先に描く
+  for (let py = Math.max(0, baseY + 3 - R); py <= Math.min(bh - 1, baseY + 3 + R); py++) {
+    const dy = (py - (baseY + 3)) / squash;
+    for (let px = 0; px < bw; px++) {
+      const dx = px - (cx + 2);
+      const sx = Math.round(dx * ca + dy * sa + ox), sy = Math.round(-dx * sa + dy * ca + oy);
+      if (sx >= 0 && sx < w && sy >= 0 && sy < h && foot[sy * w + sx]) buf[py * bw + px] = colors.shadow;
+    }
+  }
+  // 下から上へ: 回す → 縦につぶす → 1層ごとに持ち上げる
+  for (let z = 0; z < nShow; z++) {
+    const ly = baseY - Math.round(z * spacing);
+    const zo = z * w;
+    for (let py = Math.max(0, ly - R); py <= Math.min(bh - 1, ly + R); py++) {
+      const dy = (py - ly) / squash;
+      const row = py * bw;
+      for (let px = 0; px < bw; px++) {
+        const dx = px - cx;
+        const sx = Math.round(dx * ca + dy * sa + ox);
+        if (sx < 0 || sx >= w) continue;
+        const sy = Math.round(-dx * sa + dy * ca + oy);
+        if (sy < 0 || sy >= h) continue;
+        const c = src[sy * stripW + zo + sx];
+        if (alphaOf(c)) { buf[row + px] = c; solid[row + px] = 1; }
+      }
+    }
+  }
+  // 輪郭: できあがった塊の外周だけ
+  for (let y = 0; y < bh; y++) {
+    for (let x = 0; x < bw; x++) {
+      const i = y * bw + x;
+      if (solid[i]) continue;
+      if ((x > 0 && solid[i - 1]) || (x < bw - 1 && solid[i + 1]) || (y > 0 && solid[i - bw]) || (y < bh - 1 && solid[i + bw])) buf[i] = colors.outline;
+    }
+  }
+  p.ctx.putImageData(p.img, 0, 0);
+  return t < 1.2;
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  let again = false;
+  for (const p of props) {
+    let moving = false;
+    if (!p.drag) {
+      if (Math.abs(p.vel) > 0.02) { p.turn += p.vel * dt; p.vel *= Math.pow(0.04, dt); moving = true; }
+      else if (ui.auto.checked) { p.turn += 0.55 * dt; moving = true; }
+    }
+    if (moving || dirty || now - p.kick < 1300) again = render(p, now) || again;
+  }
+  dirty = false;
+  requestAnimationFrame(frame);
+}
+
+/* ---- 音: タップしたときだけ Web Audio で合成 ---- */
+let ac = null, master = null;
+function audio() {
+  if (!ui.sound.checked) return null;
+  if (!ac) {
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    ac = new C();
+    master = ac.createGain(); master.gain.value = 0.6; master.connect(ac.destination);
+  }
+  if (ac.state === "suspended") ac.resume();
+  return ac;
+}
+function noise(a, dur) {
+  const b = a.createBuffer(1, Math.max(1, Math.floor(a.sampleRate * dur)), a.sampleRate);
+  const d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const s = a.createBufferSource(); s.buffer = b; return s;
+}
+function tone(a, type, f0, f1, t0, dur, vol) {
+  const o = a.createOscillator(), g = a.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t0);
+  if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+  g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  o.connect(g).connect(master); o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function burst(a, t0, dur, type, freq, q, vol) {
+  const n = noise(a, dur), f = a.createBiquadFilter(), g = a.createGain();
+  f.type = type; f.frequency.value = freq; f.Q.value = q;
+  g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  n.connect(f).connect(g).connect(master); n.start(t0);
+}
+const SOUNDS = {
+  cup(a, t) { // コトッ: 机に置く低い音 + 氷
+    tone(a, "sine", 190, 80, t, 0.14, 0.6);
+    burst(a, t, 0.03, "highpass", 1800, 0.7, 0.25);
+    tone(a, "triangle", 2400, 2400, t + 0.07, 0.12, 0.1);
+    tone(a, "triangle", 3150, 3150, t + 0.13, 0.1, 0.07);
+  },
+  faucet(a, t) { // ジャー: 帯域を絞ったノイズ
+    const n = noise(a, 0.8), f = a.createBiquadFilter(), g = a.createGain();
+    f.type = "bandpass"; f.Q.value = 0.7;
+    f.frequency.setValueAtTime(1500, t); f.frequency.exponentialRampToValueAtTime(800, t + 0.7);
+    g.gain.setValueAtTime(0.001, t); g.gain.exponentialRampToValueAtTime(0.35, t + 0.06);
+    g.gain.setValueAtTime(0.35, t + 0.4); g.gain.exponentialRampToValueAtTime(0.001, t + 0.78);
+    n.connect(f).connect(g).connect(master); n.start(t);
+  },
+  laptop(a, t) { // カタカタ: 短いクリックを数回
+    let at = t;
+    for (let i = 0; i < 5; i++) {
+      burst(a, at, 0.035, "bandpass", 2400 + Math.random() * 1600, 1.2, 0.4);
+      tone(a, "sine", 150, 110, at, 0.04, 0.22);
+      at += 0.07 + Math.random() * 0.07;
+    }
+  },
+};
+function kick(i) {
+  const p = props[i];
+  p.kick = performance.now();
+  select(i);
+  const a = audio();
+  if (a && SOUNDS[p.name]) SOUNDS[p.name](a, a.currentTime + 0.01);
+}
+
+/* ---- 作り方の図 ---- */
+function select(i) {
+  selected = i;
+  const p = props[i];
+  [...$("tabs").children].forEach((b, j) => b.setAttribute("aria-pressed", j === i ? "true" : "false"));
+  const v = $("views-img"), s = $("strip-img");
+  v.onload = () => { v.style.width = v.naturalWidth * 3 + "px"; };
+  s.onload = () => { s.style.width = s.naturalWidth * 2 + "px"; };
+  v.src = p.views; s.src = p.strip;
+  v.alt = p.label + "の4面図"; s.alt = p.label + "の輪切りストリップ";
+  $("views-cap").textContent = "4面図: 左から 上 / 横 / 前 / 後ろ（3倍表示）";
+  $("strip-cap").textContent = "輪切り " + p.count + " 枚: 左が地面、右がてっぺん（2倍表示、横スクロール）";
+}
+
+function syncOutputs() {
+  $("squash-out").textContent = (+ui.squash.value).toFixed(2);
+  $("spacing-out").textContent = (+ui.spacing.value).toFixed(2) + "px";
+  $("reveal-out").textContent = Math.round(+ui.reveal.value * 100) + "%";
+}
+
+async function start() {
+  if (!STACKS) {
+    stage.innerHTML = '<p class="err">スタックのデータが埋め込まれていません。build.py を実行して demo.html を開いてください。</p>';
+    return;
+  }
+  try {
+    for (const s of STACKS) props.push(await loadStack(s));
+  } catch (e) {
+    stage.innerHTML = '<p class="err"></p>';
+    stage.firstChild.textContent = "読み込みに失敗しました: " + e.message;
+    return;
+  }
+  props.forEach(buildProp);
+  props.forEach((p, i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = p.label; b.id = "tab-" + p.name;
+    b.addEventListener("click", () => select(i));
+    $("tabs").appendChild(b);
+  });
+  readColors(); syncOutputs(); sizeBuffers(); select(0);
+
+  for (const k of ["squash", "spacing", "reveal"]) {
+    ui[k].addEventListener("input", () => { syncOutputs(); sizeBuffers(); dirty = true; });
+  }
+  $("reset").addEventListener("click", () => {
+    ui.squash.value = 0.75; ui.spacing.value = 1; ui.reveal.value = 1;
+    props.forEach((p) => { p.turn = START_TURN[p.name] || 0; p.vel = 0; });
+    syncOutputs(); sizeBuffers(); dirty = true;
+  });
+  new ResizeObserver(layout).observe(stage);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", readColors);
+  new MutationObserver(readColors).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  requestAnimationFrame(frame);
+}
+start();
+</script>
